@@ -47,14 +47,61 @@ public sealed class JobStore
                 RelativePath TEXT,
                 SizeBytes INTEGER,
                 ModifiedUtc TEXT,
-                IsLargeWarning INTEGER
+                IsLargeWarning INTEGER,
+                FolderId TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS Transfers (
+                TransferId TEXT PRIMARY KEY,
+                JobId TEXT NOT NULL,
+                FileId TEXT NOT NULL,
+                Attempt INTEGER NOT NULL,
+                Status TEXT NOT NULL,
+                StartedUtc TEXT NULL,
+                FinishedUtc TEXT NULL,
+                DurationMs INTEGER NULL,
+                Error TEXT NULL,
+                WorkerId INTEGER NULL,
+                SimulatedDelayMs INTEGER NULL,
+                HttpStatus INTEGER NULL,
+                ResponseSnippet TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS Folders (
+                FolderId TEXT PRIMARY KEY,
+                JobId TEXT NOT NULL,
+                FullPath TEXT NOT NULL,
+                RelativePath TEXT NOT NULL,
+                ParentFolderId TEXT NULL,
+                Depth INTEGER NOT NULL,
+                IsIncluded INTEGER NOT NULL DEFAULT 1,
+                IsOverride INTEGER NOT NULL DEFAULT 0,
+                CreatedUtc TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS FolderRules (
+                RuleId TEXT PRIMARY KEY,
+                JobId TEXT NOT NULL,
+                FolderId TEXT NOT NULL,
+                RuleType TEXT NOT NULL,
+                Scope TEXT NOT NULL,
+                Notes TEXT NULL,
+                CreatedUtc TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS IX_Files_JobId ON Files(JobId);
             CREATE INDEX IF NOT EXISTS IX_Files_RelativePath ON Files(RelativePath);
+            CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);
+            CREATE INDEX IF NOT EXISTS IX_Transfers_JobId ON Transfers(JobId);
+            CREATE INDEX IF NOT EXISTS IX_Transfers_FileId ON Transfers(FileId);
+            CREATE INDEX IF NOT EXISTS IX_Folders_JobId ON Folders(JobId);
+            CREATE INDEX IF NOT EXISTS IX_Folders_ParentFolderId ON Folders(ParentFolderId);
+            CREATE INDEX IF NOT EXISTS IX_Folders_RelativePath ON Folders(RelativePath);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await EnsureColumnExistsAsync(connection, "Files", "FolderId", "TEXT NULL", cancellationToken);
     }
 
     public async Task InsertJobAsync(JobRecord job, CancellationToken cancellationToken = default)
@@ -102,8 +149,8 @@ public sealed class JobStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO Files
-            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning)
-            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning);
+            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId)
+            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId);
             """;
 
         BindFileParameters(command, file);
@@ -146,7 +193,7 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning
+            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId
             FROM Files
             WHERE JobId = $jobId
             ORDER BY RelativePath;
@@ -164,7 +211,8 @@ public sealed class JobStore
                 reader.GetString(3),
                 reader.GetInt64(4),
                 ParseUtc(reader.GetString(5)),
-                reader.GetInt64(6) == 1));
+                reader.GetInt64(6) == 1,
+                reader.IsDBNull(7) ? null : reader.GetString(7)));
         }
 
         return results;
@@ -211,9 +259,542 @@ public sealed class JobStore
         return results;
     }
 
+    public async Task<IReadOnlyDictionary<string, TransferState>> GetTransferStatesByFileAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        var results = new Dictionary<string, TransferState>(StringComparer.OrdinalIgnoreCase);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT TransferId, FileId, Status, Attempt
+            FROM Transfers
+            WHERE JobId = $jobId;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var transferId = reader.GetString(0);
+            var fileId = reader.GetString(1);
+            var status = reader.GetString(2);
+            var attempt = reader.GetInt32(3);
+            results[fileId] = new TransferState(transferId, fileId, status, attempt);
+        }
+
+        return results;
+    }
+
+    public async Task UpsertTransferQueuedAsync(TransferRecord transfer, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO Transfers
+            (TransferId, JobId, FileId, Attempt, Status, StartedUtc, FinishedUtc, DurationMs, Error, WorkerId, SimulatedDelayMs, HttpStatus, ResponseSnippet)
+            VALUES ($transferId, $jobId, $fileId, $attempt, $status, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+            ON CONFLICT(TransferId) DO UPDATE SET
+                Attempt = $attempt,
+                Status = $status,
+                StartedUtc = NULL,
+                FinishedUtc = NULL,
+                DurationMs = NULL,
+                Error = NULL,
+                WorkerId = NULL,
+                SimulatedDelayMs = NULL,
+                HttpStatus = NULL,
+                ResponseSnippet = NULL;
+            """;
+
+        command.Parameters.AddWithValue("$transferId", transfer.TransferId);
+        command.Parameters.AddWithValue("$jobId", transfer.JobId);
+        command.Parameters.AddWithValue("$fileId", transfer.FileId);
+        command.Parameters.AddWithValue("$attempt", transfer.Attempt);
+        command.Parameters.AddWithValue("$status", transfer.Status);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateTransferRunningAsync(
+        string transferId,
+        int attempt,
+        DateTime startedUtc,
+        int workerId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Transfers
+            SET Status = $status,
+                Attempt = $attempt,
+                StartedUtc = $startedUtc,
+                WorkerId = $workerId
+            WHERE TransferId = $transferId;
+            """;
+
+        command.Parameters.AddWithValue("$status", "Running");
+        command.Parameters.AddWithValue("$attempt", attempt);
+        command.Parameters.AddWithValue("$startedUtc", ToUtcString(startedUtc));
+        command.Parameters.AddWithValue("$workerId", workerId);
+        command.Parameters.AddWithValue("$transferId", transferId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateTransferFinishedAsync(
+        string transferId,
+        string status,
+        DateTime finishedUtc,
+        long durationMs,
+        string? error,
+        int? httpStatus,
+        string? responseSnippet,
+        int? simulatedDelayMs,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Transfers
+            SET Status = $status,
+                FinishedUtc = $finishedUtc,
+                DurationMs = $durationMs,
+                Error = $error,
+                HttpStatus = $httpStatus,
+                ResponseSnippet = $responseSnippet,
+                SimulatedDelayMs = $simulatedDelayMs
+            WHERE TransferId = $transferId;
+            """;
+
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(finishedUtc));
+        command.Parameters.AddWithValue("$durationMs", durationMs);
+        command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$httpStatus", (object?)httpStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("$responseSnippet", (object?)responseSnippet ?? DBNull.Value);
+        command.Parameters.AddWithValue("$simulatedDelayMs", (object?)simulatedDelayMs ?? DBNull.Value);
+        command.Parameters.AddWithValue("$transferId", transferId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkQueuedTransfersCanceledAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Transfers
+            SET Status = $status,
+                FinishedUtc = $finishedUtc
+            WHERE JobId = $jobId
+              AND Status = $queued;
+            """;
+
+        command.Parameters.AddWithValue("$status", "Canceled");
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(DateTime.UtcNow));
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$queued", "Queued");
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<TransferStatusCounts> GetTransferCountsAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        long total = 0;
+        long queued = 0;
+        long running = 0;
+        long succeeded = 0;
+        long failed = 0;
+        long canceled = 0;
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT Status, COUNT(*)
+            FROM Transfers
+            WHERE JobId = $jobId
+            GROUP BY Status;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var status = reader.GetString(0);
+            var count = reader.GetInt64(1);
+
+            total += count;
+            switch (status)
+            {
+                case "Queued":
+                    queued = count;
+                    break;
+                case "Running":
+                    running = count;
+                    break;
+                case "Succeeded":
+                    succeeded = count;
+                    break;
+                case "Failed":
+                    failed = count;
+                    break;
+                case "Canceled":
+                    canceled = count;
+                    break;
+            }
+        }
+
+        return new TransferStatusCounts(total, queued, running, succeeded, failed, canceled);
+    }
+
+    public async Task<IReadOnlyList<TransferSummary>> GetLatestTransfersAsync(
+        string jobId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<TransferSummary>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.TransferId,
+                   t.FileId,
+                   f.RelativePath,
+                   t.Status,
+                   t.Attempt,
+                   t.DurationMs,
+                   t.Error
+            FROM Transfers t
+            LEFT JOIN Files f ON f.FileId = t.FileId
+            WHERE t.JobId = $jobId
+            ORDER BY t.FinishedUtc DESC, t.StartedUtc DESC
+            LIMIT $limit;
+            """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new TransferSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6)));
+        }
+
+        return results;
+    }
+
     public JobFileWriter OpenFileWriter()
     {
         return new JobFileWriter(_connectionString);
+    }
+
+    public JobFolderWriter OpenFolderWriter()
+    {
+        return new JobFolderWriter(_connectionString);
+    }
+
+    public async Task InsertFolderAsync(FolderRecord folder, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR REPLACE INTO Folders
+            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc)
+            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc);
+            """;
+
+        BindFolderParameters(command, folder);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<FolderRecord?> GetRootFolderAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+            FROM Folders
+            WHERE JobId = $jobId
+              AND ParentFolderId IS NULL
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new FolderRecord(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetInt32(5),
+            reader.GetInt64(6) == 1,
+            reader.GetInt64(7) == 1,
+            ParseUtc(reader.GetString(8)));
+    }
+
+    public async Task<IReadOnlyList<FolderRecord>> GetChildFoldersAsync(
+        string jobId,
+        string? parentFolderId,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<FolderRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = parentFolderId is null
+            ? """
+              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+              FROM Folders
+              WHERE JobId = $jobId AND ParentFolderId IS NULL
+              ORDER BY RelativePath;
+              """
+            : """
+              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+              FROM Folders
+              WHERE JobId = $jobId AND ParentFolderId = $parentFolderId
+              ORDER BY RelativePath;
+              """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+        if (parentFolderId is not null)
+        {
+            command.Parameters.AddWithValue("$parentFolderId", parentFolderId);
+        }
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new FolderRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetInt32(5),
+                reader.GetInt64(6) == 1,
+                reader.GetInt64(7) == 1,
+                ParseUtc(reader.GetString(8))));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<FileRecord>> GetChildFilesAsync(
+        string jobId,
+        string folderId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<FileRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId
+            FROM Files
+            WHERE JobId = $jobId AND FolderId = $folderId
+            ORDER BY RelativePath
+            LIMIT $limit;
+            """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$folderId", folderId);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new FileRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4),
+                ParseUtc(reader.GetString(5)),
+                reader.GetInt64(6) == 1,
+                reader.IsDBNull(7) ? null : reader.GetString(7)));
+        }
+
+        return results;
+    }
+
+    public async Task UpdateFolderOverrideAsync(
+        string folderId,
+        bool isOverride,
+        bool isIncluded,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Folders
+            SET IsOverride = $isOverride,
+                IsIncluded = $isIncluded
+            WHERE FolderId = $folderId;
+            """;
+
+        command.Parameters.AddWithValue("$isOverride", isOverride ? 1 : 0);
+        command.Parameters.AddWithValue("$isIncluded", isIncluded ? 1 : 0);
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task AddFolderRuleAsync(
+        string jobId,
+        string folderId,
+        string ruleType,
+        string scope,
+        string? notes,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO FolderRules
+            (RuleId, JobId, FolderId, RuleType, Scope, Notes, CreatedUtc)
+            VALUES ($ruleId, $jobId, $folderId, $ruleType, $scope, $notes, $createdUtc);
+            """;
+
+        command.Parameters.AddWithValue("$ruleId", Guid.NewGuid().ToString("N"));
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$folderId", folderId);
+        command.Parameters.AddWithValue("$ruleType", ruleType);
+        command.Parameters.AddWithValue("$scope", scope);
+        command.Parameters.AddWithValue("$notes", (object?)notes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$createdUtc", ToUtcString(DateTime.UtcNow));
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<(long totalFiles, long totalBytes, long largeFiles, long excludedFolders)> GetFolderSummaryAsync(
+        string folderId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
+                SELECT FolderId,
+                       ParentFolderId,
+                       CASE WHEN IsOverride = 1 THEN IsIncluded ELSE 1 END
+                FROM Folders
+                WHERE FolderId = $folderId
+                UNION ALL
+                SELECT f.FolderId,
+                       f.ParentFolderId,
+                       CASE WHEN f.IsOverride = 1 THEN f.IsIncluded ELSE ft.EffectiveIncluded END
+                FROM Folders f
+                JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+            )
+            SELECT
+                (SELECT COUNT(files.FileId)
+                 FROM Files files
+                 JOIN folder_tree ft2 ON files.FolderId = ft2.FolderId) AS TotalFiles,
+                (SELECT COALESCE(SUM(files.SizeBytes), 0)
+                 FROM Files files
+                 JOIN folder_tree ft2 ON files.FolderId = ft2.FolderId) AS TotalBytes,
+                (SELECT COALESCE(SUM(files.IsLargeWarning), 0)
+                 FROM Files files
+                 JOIN folder_tree ft2 ON files.FolderId = ft2.FolderId) AS LargeFiles,
+                (SELECT COUNT(*) FROM folder_tree WHERE EffectiveIncluded = 0) AS ExcludedFolders;
+            """;
+
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return (0, 0, 0, 0);
+        }
+
+        return (
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3));
+    }
+
+    public async Task<(long included, long excluded)> GetImportSelectionCountsAsync(
+        string jobId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
+                SELECT FolderId,
+                       ParentFolderId,
+                       CASE WHEN IsOverride = 1 THEN IsIncluded ELSE 1 END
+                FROM Folders
+                WHERE JobId = $jobId AND ParentFolderId IS NULL
+                UNION ALL
+                SELECT f.FolderId,
+                       f.ParentFolderId,
+                       CASE WHEN f.IsOverride = 1 THEN f.IsIncluded ELSE ft.EffectiveIncluded END
+                FROM Folders f
+                JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+            )
+            SELECT
+                COALESCE(SUM(CASE WHEN files.FileId IS NOT NULL AND ft.EffectiveIncluded = 1 THEN 1 ELSE 0 END), 0) AS IncludedFiles,
+                COALESCE(SUM(CASE WHEN files.FileId IS NOT NULL AND ft.EffectiveIncluded = 0 THEN 1 ELSE 0 END), 0) AS ExcludedFiles
+            FROM folder_tree ft
+            LEFT JOIN Files files ON files.FolderId = ft.FolderId;
+            """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return (0, 0);
+        }
+
+        return (reader.GetInt64(0), reader.GetInt64(1));
     }
 
     private static void BindFileParameters(SqliteCommand command, FileRecord file)
@@ -225,6 +806,44 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$sizeBytes", file.SizeBytes);
         command.Parameters.AddWithValue("$modifiedUtc", ToUtcString(file.ModifiedUtc));
         command.Parameters.AddWithValue("$isLargeWarning", file.IsLargeWarning ? 1 : 0);
+        command.Parameters.AddWithValue("$folderId", (object?)file.FolderId ?? DBNull.Value);
+    }
+
+    private static void BindFolderParameters(SqliteCommand command, FolderRecord folder)
+    {
+        command.Parameters.AddWithValue("$folderId", folder.FolderId);
+        command.Parameters.AddWithValue("$jobId", folder.JobId);
+        command.Parameters.AddWithValue("$fullPath", folder.FullPath);
+        command.Parameters.AddWithValue("$relativePath", folder.RelativePath);
+        command.Parameters.AddWithValue("$parentFolderId", (object?)folder.ParentFolderId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$depth", folder.Depth);
+        command.Parameters.AddWithValue("$isIncluded", folder.IsIncluded ? 1 : 0);
+        command.Parameters.AddWithValue("$isOverride", folder.IsOverride ? 1 : 0);
+        command.Parameters.AddWithValue("$createdUtc", ToUtcString(folder.CreatedUtc));
+    }
+
+    private static async Task EnsureColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string columnDefinition,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static string ToUtcString(DateTime value)
@@ -251,8 +870,8 @@ public sealed class JobFileWriter : IDisposable
         _command = _connection.CreateCommand();
         _command.CommandText = """
             INSERT OR REPLACE INTO Files
-            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning)
-            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning);
+            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId)
+            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId);
             """;
         _command.Parameters.Add("$fileId", SqliteType.Text);
         _command.Parameters.Add("$jobId", SqliteType.Text);
@@ -261,6 +880,7 @@ public sealed class JobFileWriter : IDisposable
         _command.Parameters.Add("$sizeBytes", SqliteType.Integer);
         _command.Parameters.Add("$modifiedUtc", SqliteType.Text);
         _command.Parameters.Add("$isLargeWarning", SqliteType.Integer);
+        _command.Parameters.Add("$folderId", SqliteType.Text);
     }
 
     public void Insert(FileRecord file)
@@ -272,6 +892,57 @@ public sealed class JobFileWriter : IDisposable
         _command.Parameters["$sizeBytes"].Value = file.SizeBytes;
         _command.Parameters["$modifiedUtc"].Value = file.ModifiedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         _command.Parameters["$isLargeWarning"].Value = file.IsLargeWarning ? 1 : 0;
+        _command.Parameters["$folderId"].Value = (object?)file.FolderId ?? DBNull.Value;
+
+        _command.ExecuteNonQuery();
+    }
+
+    public void Dispose()
+    {
+        _command.Dispose();
+        _connection.Dispose();
+    }
+}
+
+public sealed class JobFolderWriter : IDisposable
+{
+    private readonly SqliteConnection _connection;
+    private readonly SqliteCommand _command;
+
+    public JobFolderWriter(string connectionString)
+    {
+        _connection = new SqliteConnection(connectionString);
+        _connection.Open();
+
+        _command = _connection.CreateCommand();
+        _command.CommandText = """
+            INSERT OR REPLACE INTO Folders
+            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc)
+            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc);
+            """;
+
+        _command.Parameters.Add("$folderId", SqliteType.Text);
+        _command.Parameters.Add("$jobId", SqliteType.Text);
+        _command.Parameters.Add("$fullPath", SqliteType.Text);
+        _command.Parameters.Add("$relativePath", SqliteType.Text);
+        _command.Parameters.Add("$parentFolderId", SqliteType.Text);
+        _command.Parameters.Add("$depth", SqliteType.Integer);
+        _command.Parameters.Add("$isIncluded", SqliteType.Integer);
+        _command.Parameters.Add("$isOverride", SqliteType.Integer);
+        _command.Parameters.Add("$createdUtc", SqliteType.Text);
+    }
+
+    public void Insert(FolderRecord folder)
+    {
+        _command.Parameters["$folderId"].Value = folder.FolderId;
+        _command.Parameters["$jobId"].Value = folder.JobId;
+        _command.Parameters["$fullPath"].Value = folder.FullPath;
+        _command.Parameters["$relativePath"].Value = folder.RelativePath;
+        _command.Parameters["$parentFolderId"].Value = (object?)folder.ParentFolderId ?? DBNull.Value;
+        _command.Parameters["$depth"].Value = folder.Depth;
+        _command.Parameters["$isIncluded"].Value = folder.IsIncluded ? 1 : 0;
+        _command.Parameters["$isOverride"].Value = folder.IsOverride ? 1 : 0;
+        _command.Parameters["$createdUtc"].Value = folder.CreatedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
         _command.ExecuteNonQuery();
     }

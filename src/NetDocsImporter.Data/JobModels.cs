@@ -9,7 +9,19 @@ public sealed record FileRecord(
     string RelativePath,
     long SizeBytes,
     DateTime ModifiedUtc,
-    bool IsLargeWarning);
+    bool IsLargeWarning,
+    string? FolderId);
+
+public sealed record FolderRecord(
+    string FolderId,
+    string JobId,
+    string FullPath,
+    string RelativePath,
+    string? ParentFolderId,
+    int Depth,
+    bool IsIncluded,
+    bool IsOverride,
+    DateTime CreatedUtc);
 
 public sealed record JobSummary(
     string JobId,

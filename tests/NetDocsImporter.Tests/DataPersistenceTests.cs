@@ -25,8 +25,11 @@ public class DataPersistenceTests
 
             Assert.Contains("Jobs", tables);
             Assert.Contains("Files", tables);
+            Assert.Contains("Transfers", tables);
             Assert.Contains("IX_Files_JobId", indexes);
             Assert.Contains("IX_Files_RelativePath", indexes);
+            Assert.Contains("IX_Transfers_JobId", indexes);
+            Assert.Contains("IX_Transfers_FileId", indexes);
         }
         finally
         {
@@ -62,7 +65,8 @@ public class DataPersistenceTests
                 "file-a.txt",
                 120,
                 created,
-                false);
+                false,
+                null);
             var file2 = new FileRecord(
                 Guid.NewGuid().ToString("N"),
                 jobId,
@@ -70,7 +74,8 @@ public class DataPersistenceTests
                 "folder\\file-b.txt",
                 2048,
                 created.AddMinutes(2),
-                true);
+                true,
+                null);
 
             await store.InsertFileAsync(file1);
             await store.InsertFileAsync(file2);
