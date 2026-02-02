@@ -21,7 +21,9 @@ public sealed record FolderRecord(
     int Depth,
     bool IsIncluded,
     bool IsOverride,
-    DateTime CreatedUtc);
+    DateTime CreatedUtc,
+    string ImportMode,
+    string ProfileMode);
 
 public sealed record JobSummary(
     string JobId,

@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
 using NetDocsImporter.Core;
@@ -31,12 +33,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private long _importFailed;
     private long _importCanceled;
     private string _selectedFolderPath = "Select a folder.";
+    private string _selectedFolderRelativePath = string.Empty;
     private long _selectedFolderFiles;
     private long _selectedFolderBytes;
     private long _selectedFolderLargeFiles;
     private long _selectedFolderExcludedFolders;
     private long _includedFilesCount;
     private long _excludedFilesCount;
+    private string _selectedImportMode = "inherit";
+    private string _selectedEffectiveImportMode = "include";
+    private string _selectedProfileMode = "inherit";
+    private string _selectedProfileSource = "Inherited";
+    private ProfileFieldView? _selectedProfileField;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
@@ -49,6 +57,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _importRefreshPending;
     private readonly IFolderTreeProvider _folderProvider;
     private FolderNodeViewModel? _selectedFolderNode;
+    private readonly object _profileSaveLock = new();
+    private bool _profileSavePending;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -56,6 +66,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<JobSummaryView> RecentJobs { get; } = new();
     public ObservableCollection<TransferView> LatestTransfers { get; } = new();
     public ObservableCollection<TreeNodeBase> FolderRoots { get; } = new();
+    public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
 
     public string? SelectedFolder
     {
@@ -169,6 +180,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string SelectedFolderPath => _selectedFolderPath;
 
+    public string SelectedFolderRelativePath => _selectedFolderRelativePath;
+
     public string SelectedFolderFilesDisplay => _selectedFolderFiles.ToString("N0", CultureInfo.CurrentCulture);
 
     public string SelectedFolderBytesDisplay => FormatBytes(_selectedFolderBytes);
@@ -180,6 +193,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string IncludedFilesCountDisplay => _includedFilesCount.ToString("N0", CultureInfo.CurrentCulture);
 
     public string ExcludedFilesCountDisplay => _excludedFilesCount.ToString("N0", CultureInfo.CurrentCulture);
+
+    public string SelectedImportMode => _selectedImportMode;
+
+    public string SelectedEffectiveImportMode => _selectedEffectiveImportMode;
+
+    public string SelectedProfileMode
+    {
+        get => _selectedProfileMode;
+        private set => SetField(ref _selectedProfileMode, value);
+    }
+
+    public string SelectedProfileSource
+    {
+        get => _selectedProfileSource;
+        private set => SetField(ref _selectedProfileSource, value);
+    }
+
+    public ProfileFieldView? SelectedProfileField
+    {
+        get => _selectedProfileField;
+        set => SetField(ref _selectedProfileField, value);
+    }
 
     public string StatusText
     {
@@ -194,6 +229,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _jobRunner = new ScanJobRunner(_jobStore);
         _uiContext = SynchronizationContext.Current;
         _folderProvider = new JobStoreFolderTreeProvider(_jobStore);
+
+        ProfileFields.CollectionChanged += OnProfileFieldsChanged;
     }
 
     public async Task SelectFolderAndScanAsync()
@@ -316,7 +353,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             FolderRoots.Add(rootNode);
             _selectedFolderNode = rootNode;
             _selectedFolderPath = rootNode.FullPath;
+            _selectedFolderRelativePath = string.IsNullOrWhiteSpace(rootNode.RelativePath) ? "." : rootNode.RelativePath;
             OnPropertyChanged(nameof(SelectedFolderPath));
+            OnPropertyChanged(nameof(SelectedFolderRelativePath));
         });
 
         await RefreshSelectedFolderSummaryAsync();
@@ -332,7 +371,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         _selectedFolderNode = node;
         _selectedFolderPath = node?.FullPath ?? "Select a folder.";
+        var relative = node?.RelativePath ?? string.Empty;
+        _selectedFolderRelativePath = string.IsNullOrWhiteSpace(relative) ? "." : relative;
         OnPropertyChanged(nameof(SelectedFolderPath));
+        OnPropertyChanged(nameof(SelectedFolderRelativePath));
         _ = RefreshSelectedFolderSummaryAsync();
     }
 
@@ -493,19 +535,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         var summary = await _jobStore.GetFolderSummaryAsync(_selectedFolderNode.FolderId);
+        var effectiveProfile = await _jobStore.GetEffectiveFolderProfilePayloadAsync(_selectedFolderNode.FolderId);
+        var currentProfile = await _jobStore.GetFolderProfilePayloadAsync(_selectedFolderNode.FolderId);
+
         UpdateOnUi(() =>
         {
             _selectedFolderFiles = summary.totalFiles;
             _selectedFolderBytes = summary.totalBytes;
             _selectedFolderLargeFiles = summary.largeFiles;
             _selectedFolderExcludedFolders = summary.excludedFolders;
+            _selectedImportMode = _selectedFolderNode.ImportMode;
+            _selectedEffectiveImportMode = _selectedFolderNode.EffectiveImportMode;
+            SelectedProfileMode = _selectedFolderNode.ProfileMode;
+            SelectedProfileSource = SelectedProfileMode == "override" ? "Override" : "Inherited";
 
             OnPropertyChanged(nameof(SelectedFolderFilesDisplay));
             OnPropertyChanged(nameof(SelectedFolderBytesDisplay));
             OnPropertyChanged(nameof(SelectedFolderLargeFilesDisplay));
             OnPropertyChanged(nameof(SelectedFolderExcludedDisplay));
+            OnPropertyChanged(nameof(SelectedImportMode));
+            OnPropertyChanged(nameof(SelectedEffectiveImportMode));
         });
 
+        LoadProfileFields(currentProfile ?? effectiveProfile);
         await RefreshImportSelectionCountsAsync();
     }
 
@@ -526,37 +578,168 @@ public sealed class MainViewModel : INotifyPropertyChanged
         });
     }
 
-    public async Task IncludeSelectedFolderAsync()
+    public async Task SetSelectedFolderImportModeAsync(string mode)
     {
         if (_selectedFolderNode is null)
         {
             return;
         }
 
-        await _selectedFolderNode.ToggleIncludeAsync(CancellationToken.None);
+        await _jobStore.UpdateFolderImportModeAsync(_selectedFolderNode.FolderId, mode);
+        _selectedFolderNode.SetImportMode(mode);
         await RefreshSelectedFolderSummaryAsync();
     }
 
-    public async Task ExcludeSelectedFolderAsync()
+    public async Task SetSelectedProfileModeAsync(string mode)
     {
         if (_selectedFolderNode is null)
         {
             return;
         }
 
-        await _selectedFolderNode.ToggleExcludeAsync(CancellationToken.None);
+        await _jobStore.UpdateFolderProfileModeAsync(_selectedFolderNode.FolderId, mode);
+        _selectedFolderNode.SetProfileMode(mode);
+        SelectedProfileMode = mode;
+        SelectedProfileSource = mode == "override" ? "Override" : "Inherited";
         await RefreshSelectedFolderSummaryAsync();
+        QueueProfileSave();
     }
 
-    public async Task ClearSelectedFolderOverrideAsync()
+    public void AddProfileField()
+    {
+        ProfileFields.Add(new ProfileFieldView("", ""));
+    }
+
+    public void RemoveSelectedProfileField(ProfileFieldView? field)
+    {
+        if (field is null)
+        {
+            return;
+        }
+
+        ProfileFields.Remove(field);
+    }
+
+    public async Task ApplyProfileToChildrenAsync()
     {
         if (_selectedFolderNode is null)
         {
             return;
         }
 
-        await _selectedFolderNode.ClearOverrideAsync(CancellationToken.None);
-        await RefreshSelectedFolderSummaryAsync();
+        var payload = SerializeProfileFields();
+        await _jobStore.ApplyProfileToDescendantsAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, payload);
+    }
+
+    private void LoadProfileFields(string? payloadJson)
+    {
+        ProfileFields.CollectionChanged -= OnProfileFieldsChanged;
+        ProfileFields.Clear();
+
+        if (!string.IsNullOrWhiteSpace(payloadJson))
+        {
+            try
+            {
+                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(payloadJson) ?? new Dictionary<string, string>();
+                foreach (var pair in dict)
+                {
+                    var field = new ProfileFieldView(pair.Key, pair.Value);
+                    field.PropertyChanged += OnProfileFieldPropertyChanged;
+                    ProfileFields.Add(field);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        ProfileFields.CollectionChanged += OnProfileFieldsChanged;
+    }
+
+    private string? SerializeProfileFields()
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in ProfileFields)
+        {
+            if (string.IsNullOrWhiteSpace(field.Key))
+            {
+                continue;
+            }
+
+            dict[field.Key] = field.Value ?? string.Empty;
+        }
+
+        if (dict.Count == 0)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(dict);
+    }
+
+    private void OnProfileFieldsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (ProfileFieldView field in e.NewItems)
+            {
+                field.PropertyChanged += OnProfileFieldPropertyChanged;
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (ProfileFieldView field in e.OldItems)
+            {
+                field.PropertyChanged -= OnProfileFieldPropertyChanged;
+            }
+        }
+
+        QueueProfileSave();
+    }
+
+    private void OnProfileFieldPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        QueueProfileSave();
+    }
+
+    private void QueueProfileSave()
+    {
+        lock (_profileSaveLock)
+        {
+            if (_profileSavePending)
+            {
+                return;
+            }
+
+            _profileSavePending = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(200);
+            await SaveProfileAsync();
+            lock (_profileSaveLock)
+            {
+                _profileSavePending = false;
+            }
+        });
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        if (_selectedFolderNode is null)
+        {
+            return;
+        }
+
+        if (!string.Equals(_selectedFolderNode.ProfileMode, "override", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var payload = SerializeProfileFields();
+        await _jobStore.UpsertFolderProfileAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, payload);
     }
 
     private static string FormatBytes(long bytes)
@@ -699,4 +882,48 @@ public sealed class TransferView
     public string DurationDisplay { get; }
 
     public string Error { get; }
+}
+
+public sealed class ProfileFieldView : INotifyPropertyChanged
+{
+    private string _key;
+    private string _value;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public ProfileFieldView(string key, string value)
+    {
+        _key = key;
+        _value = value;
+    }
+
+    public string Key
+    {
+        get => _key;
+        set
+        {
+            if (_key == value)
+            {
+                return;
+            }
+
+            _key = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Key)));
+        }
+    }
+
+    public string Value
+    {
+        get => _value;
+        set
+        {
+            if (_value == value)
+            {
+                return;
+            }
+
+            _value = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
+        }
+    }
 }

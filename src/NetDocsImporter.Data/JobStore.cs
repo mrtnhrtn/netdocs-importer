@@ -76,7 +76,9 @@ public sealed class JobStore
                 Depth INTEGER NOT NULL,
                 IsIncluded INTEGER NOT NULL DEFAULT 1,
                 IsOverride INTEGER NOT NULL DEFAULT 0,
-                CreatedUtc TEXT NOT NULL
+                CreatedUtc TEXT NOT NULL,
+                ImportMode TEXT NOT NULL DEFAULT 'inherit',
+                ProfileMode TEXT NOT NULL DEFAULT 'inherit'
             );
 
             CREATE TABLE IF NOT EXISTS FolderRules (
@@ -89,19 +91,41 @@ public sealed class JobStore
                 CreatedUtc TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS FolderProfiles (
+                ProfileId TEXT PRIMARY KEY,
+                JobId TEXT NOT NULL,
+                FolderId TEXT NOT NULL,
+                PayloadJson TEXT NULL,
+                UpdatedUtc TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Files_JobId ON Files(JobId);
             CREATE INDEX IF NOT EXISTS IX_Files_RelativePath ON Files(RelativePath);
-            CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);
             CREATE INDEX IF NOT EXISTS IX_Transfers_JobId ON Transfers(JobId);
             CREATE INDEX IF NOT EXISTS IX_Transfers_FileId ON Transfers(FileId);
             CREATE INDEX IF NOT EXISTS IX_Folders_JobId ON Folders(JobId);
             CREATE INDEX IF NOT EXISTS IX_Folders_ParentFolderId ON Folders(ParentFolderId);
             CREATE INDEX IF NOT EXISTS IX_Folders_RelativePath ON Folders(RelativePath);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_FolderProfiles_FolderId ON FolderProfiles(FolderId);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await EnsureColumnExistsAsync(connection, "Files", "FolderId", "TEXT NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "Folders", "ImportMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "Folders", "ProfileMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
+
+        await using var indexCommand = connection.CreateCommand();
+        indexCommand.CommandText = "CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);";
+        await indexCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var fixImportMode = connection.CreateCommand();
+        fixImportMode.CommandText = "UPDATE Folders SET ImportMode = 'inherit' WHERE ImportMode IS NULL;";
+        await fixImportMode.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var fixProfileMode = connection.CreateCommand();
+        fixProfileMode.CommandText = "UPDATE Folders SET ProfileMode = 'inherit' WHERE ProfileMode IS NULL;";
+        await fixProfileMode.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task InsertJobAsync(JobRecord job, CancellationToken cancellationToken = default)
@@ -523,8 +547,8 @@ public sealed class JobStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO Folders
-            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc)
-            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc);
+            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode)
+            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc, $importMode, $profileMode);
             """;
 
         BindFolderParameters(command, folder);
@@ -538,7 +562,7 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+            SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode
             FROM Folders
             WHERE JobId = $jobId
               AND ParentFolderId IS NULL
@@ -561,7 +585,9 @@ public sealed class JobStore
             reader.GetInt32(5),
             reader.GetInt64(6) == 1,
             reader.GetInt64(7) == 1,
-            ParseUtc(reader.GetString(8)));
+            ParseUtc(reader.GetString(8)),
+            reader.IsDBNull(9) ? "inherit" : reader.GetString(9),
+            reader.IsDBNull(10) ? "inherit" : reader.GetString(10));
     }
 
     public async Task<IReadOnlyList<FolderRecord>> GetChildFoldersAsync(
@@ -577,13 +603,13 @@ public sealed class JobStore
         await using var command = connection.CreateCommand();
         command.CommandText = parentFolderId is null
             ? """
-              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode
               FROM Folders
               WHERE JobId = $jobId AND ParentFolderId IS NULL
               ORDER BY RelativePath;
               """
             : """
-              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc
+              SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode
               FROM Folders
               WHERE JobId = $jobId AND ParentFolderId = $parentFolderId
               ORDER BY RelativePath;
@@ -607,7 +633,9 @@ public sealed class JobStore
                 reader.GetInt32(5),
                 reader.GetInt64(6) == 1,
                 reader.GetInt64(7) == 1,
-                ParseUtc(reader.GetString(8))));
+                ParseUtc(reader.GetString(8)),
+                reader.IsDBNull(9) ? "inherit" : reader.GetString(9),
+                reader.IsDBNull(10) ? "inherit" : reader.GetString(10)));
         }
 
         return results;
@@ -678,6 +706,183 @@ public sealed class JobStore
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Folders
+            SET ImportMode = $importMode
+            WHERE FolderId = $folderId;
+            """;
+
+        command.Parameters.AddWithValue("$importMode", importMode);
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateFolderProfileModeAsync(string folderId, string profileMode, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Folders
+            SET ProfileMode = $profileMode
+            WHERE FolderId = $folderId;
+            """;
+
+        command.Parameters.AddWithValue("$profileMode", profileMode);
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<string?> GetFolderProfilePayloadAsync(string folderId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT PayloadJson
+            FROM FolderProfiles
+            WHERE FolderId = $folderId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result == DBNull.Value ? null : result as string;
+    }
+
+    public async Task UpsertFolderProfileAsync(string jobId, string folderId, string? payloadJson, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO FolderProfiles (ProfileId, JobId, FolderId, PayloadJson, UpdatedUtc)
+            VALUES ($profileId, $jobId, $folderId, $payloadJson, $updatedUtc)
+            ON CONFLICT(FolderId) DO UPDATE SET
+                PayloadJson = $payloadJson,
+                UpdatedUtc = $updatedUtc;
+            """;
+
+        command.Parameters.AddWithValue("$profileId", Guid.NewGuid().ToString("N"));
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$folderId", folderId);
+        command.Parameters.AddWithValue("$payloadJson", (object?)payloadJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(DateTime.UtcNow));
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<string?> GetEffectiveFolderProfilePayloadAsync(string folderId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_chain(FolderId, ParentFolderId, ProfileMode) AS (
+                SELECT FolderId, ParentFolderId, ProfileMode
+                FROM Folders
+                WHERE FolderId = $folderId
+                UNION ALL
+                SELECT f.FolderId, f.ParentFolderId, f.ProfileMode
+                FROM Folders f
+                JOIN folder_chain fc ON f.FolderId = fc.ParentFolderId
+            )
+            SELECT fp.PayloadJson
+            FROM folder_chain fc
+            JOIN FolderProfiles fp ON fp.FolderId = fc.FolderId
+            WHERE fc.ProfileMode = 'override'
+            LIMIT 1;
+            """;
+
+        command.Parameters.AddWithValue("$folderId", folderId);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result == DBNull.Value ? null : result as string;
+    }
+
+    public async Task ApplyProfileToDescendantsAsync(
+        string jobId,
+        string folderId,
+        string? payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var transaction = connection.BeginTransaction();
+
+        var descendantIds = new List<string>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                WITH RECURSIVE folder_tree(FolderId, ParentFolderId) AS (
+                    SELECT FolderId, ParentFolderId
+                    FROM Folders
+                    WHERE ParentFolderId = $folderId
+                    UNION ALL
+                    SELECT f.FolderId, f.ParentFolderId
+                    FROM Folders f
+                    JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+                )
+                SELECT FolderId FROM folder_tree;
+                """;
+            command.Parameters.AddWithValue("$folderId", folderId);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                descendantIds.Add(reader.GetString(0));
+            }
+        }
+
+        foreach (var id in descendantIds)
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE Folders
+                SET ProfileMode = 'override'
+                WHERE FolderId = $folderId AND ProfileMode = 'inherit';
+                """;
+            update.Parameters.AddWithValue("$folderId", id);
+            var rows = await update.ExecuteNonQueryAsync(cancellationToken);
+            if (rows > 0)
+            {
+                await using var upsert = connection.CreateCommand();
+                upsert.Transaction = transaction;
+                upsert.CommandText = """
+                    INSERT INTO FolderProfiles (ProfileId, JobId, FolderId, PayloadJson, UpdatedUtc)
+                    VALUES ($profileId, $jobId, $folderId, $payloadJson, $updatedUtc)
+                    ON CONFLICT(FolderId) DO UPDATE SET
+                        PayloadJson = $payloadJson,
+                        UpdatedUtc = $updatedUtc;
+                    """;
+
+                upsert.Parameters.AddWithValue("$profileId", Guid.NewGuid().ToString("N"));
+                upsert.Parameters.AddWithValue("$jobId", jobId);
+                upsert.Parameters.AddWithValue("$folderId", id);
+                upsert.Parameters.AddWithValue("$payloadJson", (object?)payloadJson ?? DBNull.Value);
+                upsert.Parameters.AddWithValue("$updatedUtc", ToUtcString(DateTime.UtcNow));
+                await upsert.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task AddFolderRuleAsync(
         string jobId,
         string folderId,
@@ -719,13 +924,21 @@ public sealed class JobStore
             WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
                 SELECT FolderId,
                        ParentFolderId,
-                       CASE WHEN IsOverride = 1 THEN IsIncluded ELSE 1 END
+                       CASE
+                           WHEN ImportMode = 'exclude' THEN 0
+                           WHEN ImportMode = 'include' THEN 1
+                           ELSE 1
+                       END
                 FROM Folders
                 WHERE FolderId = $folderId
                 UNION ALL
                 SELECT f.FolderId,
                        f.ParentFolderId,
-                       CASE WHEN f.IsOverride = 1 THEN f.IsIncluded ELSE ft.EffectiveIncluded END
+                       CASE
+                           WHEN f.ImportMode = 'exclude' THEN 0
+                           WHEN f.ImportMode = 'include' THEN 1
+                           ELSE ft.EffectiveIncluded
+                       END
                 FROM Folders f
                 JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
             )
@@ -769,13 +982,21 @@ public sealed class JobStore
             WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
                 SELECT FolderId,
                        ParentFolderId,
-                       CASE WHEN IsOverride = 1 THEN IsIncluded ELSE 1 END
+                       CASE
+                           WHEN ImportMode = 'exclude' THEN 0
+                           WHEN ImportMode = 'include' THEN 1
+                           ELSE 1
+                       END
                 FROM Folders
                 WHERE JobId = $jobId AND ParentFolderId IS NULL
                 UNION ALL
                 SELECT f.FolderId,
                        f.ParentFolderId,
-                       CASE WHEN f.IsOverride = 1 THEN f.IsIncluded ELSE ft.EffectiveIncluded END
+                       CASE
+                           WHEN f.ImportMode = 'exclude' THEN 0
+                           WHEN f.ImportMode = 'include' THEN 1
+                           ELSE ft.EffectiveIncluded
+                       END
                 FROM Folders f
                 JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
             )
@@ -795,6 +1016,64 @@ public sealed class JobStore
         }
 
         return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    public async Task<IReadOnlyList<FileRecord>> GetIncludedFilesForJobAsync(
+        string jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<FileRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
+                SELECT FolderId,
+                       ParentFolderId,
+                       CASE
+                           WHEN ImportMode = 'exclude' THEN 0
+                           WHEN ImportMode = 'include' THEN 1
+                           ELSE 1
+                       END
+                FROM Folders
+                WHERE JobId = $jobId AND ParentFolderId IS NULL
+                UNION ALL
+                SELECT f.FolderId,
+                       f.ParentFolderId,
+                       CASE
+                           WHEN f.ImportMode = 'exclude' THEN 0
+                           WHEN f.ImportMode = 'include' THEN 1
+                           ELSE ft.EffectiveIncluded
+                       END
+                FROM Folders f
+                JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+            )
+            SELECT files.FileId, files.JobId, files.FullPath, files.RelativePath, files.SizeBytes, files.ModifiedUtc, files.IsLargeWarning, files.FolderId
+            FROM folder_tree ft
+            JOIN Files files ON files.FolderId = ft.FolderId
+            WHERE ft.EffectiveIncluded = 1
+            ORDER BY files.RelativePath;
+            """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new FileRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4),
+                ParseUtc(reader.GetString(5)),
+                reader.GetInt64(6) == 1,
+                reader.IsDBNull(7) ? null : reader.GetString(7)));
+        }
+
+        return results;
     }
 
     private static void BindFileParameters(SqliteCommand command, FileRecord file)
@@ -820,6 +1099,8 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$isIncluded", folder.IsIncluded ? 1 : 0);
         command.Parameters.AddWithValue("$isOverride", folder.IsOverride ? 1 : 0);
         command.Parameters.AddWithValue("$createdUtc", ToUtcString(folder.CreatedUtc));
+        command.Parameters.AddWithValue("$importMode", folder.ImportMode);
+        command.Parameters.AddWithValue("$profileMode", folder.ProfileMode);
     }
 
     private static async Task EnsureColumnExistsAsync(
@@ -917,8 +1198,8 @@ public sealed class JobFolderWriter : IDisposable
         _command = _connection.CreateCommand();
         _command.CommandText = """
             INSERT OR REPLACE INTO Folders
-            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc)
-            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc);
+            (FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode)
+            VALUES ($folderId, $jobId, $fullPath, $relativePath, $parentFolderId, $depth, $isIncluded, $isOverride, $createdUtc, $importMode, $profileMode);
             """;
 
         _command.Parameters.Add("$folderId", SqliteType.Text);
@@ -930,6 +1211,8 @@ public sealed class JobFolderWriter : IDisposable
         _command.Parameters.Add("$isIncluded", SqliteType.Integer);
         _command.Parameters.Add("$isOverride", SqliteType.Integer);
         _command.Parameters.Add("$createdUtc", SqliteType.Text);
+        _command.Parameters.Add("$importMode", SqliteType.Text);
+        _command.Parameters.Add("$profileMode", SqliteType.Text);
     }
 
     public void Insert(FolderRecord folder)
@@ -943,6 +1226,8 @@ public sealed class JobFolderWriter : IDisposable
         _command.Parameters["$isIncluded"].Value = folder.IsIncluded ? 1 : 0;
         _command.Parameters["$isOverride"].Value = folder.IsOverride ? 1 : 0;
         _command.Parameters["$createdUtc"].Value = folder.CreatedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        _command.Parameters["$importMode"].Value = folder.ImportMode;
+        _command.Parameters["$profileMode"].Value = folder.ProfileMode;
 
         _command.ExecuteNonQuery();
     }

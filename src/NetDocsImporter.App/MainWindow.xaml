@@ -13,8 +13,58 @@
 
         <HierarchicalDataTemplate DataType="{x:Type core:FolderNodeViewModel}" ItemsSource="{Binding Children}">
             <StackPanel Orientation="Horizontal">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Opacity" Value="1" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding EffectiveIncluded}" Value="False">
+                                <Setter Property="Opacity" Value="0.55" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
                 <Path Width="14" Height="12" Margin="0,0,4,0" Fill="#F4C542" Stroke="#C89200"
                       Data="M1,4 L9,4 L11,6 L21,6 L21,17 L1,17 Z" />
+                <Button Command="{Binding CycleImportModeCommand}" Padding="0" Margin="0,0,6,0" Background="Transparent" BorderThickness="0">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2">
+                            <Path.Style>
+                                <Style TargetType="Path">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ImportMode}" Value="include">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Path.Style>
+                        </Path>
+                        <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10">
+                            <Path.Style>
+                                <Style TargetType="Path">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ImportMode}" Value="exclude">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Path.Style>
+                        </Path>
+                        <TextBlock Text="↪" Foreground="#888888" FontWeight="SemiBold">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ImportMode}" Value="inherit">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Button>
                 <TextBlock Text="{Binding Name}" Margin="0,0,6,0">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
@@ -27,26 +77,12 @@
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-                <TextBlock Margin="0,0,6,0" FontWeight="SemiBold">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Text" Value="Y" />
-                            <Setter Property="Foreground" Value="#2E7D32" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding EffectiveIncluded}" Value="False">
-                                    <Setter Property="Text" Value="N" />
-                                    <Setter Property="Foreground" Value="#888888" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
                 <TextBlock Text="(inherited)" FontStyle="Italic" Foreground="#777777">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Visibility" Value="Collapsed" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsOverride}" Value="False">
+                                <DataTrigger Binding="{Binding IsImportInherited}" Value="True">
                                     <Setter Property="Visibility" Value="Visible" />
                                 </DataTrigger>
                             </Style.Triggers>
@@ -155,7 +191,8 @@
         <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="0,0,0,0">
                 <TextBlock Text="Selected Folder" FontWeight="SemiBold" />
-                <TextBlock Text="{Binding SelectedFolderPath}" Margin="0,4,0,8" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,4,0,4" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
 
                 <StackPanel Orientation="Vertical" Margin="0,0,0,8">
                     <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
@@ -164,17 +201,92 @@
                     <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                    <Button Content="Exclude this folder" Width="130" Margin="0,0,6,0" Click="OnExcludeFolder" />
-                    <Button Content="Include this folder" Width="130" Margin="0,0,6,0" Click="OnIncludeFolder" />
-                    <Button Content="Clear override" Width="110" Click="OnClearFolderOverride" />
+                <TextBlock Text="Import Mode" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,10">
+                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="↪" Foreground="#888888" Margin="0,0,6,0" />
+                            <TextBlock Text="Inherit" />
+                        </StackPanel>
+                    </Button>
+                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                            <TextBlock Text="Include" />
+                        </StackPanel>
+                    </Button>
+                    <Button Width="110" Click="OnSetImportExclude">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                            <TextBlock Text="Exclude" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
+                <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
+                <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,12" />
 
                 <TextBlock Text="Import Selection" FontWeight="SemiBold" />
                 <StackPanel Orientation="Vertical" Margin="0,4,0,12">
-                    <TextBlock Text="{Binding IncludedFilesCountDisplay, StringFormat=Included files: {0}}" />
+                    <TextBlock Text="{Binding IncludedFilesCountDisplay, StringFormat=Included files to import: {0}}" />
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay, StringFormat=Excluded files: {0}}" />
                 </StackPanel>
+
+                <TextBlock Text="Profiling" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,6">
+                    <RadioButton Content="Inherit" GroupName="ProfileMode" Margin="0,0,12,0"
+                                 Checked="OnProfileInheritChecked">
+                        <RadioButton.Style>
+                            <Style TargetType="RadioButton">
+                                <Setter Property="IsChecked" Value="False" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedProfileMode}" Value="inherit">
+                                        <Setter Property="IsChecked" Value="True" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </RadioButton.Style>
+                    </RadioButton>
+                    <RadioButton Content="Override" GroupName="ProfileMode"
+                                 Checked="OnProfileOverrideChecked">
+                        <RadioButton.Style>
+                            <Style TargetType="RadioButton">
+                                <Setter Property="IsChecked" Value="False" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedProfileMode}" Value="override">
+                                        <Setter Property="IsChecked" Value="True" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </RadioButton.Style>
+                    </RadioButton>
+                </StackPanel>
+                <TextBlock Text="{Binding SelectedProfileSource, StringFormat=Profile source: {0}}" Foreground="#555555" Margin="0,0,0,6" />
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Add field" Width="90" Margin="0,0,6,0" Click="OnAddProfileField" />
+                    <Button Content="Remove field" Width="110" Margin="0,0,6,0" Click="OnRemoveProfileField" />
+                    <Button Content="Apply to children" Width="130" Click="OnApplyProfileToChildren" />
+                </StackPanel>
+                <ListView ItemsSource="{Binding ProfileFields}" SelectedItem="{Binding SelectedProfileField, Mode=TwoWay}" Height="140">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Key" Width="120">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Value" Width="160">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
 
                 <TextBlock Text="Recent Jobs" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,8">

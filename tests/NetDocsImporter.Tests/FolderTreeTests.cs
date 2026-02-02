@@ -26,7 +26,9 @@ public class FolderTreeTests
             0,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
         await store.InsertFolderAsync(folder);
 
         var file = new FileRecord(
@@ -48,7 +50,7 @@ public class FolderTreeTests
     }
 
     [Fact]
-    public async Task EffectiveInclusionInheritsOverrides()
+    public Task EffectiveInclusionInheritsOverrides()
     {
         var provider = new FakeFolderProvider();
         var rootRecord = new FolderRecord(
@@ -60,7 +62,9 @@ public class FolderTreeTests
             0,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
         var childRecord = new FolderRecord(
             "child",
             "job",
@@ -70,7 +74,9 @@ public class FolderTreeTests
             1,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
 
         var root = new FolderNodeViewModel(provider, _ => { }, "job", rootRecord, null, 0);
         var child = new FolderNodeViewModel(provider, _ => { }, "job", childRecord, root, 0);
@@ -79,10 +85,12 @@ public class FolderTreeTests
         Assert.True(root.EffectiveIncluded);
         Assert.True(child.EffectiveIncluded);
 
-        await root.ToggleExcludeAsync(CancellationToken.None);
+        root.SetImportMode("exclude");
 
         Assert.False(root.EffectiveIncluded);
         Assert.False(child.EffectiveIncluded);
+
+        return Task.CompletedTask;
     }
 
     [Fact]
@@ -105,7 +113,9 @@ public class FolderTreeTests
             0,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
         await store.InsertFolderAsync(root);
 
         var child1 = new FolderRecord(
@@ -117,7 +127,9 @@ public class FolderTreeTests
             1,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
         var child2 = new FolderRecord(
             Guid.NewGuid().ToString("N"),
             jobId,
@@ -127,7 +139,9 @@ public class FolderTreeTests
             1,
             true,
             false,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            "inherit",
+            "inherit");
 
         await store.InsertFolderAsync(child1);
         await store.InsertFolderAsync(child2);
@@ -170,6 +184,11 @@ public class FolderTreeTests
         }
 
         public Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken)
         {
             return Task.CompletedTask;
         }

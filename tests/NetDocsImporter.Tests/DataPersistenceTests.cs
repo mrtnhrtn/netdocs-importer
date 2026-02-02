@@ -26,10 +26,18 @@ public class DataPersistenceTests
             Assert.Contains("Jobs", tables);
             Assert.Contains("Files", tables);
             Assert.Contains("Transfers", tables);
+            Assert.Contains("Folders", tables);
+            Assert.Contains("FolderRules", tables);
+            Assert.Contains("FolderProfiles", tables);
             Assert.Contains("IX_Files_JobId", indexes);
             Assert.Contains("IX_Files_RelativePath", indexes);
+            Assert.Contains("IX_Files_FolderId", indexes);
             Assert.Contains("IX_Transfers_JobId", indexes);
             Assert.Contains("IX_Transfers_FileId", indexes);
+            Assert.Contains("IX_Folders_JobId", indexes);
+            Assert.Contains("IX_Folders_ParentFolderId", indexes);
+            Assert.Contains("IX_Folders_RelativePath", indexes);
+            Assert.Contains("IX_FolderProfiles_FolderId", indexes);
         }
         finally
         {

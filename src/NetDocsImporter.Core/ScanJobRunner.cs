@@ -103,7 +103,9 @@ public sealed class ScanJobRunner
                 current.Depth,
                 true,
                 false,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                "inherit",
+                "inherit");
             folderWriter.Insert(folderRecord);
 
             try

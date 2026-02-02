@@ -16,7 +16,8 @@ public class ImportPipelineTests
         var jobId = Guid.NewGuid().ToString("N");
         await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
 
-        var files = await SeedFilesAsync(store, jobId, 3);
+        var folderId = await SeedRootFolderAsync(store, jobId);
+        var files = await SeedFilesAsync(store, jobId, folderId, 3);
 
         var clock = new FakeClock(DateTime.UtcNow);
         var uploader = new FixedUploader();
@@ -55,7 +56,8 @@ public class ImportPipelineTests
         var jobId = Guid.NewGuid().ToString("N");
         await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
 
-        var files = await SeedFilesAsync(store, jobId, 1);
+        var folderId = await SeedRootFolderAsync(store, jobId);
+        var files = await SeedFilesAsync(store, jobId, folderId, 1);
 
         var clock = new FakeClock(DateTime.UtcNow);
         var uploader = new FlakyUploader(failuresBeforeSuccess: 2);
@@ -93,7 +95,8 @@ public class ImportPipelineTests
         var jobId = Guid.NewGuid().ToString("N");
         await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
 
-        var files = await SeedFilesAsync(store, jobId, 1);
+        var folderId = await SeedRootFolderAsync(store, jobId);
+        var files = await SeedFilesAsync(store, jobId, folderId, 1);
         var file = files[0];
 
         var transferId = Guid.NewGuid().ToString("N");
@@ -133,7 +136,7 @@ public class ImportPipelineTests
         CleanupTempRoot(tempRoot);
     }
 
-    private static async Task<List<FileRecord>> SeedFilesAsync(JobStore store, string jobId, int count)
+    private static async Task<List<FileRecord>> SeedFilesAsync(JobStore store, string jobId, string folderId, int count)
     {
         var results = new List<FileRecord>();
         for (var i = 0; i < count; i++)
@@ -146,13 +149,32 @@ public class ImportPipelineTests
                 100 + i,
                 DateTime.UtcNow,
                 false,
-                null);
+                folderId);
 
             await store.InsertFileAsync(file);
             results.Add(file);
         }
 
         return results;
+    }
+
+    private static async Task<string> SeedRootFolderAsync(JobStore store, string jobId)
+    {
+        var folderId = Guid.NewGuid().ToString("N");
+        var folder = new FolderRecord(
+            folderId,
+            jobId,
+            "C:\\data",
+            string.Empty,
+            null,
+            0,
+            true,
+            false,
+            DateTime.UtcNow,
+            "include",
+            "inherit");
+        await store.InsertFolderAsync(folder);
+        return folderId;
     }
 
     private static string CreateTempRoot()

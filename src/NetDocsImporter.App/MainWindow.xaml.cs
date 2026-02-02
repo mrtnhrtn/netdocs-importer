@@ -88,18 +88,43 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnIncludeFolder(object sender, RoutedEventArgs e)
+    private async void OnSetImportInherit(object sender, RoutedEventArgs e)
     {
-        await _viewModel.IncludeSelectedFolderAsync();
+        await _viewModel.SetSelectedFolderImportModeAsync("inherit");
     }
 
-    private async void OnExcludeFolder(object sender, RoutedEventArgs e)
+    private async void OnSetImportInclude(object sender, RoutedEventArgs e)
     {
-        await _viewModel.ExcludeSelectedFolderAsync();
+        await _viewModel.SetSelectedFolderImportModeAsync("include");
     }
 
-    private async void OnClearFolderOverride(object sender, RoutedEventArgs e)
+    private async void OnSetImportExclude(object sender, RoutedEventArgs e)
     {
-        await _viewModel.ClearSelectedFolderOverrideAsync();
+        await _viewModel.SetSelectedFolderImportModeAsync("exclude");
+    }
+
+    private async void OnProfileInheritChecked(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SetSelectedProfileModeAsync("inherit");
+    }
+
+    private async void OnProfileOverrideChecked(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SetSelectedProfileModeAsync("override");
+    }
+
+    private void OnAddProfileField(object sender, RoutedEventArgs e)
+    {
+        _viewModel.AddProfileField();
+    }
+
+    private void OnRemoveProfileField(object sender, RoutedEventArgs e)
+    {
+        _viewModel.RemoveSelectedProfileField(_viewModel.SelectedProfileField);
+    }
+
+    private async void OnApplyProfileToChildren(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ApplyProfileToChildrenAsync();
     }
 }

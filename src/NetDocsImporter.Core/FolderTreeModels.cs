@@ -13,6 +13,8 @@ public interface IFolderTreeProvider
 
     Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken);
 
+    Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken);
+
     Task AddFolderRuleAsync(string jobId, string folderId, string ruleType, string scope, string? notes, CancellationToken cancellationToken);
 }
 
@@ -38,6 +40,11 @@ public sealed class JobStoreFolderTreeProvider : IFolderTreeProvider
     public Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken)
     {
         return _jobStore.UpdateFolderOverrideAsync(folderId, isOverride, isIncluded, cancellationToken);
+    }
+
+    public Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken)
+    {
+        return _jobStore.UpdateFolderImportModeAsync(folderId, importMode, cancellationToken);
     }
 
     public Task AddFolderRuleAsync(string jobId, string folderId, string ruleType, string scope, string? notes, CancellationToken cancellationToken)
@@ -90,6 +97,9 @@ public sealed class FolderNodeViewModel : TreeNodeBase
     private bool _isIncluded;
     private bool _isOverride;
     private bool _effectiveIncluded;
+    private string _importMode;
+    private string _effectiveImportMode;
+    private string _profileMode;
 
     public FolderNodeViewModel(
         IFolderTreeProvider provider,
@@ -115,7 +125,12 @@ public sealed class FolderNodeViewModel : TreeNodeBase
 
         _isIncluded = record.IsIncluded;
         _isOverride = record.IsOverride;
-        _effectiveIncluded = _isOverride ? _isIncluded : parent?.EffectiveIncluded ?? true;
+        _importMode = string.IsNullOrWhiteSpace(record.ImportMode) ? "inherit" : record.ImportMode;
+        _profileMode = string.IsNullOrWhiteSpace(record.ProfileMode) ? "inherit" : record.ProfileMode;
+        _effectiveImportMode = ResolveEffectiveImportMode(parent, record.ImportMode);
+        _effectiveIncluded = string.Equals(_effectiveImportMode, "include", StringComparison.OrdinalIgnoreCase);
+
+        CycleImportModeCommand = new RelayCommand(async () => await CycleImportModeAsync());
     }
 
     public string JobId { get; }
@@ -149,6 +164,28 @@ public sealed class FolderNodeViewModel : TreeNodeBase
         get => _effectiveIncluded;
         private set => SetField(ref _effectiveIncluded, value);
     }
+
+    public string ImportMode
+    {
+        get => _importMode;
+        private set => SetField(ref _importMode, value);
+    }
+
+    public string EffectiveImportMode
+    {
+        get => _effectiveImportMode;
+        private set => SetField(ref _effectiveImportMode, value);
+    }
+
+    public bool IsImportInherited => string.Equals(ImportMode, "inherit", StringComparison.OrdinalIgnoreCase);
+
+    public string ProfileMode
+    {
+        get => _profileMode;
+        private set => SetField(ref _profileMode, value);
+    }
+
+    public RelayCommand CycleImportModeCommand { get; }
 
     public async Task EnsureChildrenLoadedAsync(CancellationToken cancellationToken)
     {
@@ -225,7 +262,8 @@ public sealed class FolderNodeViewModel : TreeNodeBase
 
     public void RecalculateEffectiveIncluded()
     {
-        EffectiveIncluded = IsOverride ? IsIncluded : Parent?.EffectiveIncluded ?? true;
+        EffectiveImportMode = ResolveEffectiveImportMode(Parent, ImportMode);
+        EffectiveIncluded = string.Equals(EffectiveImportMode, "include", StringComparison.OrdinalIgnoreCase);
 
         foreach (var child in Children.OfType<FolderNodeViewModel>())
         {
@@ -239,6 +277,46 @@ public sealed class FolderNodeViewModel : TreeNodeBase
         {
             child.SetEffectiveIncluded(EffectiveIncluded);
         }
+    }
+
+    public async Task CycleImportModeAsync()
+    {
+        var next = ImportMode switch
+        {
+            "inherit" => "include",
+            "include" => "exclude",
+            _ => "inherit"
+        };
+
+        await _provider.UpdateFolderImportModeAsync(FolderId, next, CancellationToken.None);
+        ImportMode = next;
+        RecalculateEffectiveIncluded();
+    }
+
+    public void SetImportMode(string importMode)
+    {
+        ImportMode = importMode;
+        RecalculateEffectiveIncluded();
+    }
+
+    public void SetProfileMode(string profileMode)
+    {
+        ProfileMode = profileMode;
+    }
+
+    private static string ResolveEffectiveImportMode(FolderNodeViewModel? parent, string importMode)
+    {
+        if (!string.Equals(importMode, "inherit", StringComparison.OrdinalIgnoreCase))
+        {
+            return importMode;
+        }
+
+        if (parent is null)
+        {
+            return "include";
+        }
+
+        return parent.EffectiveImportMode;
     }
 }
 
@@ -267,5 +345,24 @@ public sealed class FileNodeViewModel : TreeNodeBase
     public void SetEffectiveIncluded(bool included)
     {
         EffectiveIncluded = included;
+    }
+}
+
+public sealed class RelayCommand : System.Windows.Input.ICommand
+{
+    private readonly Func<Task> _execute;
+
+    public RelayCommand(Func<Task> execute)
+    {
+        _execute = execute;
+    }
+
+    public event EventHandler? CanExecuteChanged;
+
+    public bool CanExecute(object? parameter) => true;
+
+    public void Execute(object? parameter)
+    {
+        _ = _execute();
     }
 }

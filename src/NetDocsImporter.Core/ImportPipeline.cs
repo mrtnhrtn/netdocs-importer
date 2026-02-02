@@ -63,7 +63,7 @@ public sealed class ImportPipeline
 
         await _jobStore.InitializeAsync(cancellationToken);
 
-        var files = await _jobStore.GetFilesForJobAsync(jobId, cancellationToken);
+        var files = await _jobStore.GetIncludedFilesForJobAsync(jobId, cancellationToken);
         var transferStates = await _jobStore.GetTransferStatesByFileAsync(jobId, cancellationToken);
 
         var channel = Channel.CreateBounded<TransferWorkItem>(new BoundedChannelOptions(maxConcurrency * 2)
