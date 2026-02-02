@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NetDocsImporter.Data")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+88887f4cbd70c85e067de42559e4058b43a6461f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a3161a71c5078192f38abc73903f487d8122a0ce")]
 [assembly: System.Reflection.AssemblyProductAttribute("NetDocsImporter.Data")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NetDocsImporter.Data")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

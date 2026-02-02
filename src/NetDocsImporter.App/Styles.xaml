@@ -1,0 +1,39 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Thickness x:Key="SpacingXS">4</Thickness>
+    <Thickness x:Key="SpacingS">8</Thickness>
+    <Thickness x:Key="SpacingM">12</Thickness>
+    <Thickness x:Key="SpacingL">16</Thickness>
+
+    <Style x:Key="HeaderText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="#1F2933" />
+    </Style>
+
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="#334E68" />
+        <Setter Property="Margin" Value="0,12,0,6" />
+    </Style>
+
+    <Style x:Key="PrimaryButton" TargetType="Button">
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Background" Value="#2F5BEA" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="BorderBrush" Value="#2F5BEA" />
+    </Style>
+
+    <Style x:Key="SecondaryButton" TargetType="Button">
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Background" Value="#F5F7FA" />
+        <Setter Property="Foreground" Value="#1F2933" />
+        <Setter Property="BorderBrush" Value="#D9E2EC" />
+    </Style>
+
+    <Style TargetType="TextBox">
+        <Setter Property="Padding" Value="6,4" />
+        <Setter Property="BorderBrush" Value="#D9E2EC" />
+    </Style>
+</ResourceDictionary>

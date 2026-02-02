@@ -1,10 +1,15 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
@@ -14,6 +19,7 @@ namespace NetDocsImporter.App;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private const long LargeFileThresholdBytes = 1_800_000_000;
+    private const int FilePreviewLimit = 2000;
 
     private string? _selectedFolder;
     private long _totalFiles;
@@ -21,6 +27,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isScanning;
     private string _statusText = "Ready.";
     private string? _currentJobId;
+    private string _currentJobSourceRoot = string.Empty;
+    private string _currentJobState = "Ready";
     private JobSummaryView? _selectedRecentJob;
     private int _maxConcurrency = 4;
     private int _delayBetweenStarts = 250;
@@ -32,6 +40,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private long _importSucceeded;
     private long _importFailed;
     private long _importCanceled;
+    private string _importThroughput = "--";
+    private DateTime? _importStartedUtc;
     private string _selectedFolderPath = "Select a folder.";
     private string _selectedFolderRelativePath = string.Empty;
     private long _selectedFolderFiles;
@@ -44,6 +54,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _selectedEffectiveImportMode = "include";
     private string _selectedProfileMode = "inherit";
     private string _selectedProfileSource = "Inherited";
+    private string _treeSearchText = string.Empty;
+    private string _fileSearchText = string.Empty;
+    private string _selectedFileFilter = "All";
     private ProfileFieldView? _selectedProfileField;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
@@ -67,6 +80,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<TransferView> LatestTransfers { get; } = new();
     public ObservableCollection<TreeNodeBase> FolderRoots { get; } = new();
     public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
+    public ObservableCollection<FileRowView> FolderFiles { get; } = new();
 
     public string? SelectedFolder
     {
@@ -90,6 +104,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public string CurrentJobSourceRoot
+    {
+        get => _currentJobSourceRoot;
+        private set => SetField(ref _currentJobSourceRoot, value);
+    }
+
+    public string CurrentJobState
+    {
+        get => _currentJobState;
+        private set => SetField(ref _currentJobState, value);
+    }
+
     public JobSummaryView? SelectedRecentJob
     {
         get => _selectedRecentJob;
@@ -98,6 +124,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SetField(ref _selectedRecentJob, value) && value is not null)
             {
                 CurrentJobId = value.JobId;
+                _ = LoadJobHeaderAsync();
                 _ = LoadFolderTreeAsync();
                 _ = RefreshImportDataAsync();
             }
@@ -178,6 +205,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string ImportCanceledDisplay => _importCanceled.ToString("N0", CultureInfo.CurrentCulture);
 
+    public string ImportThroughputDisplay => _importThroughput;
+
     public string SelectedFolderPath => _selectedFolderPath;
 
     public string SelectedFolderRelativePath => _selectedFolderRelativePath;
@@ -210,6 +239,42 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _selectedProfileSource, value);
     }
 
+    public string TreeSearchText
+    {
+        get => _treeSearchText;
+        set
+        {
+            if (SetField(ref _treeSearchText, value))
+            {
+                ApplyTreeFilter();
+            }
+        }
+    }
+
+    public string FileSearchText
+    {
+        get => _fileSearchText;
+        set
+        {
+            if (SetField(ref _fileSearchText, value))
+            {
+                _ = RefreshFolderFilesAsync();
+            }
+        }
+    }
+
+    public string SelectedFileFilter
+    {
+        get => _selectedFileFilter;
+        set
+        {
+            if (SetField(ref _selectedFileFilter, value))
+            {
+                _ = RefreshFolderFilesAsync();
+            }
+        }
+    }
+
     public ProfileFieldView? SelectedProfileField
     {
         get => _selectedProfileField;
@@ -232,7 +297,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
     }
-
     public async Task SelectFolderAndScanAsync()
     {
         if (IsScanning)
@@ -271,6 +335,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         StatusText = "Scanning...";
         IsScanning = true;
+        CurrentJobState = "Scanning";
 
         var jobId = Guid.NewGuid().ToString("N");
         CurrentJobId = jobId;
@@ -287,14 +352,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 _cancellation.Token,
                 jobId);
             StatusText = "Scan complete.";
+            CurrentJobState = "Ready";
         }
         catch (OperationCanceledException)
         {
             StatusText = "Scan canceled.";
+            CurrentJobState = "Ready";
         }
         catch (Exception ex)
         {
             StatusText = $"Scan failed: {ex.Message}";
+            CurrentJobState = "Ready";
         }
         finally
         {
@@ -302,6 +370,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _cancellation = null;
             IsScanning = false;
             await LoadRecentJobsAsync();
+            await LoadJobHeaderAsync();
             await RefreshImportDataAsync();
             await LoadFolderTreeAsync();
         }
@@ -332,6 +401,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public async Task LoadJobHeaderAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentJobId))
+        {
+            return;
+        }
+
+        var job = await _jobStore.GetJobAsync(CurrentJobId);
+        if (job is null)
+        {
+            return;
+        }
+
+        CurrentJobSourceRoot = job.SourceRoot;
+        CurrentJobState = IsImportPaused ? "Paused" : IsImportRunning ? "Importing" : IsScanning ? "Scanning" : "Ready";
+    }
+
     public async Task LoadFolderTreeAsync()
     {
         if (string.IsNullOrWhiteSpace(CurrentJobId))
@@ -358,13 +444,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedFolderRelativePath));
         });
 
+        ApplyTreeFilter();
         await RefreshSelectedFolderSummaryAsync();
         await RefreshImportSelectionCountsAsync();
+        await RefreshFolderFilesAsync();
     }
 
     public async Task ExpandFolderNodeAsync(FolderNodeViewModel node)
     {
         await node.EnsureChildrenLoadedAsync(CancellationToken.None);
+        ApplyTreeFilter();
     }
 
     public void SelectFolderNode(FolderNodeViewModel? node)
@@ -376,6 +465,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedFolderPath));
         OnPropertyChanged(nameof(SelectedFolderRelativePath));
         _ = RefreshSelectedFolderSummaryAsync();
+        _ = RefreshFolderFilesAsync();
     }
 
     public async Task StartImportAsync()
@@ -393,6 +483,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         IsImportRunning = true;
         IsImportPaused = false;
+        _importStartedUtc = DateTime.UtcNow;
+        CurrentJobState = "Importing";
         StatusText = "Import started.";
 
         _importCancellation = new CancellationTokenSource();
@@ -413,14 +505,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 _importPipeline.RunAsync(CurrentJobId, MaxConcurrency, DelayMsBetweenStarts, progress, _importCancellation.Token),
                 _importCancellation.Token);
             StatusText = "Import complete.";
+            CurrentJobState = "Completed";
         }
         catch (OperationCanceledException)
         {
             StatusText = "Import canceled.";
+            CurrentJobState = "Ready";
         }
         catch (Exception ex)
         {
             StatusText = $"Import failed: {ex.Message}";
+            CurrentJobState = "Ready";
         }
         finally
         {
@@ -428,6 +523,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _importCancellation = null;
             IsImportRunning = false;
             IsImportPaused = false;
+            _importStartedUtc = null;
+            _importThroughput = "--";
+            OnPropertyChanged(nameof(ImportThroughputDisplay));
             await RefreshImportDataAsync();
         }
     }
@@ -441,6 +539,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         _importPipeline?.Pause();
         IsImportPaused = true;
+        CurrentJobState = "Paused";
         StatusText = "Import paused.";
     }
 
@@ -453,6 +552,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         _importPipeline?.Resume();
         IsImportPaused = false;
+        CurrentJobState = "Importing";
         StatusText = "Import resumed.";
     }
 
@@ -464,6 +564,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         _importCancellation?.Cancel();
+    }
+
+    public void OpenLogsFolder()
+    {
+        OpenFolder(_paths.LogsDirectory);
+    }
+
+    public void OpenReportsFolder()
+    {
+        OpenFolder(_paths.ReportsDirectory);
+    }
+
+    private void OpenFolder(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+        }
     }
 
     private void QueueImportRefresh()
@@ -512,12 +637,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _importFailed = counts.Failed;
             _importCanceled = counts.Canceled;
 
+            if (IsImportRunning && _importStartedUtc.HasValue)
+            {
+                var elapsed = DateTime.UtcNow - _importStartedUtc.Value;
+                if (elapsed.TotalSeconds >= 1)
+                {
+                    var rate = _importSucceeded / elapsed.TotalMinutes;
+                    _importThroughput = $"{rate:0.0} files/min";
+                }
+            }
+            else
+            {
+                _importThroughput = "--";
+            }
+
             OnPropertyChanged(nameof(ImportTotalFilesDisplay));
             OnPropertyChanged(nameof(ImportQueuedDisplay));
             OnPropertyChanged(nameof(ImportRunningDisplay));
             OnPropertyChanged(nameof(ImportSucceededDisplay));
             OnPropertyChanged(nameof(ImportFailedDisplay));
             OnPropertyChanged(nameof(ImportCanceledDisplay));
+            OnPropertyChanged(nameof(ImportThroughputDisplay));
 
             LatestTransfers.Clear();
             foreach (var transfer in transfers)
@@ -526,7 +666,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
         });
     }
-
     private async Task RefreshSelectedFolderSummaryAsync()
     {
         if (_selectedFolderNode is null)
@@ -578,6 +717,41 @@ public sealed class MainViewModel : INotifyPropertyChanged
         });
     }
 
+    private async Task RefreshFolderFilesAsync()
+    {
+        if (_selectedFolderNode is null || string.IsNullOrWhiteSpace(CurrentJobId))
+        {
+            FolderFiles.Clear();
+            return;
+        }
+
+        var files = await _jobStore.GetChildFilesAsync(CurrentJobId, _selectedFolderNode.FolderId, FilePreviewLimit);
+        var effectiveIncluded = _selectedFolderNode.EffectiveIncluded;
+        var filter = SelectedFileFilter;
+        var search = FileSearchText?.Trim();
+
+        var filtered = files
+            .Where(f => string.IsNullOrWhiteSpace(search) || f.FullPath.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Where(f => filter switch
+            {
+                "Included" => effectiveIncluded,
+                "Excluded" => !effectiveIncluded,
+                "Large" => f.IsLargeWarning,
+                _ => true
+            })
+            .Select(f => new FileRowView(f, effectiveIncluded))
+            .ToList();
+
+        UpdateOnUi(() =>
+        {
+            FolderFiles.Clear();
+            foreach (var file in filtered)
+            {
+                FolderFiles.Add(file);
+            }
+        });
+    }
+
     public async Task SetSelectedFolderImportModeAsync(string mode)
     {
         if (_selectedFolderNode is null)
@@ -587,6 +761,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         await _jobStore.UpdateFolderImportModeAsync(_selectedFolderNode.FolderId, mode);
         _selectedFolderNode.SetImportMode(mode);
+        await RefreshSelectedFolderSummaryAsync();
+        await RefreshFolderFilesAsync();
+    }
+
+    public async Task ApplyImportModeToChildrenAsync()
+    {
+        if (_selectedFolderNode is null)
+        {
+            return;
+        }
+
+        await _jobStore.ApplyImportModeToDescendantsAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, _selectedFolderNode.ImportMode);
         await RefreshSelectedFolderSummaryAsync();
     }
 
@@ -607,7 +793,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void AddProfileField()
     {
-        ProfileFields.Add(new ProfileFieldView("", ""));
+        ProfileFields.Add(new ProfileFieldView(string.Empty, string.Empty));
     }
 
     public void RemoveSelectedProfileField(ProfileFieldView? field)
@@ -740,6 +926,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var payload = SerializeProfileFields();
         await _jobStore.UpsertFolderProfileAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, payload);
+    }
+
+    private void ApplyTreeFilter()
+    {
+        foreach (var root in FolderRoots.OfType<FolderNodeViewModel>())
+        {
+            root.ApplyFilter(TreeSearchText);
+        }
     }
 
     private static string FormatBytes(long bytes)
@@ -925,5 +1119,45 @@ public sealed class ProfileFieldView : INotifyPropertyChanged
             _value = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
         }
+    }
+}
+
+public sealed class FileRowView
+{
+    public FileRowView(FileRecord record, bool effectiveIncluded)
+    {
+        Name = Path.GetFileName(record.FullPath);
+        RelativePath = record.RelativePath;
+        SizeDisplay = FormatBytes(record.SizeBytes);
+        ModifiedDisplay = record.ModifiedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+        LargeWarning = record.IsLargeWarning ? "Yes" : "No";
+        EffectiveImport = effectiveIncluded ? "Yes" : "No";
+    }
+
+    public string Name { get; }
+
+    public string RelativePath { get; }
+
+    public string SizeDisplay { get; }
+
+    public string ModifiedDisplay { get; }
+
+    public string LargeWarning { get; }
+
+    public string EffectiveImport { get; }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] suffixes = ["B", "KB", "MB", "GB", "TB"];
+        var size = (double)bytes;
+        var order = 0;
+
+        while (size >= 1024 && order < suffixes.Length - 1)
+        {
+            order++;
+            size /= 1024;
+        }
+
+        return string.Format(CultureInfo.CurrentCulture, "{0:0.##} {1}", size, suffixes[order]);
     }
 }

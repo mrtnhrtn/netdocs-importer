@@ -197,5 +197,10 @@ public class FolderTreeTests
         {
             return Task.CompletedTask;
         }
+
+        public Task ApplyImportModeToDescendantsAsync(string jobId, string folderId, string importMode, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
     }
 }

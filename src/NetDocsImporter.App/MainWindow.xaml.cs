@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -88,6 +89,15 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnFolderTreeRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TreeViewItem item)
+        {
+            item.IsSelected = true;
+            item.Focus();
+        }
+    }
+
     private async void OnSetImportInherit(object sender, RoutedEventArgs e)
     {
         await _viewModel.SetSelectedFolderImportModeAsync("inherit");
@@ -101,6 +111,11 @@ public partial class MainWindow : Window
     private async void OnSetImportExclude(object sender, RoutedEventArgs e)
     {
         await _viewModel.SetSelectedFolderImportModeAsync("exclude");
+    }
+
+    private async void OnApplyImportToChildren(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ApplyImportModeToChildrenAsync();
     }
 
     private async void OnProfileInheritChecked(object sender, RoutedEventArgs e)
@@ -126,5 +141,35 @@ public partial class MainWindow : Window
     private async void OnApplyProfileToChildren(object sender, RoutedEventArgs e)
     {
         await _viewModel.ApplyProfileToChildrenAsync();
+    }
+
+    private void OnOpenLogs(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenLogsFolder();
+    }
+
+    private void OnOpenReports(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenReportsFolder();
+    }
+
+    private void OnFilterAll(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SelectedFileFilter = "All";
+    }
+
+    private void OnFilterIncluded(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SelectedFileFilter = "Included";
+    }
+
+    private void OnFilterExcluded(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SelectedFileFilter = "Excluded";
+    }
+
+    private void OnFilterLarge(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SelectedFileFilter = "Large";
     }
 }

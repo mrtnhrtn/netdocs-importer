@@ -15,6 +15,8 @@ public interface IFolderTreeProvider
 
     Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken);
 
+    Task ApplyImportModeToDescendantsAsync(string jobId, string folderId, string importMode, CancellationToken cancellationToken);
+
     Task AddFolderRuleAsync(string jobId, string folderId, string ruleType, string scope, string? notes, CancellationToken cancellationToken);
 }
 
@@ -47,6 +49,11 @@ public sealed class JobStoreFolderTreeProvider : IFolderTreeProvider
         return _jobStore.UpdateFolderImportModeAsync(folderId, importMode, cancellationToken);
     }
 
+    public Task ApplyImportModeToDescendantsAsync(string jobId, string folderId, string importMode, CancellationToken cancellationToken)
+    {
+        return _jobStore.ApplyImportModeToDescendantsAsync(jobId, folderId, importMode, cancellationToken);
+    }
+
     public Task AddFolderRuleAsync(string jobId, string folderId, string ruleType, string scope, string? notes, CancellationToken cancellationToken)
     {
         return _jobStore.AddFolderRuleAsync(jobId, folderId, ruleType, scope, notes, cancellationToken);
@@ -57,6 +64,7 @@ public abstract class TreeNodeBase : INotifyPropertyChanged
 {
     private bool _isExpanded;
     private bool _isLoading;
+    private bool _isVisible = true;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -72,6 +80,12 @@ public abstract class TreeNodeBase : INotifyPropertyChanged
     {
         get => _isLoading;
         protected set => SetField(ref _isLoading, value);
+    }
+
+    public bool IsVisible
+    {
+        get => _isVisible;
+        protected set => SetField(ref _isVisible, value);
     }
 
     protected bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
@@ -318,6 +332,43 @@ public sealed class FolderNodeViewModel : TreeNodeBase
 
         return parent.EffectiveImportMode;
     }
+
+    public bool ApplyFilter(string? filterText)
+    {
+        if (string.IsNullOrWhiteSpace(filterText))
+        {
+            IsVisible = true;
+            foreach (var child in Children.OfType<FolderNodeViewModel>())
+            {
+                child.ApplyFilter(filterText);
+            }
+
+            foreach (var child in Children.OfType<FileNodeViewModel>())
+            {
+                child.ApplyFilter(filterText);
+            }
+
+            return true;
+        }
+
+        var normalized = filterText.Trim();
+        var matches = Name.Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
+                      RelativePath.Contains(normalized, StringComparison.OrdinalIgnoreCase);
+
+        var childMatches = false;
+        foreach (var child in Children.OfType<FolderNodeViewModel>())
+        {
+            childMatches |= child.ApplyFilter(filterText);
+        }
+
+        foreach (var child in Children.OfType<FileNodeViewModel>())
+        {
+            childMatches |= child.ApplyFilter(filterText);
+        }
+
+        IsVisible = matches || childMatches;
+        return IsVisible;
+    }
 }
 
 public sealed class FileNodeViewModel : TreeNodeBase
@@ -345,6 +396,19 @@ public sealed class FileNodeViewModel : TreeNodeBase
     public void SetEffectiveIncluded(bool included)
     {
         EffectiveIncluded = included;
+    }
+
+    public bool ApplyFilter(string? filterText)
+    {
+        if (string.IsNullOrWhiteSpace(filterText))
+        {
+            IsVisible = true;
+            return true;
+        }
+
+        IsVisible = Name.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                    RelativePath.Contains(filterText, StringComparison.OrdinalIgnoreCase);
+        return IsVisible;
     }
 }
 

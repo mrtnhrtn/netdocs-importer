@@ -33,3 +33,5 @@ C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-x64\NetDocsImporter.App.pdb
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-x64\NetDocsImporter.App.genruntimeconfig.cache
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-x64\ref\NetDocsImporter.App.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-x64\Styles.baml
+C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Release\net10.0-windows\win-x64\App.baml

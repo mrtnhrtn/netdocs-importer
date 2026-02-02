@@ -55,3 +55,5 @@ C:\dev\netdocs-importer\src\NetDocsImporter.App\bin\Debug\net10.0-windows\runtim
 C:\dev\netdocs-importer\src\NetDocsImporter.App\bin\Debug\net10.0-windows\NetDocsImporter.Data.dll
 C:\dev\netdocs-importer\src\NetDocsImporter.App\bin\Debug\net10.0-windows\NetDocsImporter.Data.pdb
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\NetDocsImporter.App.sourcelink.json
+C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Styles.baml
+C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\App.baml

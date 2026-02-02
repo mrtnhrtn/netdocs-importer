@@ -106,7 +106,6 @@ public sealed class JobStore
             CREATE INDEX IF NOT EXISTS IX_Folders_JobId ON Folders(JobId);
             CREATE INDEX IF NOT EXISTS IX_Folders_ParentFolderId ON Folders(ParentFolderId);
             CREATE INDEX IF NOT EXISTS IX_Folders_RelativePath ON Folders(RelativePath);
-            CREATE UNIQUE INDEX IF NOT EXISTS IX_FolderProfiles_FolderId ON FolderProfiles(FolderId);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -114,9 +113,13 @@ public sealed class JobStore
         await EnsureColumnExistsAsync(connection, "Files", "FolderId", "TEXT NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "Folders", "ImportMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
         await EnsureColumnExistsAsync(connection, "Folders", "ProfileMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "FolderProfiles", "FolderId", "TEXT NOT NULL", cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
-        indexCommand.CommandText = "CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);";
+        indexCommand.CommandText = """
+            CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_FolderProfiles_FolderId ON FolderProfiles(FolderId);
+            """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
 
         await using var fixImportMode = connection.CreateCommand();
@@ -881,6 +884,38 @@ public sealed class JobStore
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task ApplyImportModeToDescendantsAsync(
+        string jobId,
+        string folderId,
+        string importMode,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_tree(FolderId, ParentFolderId) AS (
+                SELECT FolderId, ParentFolderId
+                FROM Folders
+                WHERE ParentFolderId = $folderId
+                UNION ALL
+                SELECT f.FolderId, f.ParentFolderId
+                FROM Folders f
+                JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+            )
+            UPDATE Folders
+            SET ImportMode = $importMode
+            WHERE FolderId IN (SELECT FolderId FROM folder_tree)
+              AND ImportMode = 'inherit';
+            """;
+
+        command.Parameters.AddWithValue("$folderId", folderId);
+        command.Parameters.AddWithValue("$importMode", importMode);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task AddFolderRuleAsync(

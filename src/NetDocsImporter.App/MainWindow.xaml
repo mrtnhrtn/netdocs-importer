@@ -6,7 +6,7 @@
         xmlns:local="clr-namespace:NetDocsImporter.App"
         xmlns:core="clr-namespace:NetDocsImporter.Core;assembly=NetDocsImporter.Core"
         mc:Ignorable="d"
-        Title="NetDocs Importer" Height="620" Width="1100" MinHeight="520" MinWidth="980">
+        Title="NetDocs Importer" Height="720" Width="1180" MinHeight="620" MinWidth="980">
     <Window.Resources>
         <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
@@ -51,7 +51,7 @@
                                 </Style>
                             </Path.Style>
                         </Path>
-                        <TextBlock Text="↪" Foreground="#888888" FontWeight="SemiBold">
+                        <TextBlock Text="?" Foreground="#888888" FontWeight="SemiBold">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -113,243 +113,266 @@
     </Window.Resources>
 
     <Grid Margin="16">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="360" />
-        </Grid.ColumnDefinitions>
-
-        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-            <TextBlock Text="Folder Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TreeView ItemsSource="{Binding FolderRoots}"
-                      SelectedItemChanged="OnFolderTreeSelectedItemChanged"
-                      VirtualizingStackPanel.IsVirtualizing="True"
-                      VirtualizingStackPanel.VirtualizationMode="Recycling"
-                      ScrollViewer.CanContentScroll="True"
-                      BorderThickness="1" BorderBrush="#CCD0D5">
-                <TreeView.ItemContainerStyle>
-                    <Style TargetType="TreeViewItem">
-                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
-                        <EventSetter Event="Expanded" Handler="OnFolderTreeExpanded" />
-                        <EventSetter Event="Collapsed" Handler="OnFolderTreeCollapsed" />
-                    </Style>
-                </TreeView.ItemContainerStyle>
-            </TreeView>
-        </StackPanel>
-
-        <Grid Grid.Column="1" Margin="0,0,12,0">
-            <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
+        <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-            <StackPanel Orientation="Horizontal" Grid.Row="0">
-                <Button Content="Select Folder" Width="130" Margin="0,0,8,0" Click="OnSelectFolder"
-                        IsEnabled="{Binding IsScanning, Converter={StaticResource InverseBooleanConverter}}" />
-                <Button Content="Cancel" Width="90" Click="OnCancelScan"
-                        IsEnabled="{Binding IsScanning}"
-                        Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        <Border Grid.Row="0" Background="#F5F7FA" Padding="12" CornerRadius="6" BorderBrush="#E4E7EB" BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <TextBlock Text="Job:" FontWeight="SemiBold" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding CurrentJobId}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="Source:" FontWeight="SemiBold" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding CurrentJobSourceRoot}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="State:" FontWeight="SemiBold" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding CurrentJobState}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Select Folder" Width="120" Margin="0,0,6,0" Click="OnSelectFolder"
+                                IsEnabled="{Binding IsScanning, Converter={StaticResource InverseBooleanConverter}}"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Cancel Scan" Width="110" Click="OnCancelScan"
+                                IsEnabled="{Binding IsScanning}"
+                                Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Total:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding TotalFilesDisplay}" FontWeight="SemiBold" Margin="0,0,16,0" />
+                    <TextBlock Text="Included:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding IncludedFilesCountDisplay}" FontWeight="SemiBold" Margin="0,0,16,0" />
+                    <TextBlock Text="Excluded:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,12,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="340" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                <TextBlock Text="Folders" Style="{StaticResource SectionTitle}" />
+                <TextBox Text="{Binding TreeSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
+                <Border Background="#F8FAFC" BorderBrush="#D9E2EC" BorderThickness="1" CornerRadius="6" Padding="6">
+                    <TreeView ItemsSource="{Binding FolderRoots}"
+                              SelectedItemChanged="OnFolderTreeSelectedItemChanged"
+                              VirtualizingStackPanel.IsVirtualizing="True"
+                              VirtualizingStackPanel.VirtualizationMode="Recycling"
+                              ScrollViewer.CanContentScroll="True"
+                              BorderThickness="0">
+                        <TreeView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Include" Click="OnSetImportInclude" />
+                                <MenuItem Header="Exclude" Click="OnSetImportExclude" />
+                                <MenuItem Header="Clear override" Click="OnSetImportInherit" />
+                                <Separator />
+                                <MenuItem Header="Apply to children" Click="OnApplyImportToChildren" />
+                            </ContextMenu>
+                        </TreeView.ContextMenu>
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="Padding" Value="4,3" />
+                                <Setter Property="Margin" Value="0,1,0,1" />
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <EventSetter Event="PreviewMouseRightButtonDown" Handler="OnFolderTreeRightButtonDown" />
+                                <EventSetter Event="Expanded" Handler="OnFolderTreeExpanded" />
+                                <EventSetter Event="Collapsed" Handler="OnFolderTreeCollapsed" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#E9EDF2" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
+                    </TreeView>
+                </Border>
             </StackPanel>
 
-            <TextBlock Grid.Row="1" Margin="0,10,0,0" TextWrapping="Wrap">
-                <Run Text="Selected folder: " />
-                <Run Text="{Binding SelectedFolder, TargetNullValue=No folder selected., Mode=OneWay}" />
-            </TextBlock>
-
-            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                <TextBlock Text="Files scanned: " />
-                <TextBlock Text="{Binding TotalFilesDisplay}" FontWeight="SemiBold" Margin="0,0,16,0" />
-                <TextBlock Text="Total bytes: " />
-                <TextBlock Text="{Binding TotalBytesDisplay}" FontWeight="SemiBold" />
+            <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                <TextBlock Text="Files" Style="{StaticResource SectionTitle}" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBox Width="220" Text="{Binding FileSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0" />
+                    <Button Content="All" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterAll" />
+                    <Button Content="Included" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterIncluded" />
+                    <Button Content="Excluded" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterExcluded" />
+                    <Button Content="Large" Style="{StaticResource SecondaryButton}" Click="OnFilterLarge" />
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
+                          IsReadOnly="True" GridLinesVisibility="Horizontal" BorderThickness="1" BorderBrush="#CCD0D5">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="200" />
+                        <DataGridTextColumn Header="Relative Path" Binding="{Binding RelativePath}" Width="*" />
+                        <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="90" />
+                        <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedDisplay}" Width="140" />
+                        <DataGridTextColumn Header="Large" Binding="{Binding LargeWarning}" Width="70" />
+                        <DataGridTextColumn Header="Import" Binding="{Binding EffectiveImport}" Width="70" />
+                    </DataGrid.Columns>
+                </DataGrid>
             </StackPanel>
 
-            <TextBlock Grid.Row="3" Margin="0,8,0,0" TextWrapping="Wrap">
-                <Run Text="Current job: " />
-                <Run Text="{Binding CurrentJobId, TargetNullValue=No active job., Mode=OneWay}" />
-            </TextBlock>
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
 
-            <TextBlock Grid.Row="4" Margin="0,12,0,4" Foreground="DarkOrange" FontWeight="SemiBold"
-                       Text="Large files (> 1.8 GB) require attention." />
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
+                    </StackPanel>
 
-            <ListView Grid.Row="5" ItemsSource="{Binding LargeFiles}" BorderThickness="1" BorderBrush="#CCD0D5">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Path" Width="420" DisplayMemberBinding="{Binding Path}" />
-                        <GridViewColumn Header="Size" Width="120" DisplayMemberBinding="{Binding SizeDisplay}" />
-                    </GridView>
-                </ListView.View>
-            </ListView>
+                    <TextBlock Text="Import Mode" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Width="96" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
+                                <TextBlock Text="Inherit" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="96" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                                <TextBlock Text="Include" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="96" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                                <TextBlock Text="Exclude" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
+                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,12" />
 
-            <TextBlock Grid.Row="6" Margin="0,10,0,0" Text="{Binding StatusText}" Foreground="#444444" />
+                    <TextBlock Text="Import Controls" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="Start Import" Width="100" Margin="0,0,6,0" Click="OnStartImport"
+                                IsEnabled="{Binding CanStartImport}" Style="{StaticResource PrimaryButton}" />
+                        <Button Content="Pause" Width="70" Margin="0,0,6,0" Click="OnPauseImport"
+                                IsEnabled="{Binding CanPauseImport}" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Resume" Width="70" Margin="0,0,6,0" Click="OnResumeImport"
+                                IsEnabled="{Binding CanResumeImport}" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Cancel" Width="70" Click="OnCancelImport"
+                                IsEnabled="{Binding CanCancelImport}" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="Open Logs Folder" Width="130" Margin="0,0,6,0" Click="OnOpenLogs" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Open Reports Folder" Width="140" Click="OnOpenReports" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+
+                    <TextBlock Text="Profiling" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <RadioButton Content="Inherit" GroupName="ProfileMode" Margin="0,0,12,0"
+                                     Checked="OnProfileInheritChecked">
+                            <RadioButton.Style>
+                                <Style TargetType="RadioButton">
+                                    <Setter Property="IsChecked" Value="False" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedProfileMode}" Value="inherit">
+                                            <Setter Property="IsChecked" Value="True" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </RadioButton.Style>
+                        </RadioButton>
+                        <RadioButton Content="Override" GroupName="ProfileMode"
+                                     Checked="OnProfileOverrideChecked">
+                            <RadioButton.Style>
+                                <Style TargetType="RadioButton">
+                                    <Setter Property="IsChecked" Value="False" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedProfileMode}" Value="override">
+                                            <Setter Property="IsChecked" Value="True" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </RadioButton.Style>
+                        </RadioButton>
+                    </StackPanel>
+                    <TextBlock Text="{Binding SelectedProfileSource, StringFormat=Profile source: {0}}" Foreground="#555555" Margin="0,0,0,6" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="Add field" Width="90" Margin="0,0,6,0" Click="OnAddProfileField" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Remove field" Width="110" Margin="0,0,6,0" Click="OnRemoveProfileField" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Apply to children" Width="130" Click="OnApplyProfileToChildren" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <ListView ItemsSource="{Binding ProfileFields}" SelectedItem="{Binding SelectedProfileField, Mode=TwoWay}" Height="140">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Key" Width="120">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Value" Width="160">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <TextBlock Text="Recent Jobs" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="Load Recent" Width="110" Click="OnLoadRecentJobs" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <ListView ItemsSource="{Binding RecentJobs}" SelectedItem="{Binding SelectedRecentJob, Mode=TwoWay}" Height="160">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Job" Width="70" DisplayMemberBinding="{Binding JobIdShort}" />
+                                <GridViewColumn Header="Created" Width="110" DisplayMemberBinding="{Binding CreatedDisplay}" />
+                                <GridViewColumn Header="Status" Width="90" DisplayMemberBinding="{Binding Status}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
 
-        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="0,0,0,0">
-                <TextBlock Text="Selected Folder" FontWeight="SemiBold" />
-                <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,4,0,4" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
-
-                <StackPanel Orientation="Vertical" Margin="0,0,0,8">
-                    <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
+        <Border Grid.Row="2" Background="#F8FAFC" BorderBrush="#E4E7EB" BorderThickness="1" Padding="8">
+            <DockPanel>
+                <TextBlock Text="{Binding StatusText}" Foreground="#52606D" DockPanel.Dock="Left" />
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <TextBlock Text="Included:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding IncludedFilesCountDisplay}" FontWeight="SemiBold" Margin="0,0,12,0" />
+                    <TextBlock Text="Excluded:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" Margin="0,0,12,0" />
+                    <TextBlock Text="Succeeded:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ImportSucceededDisplay}" FontWeight="SemiBold" Margin="0,0,12,0" />
+                    <TextBlock Text="Failed:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ImportFailedDisplay}" FontWeight="SemiBold" Margin="0,0,12,0" />
+                    <TextBlock Text="Throughput:" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ImportThroughputDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
-
-                <TextBlock Text="Import Mode" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" Margin="0,6,0,10">
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="↪" Foreground="#888888" Margin="0,0,6,0" />
-                            <TextBlock Text="Inherit" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                            <TextBlock Text="Include" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Click="OnSetImportExclude">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                            <TextBlock Text="Exclude" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-                <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
-                <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,12" />
-
-                <TextBlock Text="Import Selection" FontWeight="SemiBold" />
-                <StackPanel Orientation="Vertical" Margin="0,4,0,12">
-                    <TextBlock Text="{Binding IncludedFilesCountDisplay, StringFormat=Included files to import: {0}}" />
-                    <TextBlock Text="{Binding ExcludedFilesCountDisplay, StringFormat=Excluded files: {0}}" />
-                </StackPanel>
-
-                <TextBlock Text="Profiling" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,6">
-                    <RadioButton Content="Inherit" GroupName="ProfileMode" Margin="0,0,12,0"
-                                 Checked="OnProfileInheritChecked">
-                        <RadioButton.Style>
-                            <Style TargetType="RadioButton">
-                                <Setter Property="IsChecked" Value="False" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedProfileMode}" Value="inherit">
-                                        <Setter Property="IsChecked" Value="True" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </RadioButton.Style>
-                    </RadioButton>
-                    <RadioButton Content="Override" GroupName="ProfileMode"
-                                 Checked="OnProfileOverrideChecked">
-                        <RadioButton.Style>
-                            <Style TargetType="RadioButton">
-                                <Setter Property="IsChecked" Value="False" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedProfileMode}" Value="override">
-                                        <Setter Property="IsChecked" Value="True" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </RadioButton.Style>
-                    </RadioButton>
-                </StackPanel>
-                <TextBlock Text="{Binding SelectedProfileSource, StringFormat=Profile source: {0}}" Foreground="#555555" Margin="0,0,0,6" />
-
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Add field" Width="90" Margin="0,0,6,0" Click="OnAddProfileField" />
-                    <Button Content="Remove field" Width="110" Margin="0,0,6,0" Click="OnRemoveProfileField" />
-                    <Button Content="Apply to children" Width="130" Click="OnApplyProfileToChildren" />
-                </StackPanel>
-                <ListView ItemsSource="{Binding ProfileFields}" SelectedItem="{Binding SelectedProfileField, Mode=TwoWay}" Height="140">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Key" Width="120">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="Value" Width="160">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-
-                <TextBlock Text="Recent Jobs" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" Margin="0,6,0,8">
-                    <Button Content="Load Recent" Width="110" Click="OnLoadRecentJobs" />
-                </StackPanel>
-                <ListView ItemsSource="{Binding RecentJobs}"
-                          SelectedItem="{Binding SelectedRecentJob, Mode=TwoWay}"
-                          BorderThickness="1" BorderBrush="#CCD0D5" Height="150">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Job" Width="70" DisplayMemberBinding="{Binding JobIdShort}" />
-                            <GridViewColumn Header="Created" Width="110" DisplayMemberBinding="{Binding CreatedDisplay}" />
-                            <GridViewColumn Header="Status" Width="90" DisplayMemberBinding="{Binding Status}" />
-                            <GridViewColumn Header="Files" Width="70" DisplayMemberBinding="{Binding FileCountDisplay}" />
-                            <GridViewColumn Header="Bytes" Width="90" DisplayMemberBinding="{Binding TotalBytesDisplay}" />
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-
-                <TextBlock Text="Import Settings" FontWeight="SemiBold" Margin="0,12,0,4" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <TextBlock Text="Max Concurrency:" VerticalAlignment="Center" />
-                    <TextBox Width="60" Margin="8,0,0,0" Text="{Binding MaxConcurrency, UpdateSourceTrigger=PropertyChanged}" />
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <TextBlock Text="Delay ms between starts:" VerticalAlignment="Center" />
-                    <TextBox Width="60" Margin="8,0,0,0" Text="{Binding DelayMsBetweenStarts, UpdateSourceTrigger=PropertyChanged}" />
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
-                    <Button Content="Start Import" Width="100" Margin="0,0,6,0" Click="OnStartImport"
-                            IsEnabled="{Binding CanStartImport}" />
-                    <Button Content="Pause" Width="70" Margin="0,0,6,0" Click="OnPauseImport"
-                            IsEnabled="{Binding CanPauseImport}" />
-                    <Button Content="Resume" Width="70" Margin="0,0,6,0" Click="OnResumeImport"
-                            IsEnabled="{Binding CanResumeImport}" />
-                    <Button Content="Cancel" Width="70" Click="OnCancelImport"
-                            IsEnabled="{Binding CanCancelImport}" />
-                </StackPanel>
-
-                <TextBlock Text="Import Progress" FontWeight="SemiBold" />
-                <StackPanel Orientation="Vertical" Margin="0,6,0,8">
-                    <TextBlock Text="{Binding ImportTotalFilesDisplay, StringFormat=Total files: {0}}" />
-                    <TextBlock Text="{Binding ImportQueuedDisplay, StringFormat=Queued: {0}}" />
-                    <TextBlock Text="{Binding ImportRunningDisplay, StringFormat=Running: {0}}" />
-                    <TextBlock Text="{Binding ImportSucceededDisplay, StringFormat=Succeeded: {0}}" />
-                    <TextBlock Text="{Binding ImportFailedDisplay, StringFormat=Failed: {0}}" />
-                    <TextBlock Text="{Binding ImportCanceledDisplay, StringFormat=Canceled: {0}}" />
-                </StackPanel>
-
-                <TextBlock Text="Latest Transfers" FontWeight="SemiBold" Margin="0,6,0,4" />
-                <ListView ItemsSource="{Binding LatestTransfers}" BorderThickness="1" BorderBrush="#CCD0D5" Height="180">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Path" Width="170" DisplayMemberBinding="{Binding RelativePath}" />
-                            <GridViewColumn Header="Status" Width="80" DisplayMemberBinding="{Binding Status}" />
-                            <GridViewColumn Header="Attempt" Width="60" DisplayMemberBinding="{Binding Attempt}" />
-                            <GridViewColumn Header="Duration" Width="80" DisplayMemberBinding="{Binding DurationDisplay}" />
-                            <GridViewColumn Header="Error" Width="180" DisplayMemberBinding="{Binding Error}" />
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-            </StackPanel>
-        </ScrollViewer>
+            </DockPanel>
+        </Border>
     </Grid>
 </Window>
