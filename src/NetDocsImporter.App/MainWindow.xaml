@@ -1,0 +1,57 @@
+﻿<Window x:Class="NetDocsImporter.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:NetDocsImporter.App"
+        mc:Ignorable="d"
+        Title="NetDocs Importer" Height="520" Width="880" MinHeight="420" MinWidth="680">
+    <Window.Resources>
+        <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    </Window.Resources>
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="0">
+            <Button Content="Select Folder" Width="130" Margin="0,0,8,0" Click="OnSelectFolder"
+                    IsEnabled="{Binding IsScanning, Converter={StaticResource InverseBooleanConverter}}" />
+            <Button Content="Cancel" Width="90" Click="OnCancelScan"
+                    IsEnabled="{Binding IsScanning}"
+                    Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="1" Margin="0,10,0,0" TextWrapping="Wrap">
+            <Run Text="Selected folder: " />
+            <Run Text="{Binding SelectedFolder, TargetNullValue=No folder selected.}" />
+        </TextBlock>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock Text="Total files: " />
+            <TextBlock Text="{Binding TotalFilesDisplay}" FontWeight="SemiBold" Margin="0,0,16,0" />
+            <TextBlock Text="Total bytes: " />
+            <TextBlock Text="{Binding TotalBytesDisplay}" FontWeight="SemiBold" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="3" Margin="0,12,0,4" Foreground="DarkOrange" FontWeight="SemiBold"
+                   Text="Large files (>= 1.8 GB) require attention." />
+
+        <ListView Grid.Row="4" ItemsSource="{Binding LargeFiles}" BorderThickness="1" BorderBrush="#CCD0D5">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Path" Width="540" DisplayMemberBinding="{Binding Path}" />
+                    <GridViewColumn Header="Size" Width="120" DisplayMemberBinding="{Binding SizeDisplay}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <TextBlock Grid.Row="5" Margin="0,10,0,0" Text="{Binding StatusText}" Foreground="#444444" />
+    </Grid>
+</Window>

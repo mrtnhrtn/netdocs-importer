@@ -1,0 +1,11 @@
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\bin\Debug\net10.0\NetDocsImporter.NetDocs.deps.json
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\bin\Debug\net10.0\NetDocsImporter.NetDocs.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\bin\Debug\net10.0\NetDocsImporter.NetDocs.pdb
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.GeneratedMSBuildEditorConfig.editorconfig
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.AssemblyInfoInputs.cache
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.AssemblyInfo.cs
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.csproj.CoreCompileInputs.cache
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\refint\NetDocsImporter.NetDocs.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.pdb
+C:\dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\ref\NetDocsImporter.NetDocs.dll
