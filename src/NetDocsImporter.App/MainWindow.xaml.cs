@@ -10,6 +10,12 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
+        Loaded += OnLoaded;
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadRecentJobsAsync();
     }
 
     private async void OnSelectFolder(object sender, RoutedEventArgs e)
@@ -20,5 +26,10 @@ public partial class MainWindow : Window
     private void OnCancelScan(object sender, RoutedEventArgs e)
     {
         _viewModel.CancelScan();
+    }
+
+    private async void OnLoadRecentJobs(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadRecentJobsAsync();
     }
 }

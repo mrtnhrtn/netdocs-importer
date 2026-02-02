@@ -9,3 +9,4 @@ C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImport
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\refint\NetDocsImporter.Core.dll
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImporter.Core.pdb
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\ref\NetDocsImporter.Core.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImporter.Core.sourcelink.json

@@ -24,7 +24,7 @@ public class UnitTest1
 
             FileScanProgress? last = null;
             var largeFiles = new List<LargeFileItem>();
-            var progress = new Progress<FileScanProgress>(p =>
+            var progress = new ImmediateProgress<FileScanProgress>(p =>
             {
                 last = p;
                 if (p.LargeFile is not null)
@@ -46,6 +46,21 @@ public class UnitTest1
             {
                 Directory.Delete(tempRoot, true);
             }
+        }
+    }
+
+    private sealed class ImmediateProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _handler;
+
+        public ImmediateProgress(Action<T> handler)
+        {
+            _handler = handler;
+        }
+
+        public void Report(T value)
+        {
+            _handler(value);
         }
     }
 }

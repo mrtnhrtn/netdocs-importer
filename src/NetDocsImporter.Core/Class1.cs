@@ -4,13 +4,21 @@ public sealed record LargeFileItem(string Path, long Bytes);
 
 public sealed record FileScanProgress(long TotalFiles, long TotalBytes, LargeFileItem? LargeFile);
 
+public sealed record FileScanItem(
+    string FullPath,
+    string RelativePath,
+    long SizeBytes,
+    DateTime ModifiedUtc,
+    bool IsLargeWarning);
+
 public static class FileScanner
 {
     public static Task ScanAsync(
         string rootPath,
         long largeFileThresholdBytes,
         IProgress<FileScanProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<FileScanItem>? fileDiscovered = null)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
         {
@@ -18,7 +26,7 @@ public static class FileScanner
         }
 
         return Task.Run(
-            () => ScanInternal(rootPath, largeFileThresholdBytes, progress, cancellationToken),
+            () => ScanInternal(rootPath, largeFileThresholdBytes, progress, cancellationToken, fileDiscovered),
             cancellationToken);
     }
 
@@ -26,7 +34,8 @@ public static class FileScanner
         string rootPath,
         long largeFileThresholdBytes,
         IProgress<FileScanProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<FileScanItem>? fileDiscovered)
     {
         var totalFiles = 0L;
         var totalBytes = 0L;
@@ -83,10 +92,18 @@ public static class FileScanner
                 totalBytes += info.Length;
 
                 LargeFileItem? largeFile = null;
-                if (info.Length >= largeFileThresholdBytes)
+                var isLargeWarning = info.Length > largeFileThresholdBytes;
+                if (isLargeWarning)
                 {
                     largeFile = new LargeFileItem(info.FullName, info.Length);
                 }
+
+                fileDiscovered?.Invoke(new FileScanItem(
+                    info.FullName,
+                    Path.GetRelativePath(rootPath, info.FullName),
+                    info.Length,
+                    info.LastWriteTimeUtc,
+                    isLargeWarning));
 
                 if (progress is not null && (totalFiles % ReportEveryFiles == 0 || largeFile is not null))
                 {

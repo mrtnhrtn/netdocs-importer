@@ -10,3 +10,4 @@ C:\dev\netdocs-importer\src\NetDocsImporter.Data\obj\Debug\net10.0\NetDocsImport
 C:\dev\netdocs-importer\src\NetDocsImporter.Data\obj\Debug\net10.0\refint\NetDocsImporter.Data.dll
 C:\dev\netdocs-importer\src\NetDocsImporter.Data\obj\Debug\net10.0\NetDocsImporter.Data.pdb
 C:\dev\netdocs-importer\src\NetDocsImporter.Data\obj\Debug\net10.0\ref\NetDocsImporter.Data.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.Data\obj\Debug\net10.0\NetDocsImporter.Data.sourcelink.json
