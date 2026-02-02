@@ -6,4 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj" />
+  </ItemGroup>
+
 </Project>

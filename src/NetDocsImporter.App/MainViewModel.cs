@@ -21,6 +21,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _cancellation;
     private readonly AppPaths _paths;
     private readonly JobStore _jobStore;
+    private readonly ScanJobRunner _jobRunner;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -67,6 +68,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         _paths = new AppPaths();
         _jobStore = new JobStore(_paths.DatabasePath);
+        _jobRunner = new ScanJobRunner(_jobStore);
     }
 
     public async Task SelectFolderAndScanAsync()
@@ -111,53 +113,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var jobId = Guid.NewGuid().ToString("N");
         CurrentJobId = jobId;
 
-        await _jobStore.InitializeAsync();
-        await _jobStore.InsertJobAsync(new JobRecord(
-            jobId,
-            DateTime.UtcNow,
-            path,
-            "Scanning"));
-
         _cancellation = new CancellationTokenSource();
         var progress = new Progress<FileScanProgress>(UpdateProgress);
-        JobFileWriter? fileWriter = null;
 
         try
         {
-            fileWriter = _jobStore.OpenFileWriter();
-            await FileScanner.ScanAsync(
+            await _jobRunner.RunAsync(
                 path,
                 LargeFileThresholdBytes,
                 progress,
                 _cancellation.Token,
-                item =>
-                {
-                    var record = new FileRecord(
-                        Guid.NewGuid().ToString("N"),
-                        jobId,
-                        item.FullPath,
-                        item.RelativePath,
-                        item.SizeBytes,
-                        item.ModifiedUtc,
-                        item.IsLargeWarning);
-                    fileWriter.Insert(record);
-                });
+                jobId);
             StatusText = "Scan complete.";
-            await _jobStore.UpdateJobStatusAsync(jobId, "Complete");
         }
         catch (OperationCanceledException)
         {
             StatusText = "Scan canceled.";
-            await _jobStore.UpdateJobStatusAsync(jobId, "Canceled");
         }
         catch (Exception ex)
         {
             StatusText = $"Scan failed: {ex.Message}";
-            await _jobStore.UpdateJobStatusAsync(jobId, "Failed");
         }
         finally
         {
-            fileWriter?.Dispose();
             _cancellation.Dispose();
             _cancellation = null;
             IsScanning = false;

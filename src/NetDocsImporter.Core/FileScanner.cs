@@ -1,4 +1,4 @@
-﻿namespace NetDocsImporter.Core;
+namespace NetDocsImporter.Core;
 
 public sealed record LargeFileItem(string Path, long Bytes);
 

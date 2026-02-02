@@ -19,3 +19,37 @@ public sealed record JobSummary(
     long FileCount,
     long TotalBytes,
     long LargeWarnings);
+
+public sealed record TransferRecord(
+    string TransferId,
+    string JobId,
+    string FileId,
+    int Attempt,
+    string Status,
+    DateTime? StartedUtc,
+    DateTime? FinishedUtc,
+    long? DurationMs,
+    string? Error,
+    int? WorkerId,
+    int? SimulatedDelayMs,
+    int? HttpStatus,
+    string? ResponseSnippet);
+
+public sealed record TransferState(string TransferId, string FileId, string Status, int Attempt);
+
+public sealed record TransferSummary(
+    string TransferId,
+    string FileId,
+    string RelativePath,
+    string Status,
+    int Attempt,
+    long? DurationMs,
+    string? Error);
+
+public sealed record TransferStatusCounts(
+    long Total,
+    long Queued,
+    long Running,
+    long Succeeded,
+    long Failed,
+    long Canceled);

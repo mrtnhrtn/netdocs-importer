@@ -10,3 +10,7 @@ C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\refint\NetDoc
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImporter.Core.pdb
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\ref\NetDocsImporter.Core.dll
 C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImporter.Core.sourcelink.json
+C:\dev\netdocs-importer\src\NetDocsImporter.Core\bin\Debug\net10.0\NetDocsImporter.Data.dll
+C:\dev\netdocs-importer\src\NetDocsImporter.Core\bin\Debug\net10.0\NetDocsImporter.Data.pdb
+C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsImporter.Core.csproj.AssemblyReference.cache
+C:\dev\netdocs-importer\src\NetDocsImporter.Core\obj\Debug\net10.0\NetDocsI.8341A399.Up2Date

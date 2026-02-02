@@ -205,6 +205,9 @@
         }
       },
       "NetDocsImporter.Core/1.0.0": {
+        "dependencies": {
+          "NetDocsImporter.Data": "1.0.0"
+        },
         "runtime": {
           "NetDocsImporter.Core.dll": {
             "assemblyVersion": "1.0.0.0",
