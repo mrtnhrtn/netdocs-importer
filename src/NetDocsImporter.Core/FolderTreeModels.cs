@@ -11,6 +11,8 @@ public interface IFolderTreeProvider
 
     Task<IReadOnlyList<FileRecord>> GetChildFilesAsync(string jobId, string folderId, int limit, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<FolderImportCounts>> GetFolderImportCountsForJobAsync(string jobId, CancellationToken cancellationToken);
+
     Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken);
 
     Task UpdateFolderImportModeAsync(string folderId, string importMode, CancellationToken cancellationToken);
@@ -39,6 +41,11 @@ public sealed class JobStoreFolderTreeProvider : IFolderTreeProvider
         return _jobStore.GetChildFilesAsync(jobId, folderId, limit, cancellationToken);
     }
 
+    public Task<IReadOnlyList<FolderImportCounts>> GetFolderImportCountsForJobAsync(string jobId, CancellationToken cancellationToken)
+    {
+        return _jobStore.GetFolderImportCountsForJobAsync(jobId, cancellationToken);
+    }
+
     public Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken)
     {
         return _jobStore.UpdateFolderOverrideAsync(folderId, isOverride, isIncluded, cancellationToken);
@@ -65,6 +72,7 @@ public abstract class TreeNodeBase : INotifyPropertyChanged
     private bool _isExpanded;
     private bool _isLoading;
     private bool _isVisible = true;
+    private bool _isSelected;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -74,6 +82,12 @@ public abstract class TreeNodeBase : INotifyPropertyChanged
     {
         get => _isExpanded;
         set => SetField(ref _isExpanded, value);
+    }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
     }
 
     public bool IsLoading
@@ -111,6 +125,9 @@ public sealed class FolderNodeViewModel : TreeNodeBase
     private bool _isIncluded;
     private bool _isOverride;
     private bool _effectiveIncluded;
+    private long _includedFileCount;
+    private long _includedDescendantFileCount;
+    private bool _isEffectivelyEmpty;
     private string _importMode;
     private string _effectiveImportMode;
     private string _profileMode;
@@ -179,6 +196,24 @@ public sealed class FolderNodeViewModel : TreeNodeBase
         private set => SetField(ref _effectiveIncluded, value);
     }
 
+    public long IncludedFileCount
+    {
+        get => _includedFileCount;
+        private set => SetField(ref _includedFileCount, value);
+    }
+
+    public long IncludedDescendantFileCount
+    {
+        get => _includedDescendantFileCount;
+        private set => SetField(ref _includedDescendantFileCount, value);
+    }
+
+    public bool IsEffectivelyEmpty
+    {
+        get => _isEffectivelyEmpty;
+        private set => SetField(ref _isEffectivelyEmpty, value);
+    }
+
     public string ImportMode
     {
         get => _importMode;
@@ -231,6 +266,9 @@ public sealed class FolderNodeViewModel : TreeNodeBase
                 }
             });
 
+            var counts = await _provider.GetFolderImportCountsForJobAsync(JobId, _loadCts.Token);
+            _dispatch(() => ApplyImportCounts(counts));
+
             _childrenLoaded = true;
         }
         finally
@@ -278,6 +316,7 @@ public sealed class FolderNodeViewModel : TreeNodeBase
     {
         EffectiveImportMode = ResolveEffectiveImportMode(Parent, ImportMode);
         EffectiveIncluded = string.Equals(EffectiveImportMode, "include", StringComparison.OrdinalIgnoreCase);
+        RecalculateEffectiveEmpty();
 
         foreach (var child in Children.OfType<FolderNodeViewModel>())
         {
@@ -305,6 +344,9 @@ public sealed class FolderNodeViewModel : TreeNodeBase
         await _provider.UpdateFolderImportModeAsync(FolderId, next, CancellationToken.None);
         ImportMode = next;
         RecalculateEffectiveIncluded();
+
+        var counts = await _provider.GetFolderImportCountsForJobAsync(JobId, CancellationToken.None);
+        _dispatch(() => ApplyImportCounts(counts));
     }
 
     public void SetImportMode(string importMode)
@@ -369,6 +411,32 @@ public sealed class FolderNodeViewModel : TreeNodeBase
         IsVisible = matches || childMatches;
         return IsVisible;
     }
+
+    public void ApplyImportCounts(IEnumerable<FolderImportCounts> counts)
+    {
+        var map = counts.ToDictionary(c => c.FolderId, c => c, StringComparer.OrdinalIgnoreCase);
+        ApplyImportCounts(map);
+    }
+
+    public void ApplyImportCounts(IReadOnlyDictionary<string, FolderImportCounts> countsByFolder)
+    {
+        if (countsByFolder.TryGetValue(FolderId, out var counts))
+        {
+            IncludedFileCount = counts.IncludedFileCount;
+            IncludedDescendantFileCount = counts.IncludedDescendantFileCount;
+            RecalculateEffectiveEmpty();
+        }
+
+        foreach (var child in Children.OfType<FolderNodeViewModel>())
+        {
+            child.ApplyImportCounts(countsByFolder);
+        }
+    }
+
+    private void RecalculateEffectiveEmpty()
+    {
+        IsEffectivelyEmpty = EffectiveIncluded && IncludedDescendantFileCount == 0;
+    }
 }
 
 public sealed class FileNodeViewModel : TreeNodeBase
@@ -421,7 +489,9 @@ public sealed class RelayCommand : System.Windows.Input.ICommand
         _execute = execute;
     }
 
+#pragma warning disable CS0067
     public event EventHandler? CanExecuteChanged;
+#pragma warning restore CS0067
 
     public bool CanExecute(object? parameter) => true;
 

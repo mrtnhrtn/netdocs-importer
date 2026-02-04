@@ -89,6 +89,10 @@ public class NdImportCsvExporterTests
 
         Assert.Equal(expectedRow, lines[1]);
 
+        var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
+        Assert.Single(warningLines);
+        Assert.Equal("TYPE,RELATIVE PATH,FULL PATH,SIZE BYTES", warningLines[0]);
+
         CleanupTempRoot(tempRoot);
     }
 
@@ -191,6 +195,58 @@ public class NdImportCsvExporterTests
         Assert.Equal(2, lines.Length);
         Assert.DoesNotContain("secret.txt", lines[1]);
         Assert.Contains("public.txt", lines[1]);
+
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_WritesWarningsForLargeFilesAndEmptyFolders()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, tempRoot, string.Empty, null, 0, "include");
+        var emptyFolderId = await InsertFolderAsync(store, jobId, Path.Combine(tempRoot, "empty"), "empty", rootFolderId, 1, "include");
+        Directory.CreateDirectory(Path.Combine(tempRoot, "empty"));
+
+        var largeFolderId = await InsertFolderAsync(store, jobId, Path.Combine(tempRoot, "big"), "big", rootFolderId, 1, "include");
+        Directory.CreateDirectory(Path.Combine(tempRoot, "big"));
+        var largeFilePath = Path.Combine(tempRoot, "big", "huge.bin");
+        await File.WriteAllTextAsync(largeFilePath, "data");
+
+        var largeFile = new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            largeFilePath,
+            Path.Combine("big", "huge.bin"),
+            2_000_000_000,
+            DateTime.UtcNow,
+            true,
+            largeFolderId);
+        await store.InsertFileAsync(largeFile);
+
+        var options = new NdImportExportOptions
+        {
+            IncludeAuditStamps = false,
+            MappingMode = NdImportMappingMode.Mirror
+        };
+
+        var exporter = new NdImportCsvExporter(store);
+        var result = await exporter.ExportAsync(jobId, reportsDir, options);
+
+        var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
+        Assert.Equal(3, warningLines.Length);
+        Assert.Contains("LARGE_FILE", warningLines[1]);
+        Assert.Contains("huge.bin", warningLines[1]);
+        Assert.Contains("2000000000", warningLines[1]);
+        Assert.Contains("EMPTY_FOLDER", warningLines[2]);
+        Assert.Contains("empty", warningLines[2]);
 
         CleanupTempRoot(tempRoot);
     }

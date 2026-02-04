@@ -245,6 +245,42 @@ public sealed class JobStore
         return results;
     }
 
+    public async Task<IReadOnlyList<FolderRecord>> GetFoldersForJobAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        var results = new List<FolderRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT FolderId, JobId, FullPath, RelativePath, ParentFolderId, Depth, IsIncluded, IsOverride, CreatedUtc, ImportMode, ProfileMode
+            FROM Folders
+            WHERE JobId = $jobId
+            ORDER BY Depth, RelativePath;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new FolderRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetInt32(5),
+                reader.GetInt64(6) == 1,
+                reader.GetInt64(7) == 1,
+                ParseUtc(reader.GetString(8)),
+                reader.GetString(9),
+                reader.GetString(10)));
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<JobSummary>> GetRecentJobsAsync(int count, CancellationToken cancellationToken = default)
     {
         var results = new List<JobSummary>();
@@ -1051,6 +1087,77 @@ public sealed class JobStore
         }
 
         return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    public async Task<IReadOnlyList<FolderImportCounts>> GetFolderImportCountsForJobAsync(
+        string jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<FolderImportCounts>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE folder_tree(FolderId, ParentFolderId, EffectiveIncluded) AS (
+                SELECT FolderId,
+                       ParentFolderId,
+                       CASE
+                           WHEN ImportMode = 'exclude' THEN 0
+                           WHEN ImportMode = 'include' THEN 1
+                           ELSE 1
+                       END
+                FROM Folders
+                WHERE JobId = $jobId AND ParentFolderId IS NULL
+                UNION ALL
+                SELECT f.FolderId,
+                       f.ParentFolderId,
+                       CASE
+                           WHEN f.ImportMode = 'exclude' THEN 0
+                           WHEN f.ImportMode = 'include' THEN 1
+                           ELSE ft.EffectiveIncluded
+                       END
+                FROM Folders f
+                JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
+            ),
+            direct_files AS (
+                SELECT FolderId, COUNT(*) AS DirectFiles
+                FROM Files
+                GROUP BY FolderId
+            ),
+            descendants(AncestorId, DescendantId) AS (
+                SELECT FolderId, FolderId FROM folder_tree
+                UNION ALL
+                SELECT d.AncestorId, ft.FolderId
+                FROM descendants d
+                JOIN folder_tree ft ON ft.ParentFolderId = d.DescendantId
+            )
+            SELECT ft.FolderId,
+                   CASE WHEN ft.EffectiveIncluded = 1 THEN COALESCE(df.DirectFiles, 0) ELSE 0 END AS IncludedDirectFiles,
+                   COALESCE(SUM(CASE WHEN ft2.EffectiveIncluded = 1 THEN COALESCE(df2.DirectFiles, 0) ELSE 0 END), 0) AS IncludedDescendantFiles,
+                   ft.EffectiveIncluded
+            FROM folder_tree ft
+            LEFT JOIN direct_files df ON df.FolderId = ft.FolderId
+            LEFT JOIN descendants d ON d.AncestorId = ft.FolderId
+            LEFT JOIN folder_tree ft2 ON ft2.FolderId = d.DescendantId
+            LEFT JOIN direct_files df2 ON df2.FolderId = ft2.FolderId
+            GROUP BY ft.FolderId, df.DirectFiles, ft.EffectiveIncluded
+            ORDER BY ft.FolderId;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new FolderImportCounts(
+                reader.GetString(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3) == 1));
+        }
+
+        return results;
     }
 
     public async Task<IReadOnlyList<FileRecord>> GetIncludedFilesForJobAsync(

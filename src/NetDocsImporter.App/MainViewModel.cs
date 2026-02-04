@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -48,6 +49,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private long _selectedFolderBytes;
     private long _selectedFolderLargeFiles;
     private long _selectedFolderExcludedFolders;
+    private bool _selectedFolderIsEffectivelyEmpty;
     private long _includedFilesCount;
     private long _excludedFilesCount;
     private string _selectedImportMode = "inherit";
@@ -58,6 +60,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _fileSearchText = string.Empty;
     private string _selectedFileFilter = "All";
     private ProfileFieldView? _selectedProfileField;
+    private bool _hasFolderRoots;
+    private string _ndImportPath = string.Empty;
+    private string _ndImportHost = "upload.au.netdocuments.com";
+    private string _ndImportCabinet = string.Empty;
+    private string _ndImportUsername = string.Empty;
+    private string _ndImportPassword = string.Empty;
+    private bool _ndImportIncludePassword;
+    private bool _ndImportUtf8 = true;
+    private bool _ndImportDateFormat = true;
+    private bool _ndImportNoValidation;
+    private int _ndImportMaxErrors = 50;
+    private string? _lastNdImportExportPath;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
@@ -81,6 +95,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<TreeNodeBase> FolderRoots { get; } = new();
     public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
     public ObservableCollection<FileRowView> FolderFiles { get; } = new();
+    public ObservableCollection<NdImportSessionView> NdImportSessions { get; } = new();
+
+    public bool HasFolderRoots
+    {
+        get => _hasFolderRoots;
+        private set => SetField(ref _hasFolderRoots, value);
+    }
 
     public string? SelectedFolder
     {
@@ -211,6 +232,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string SelectedFolderRelativePath => _selectedFolderRelativePath;
 
+    public bool SelectedFolderIsEffectivelyEmpty => _selectedFolderIsEffectivelyEmpty;
+
     public string SelectedFolderFilesDisplay => _selectedFolderFiles.ToString("N0", CultureInfo.CurrentCulture);
 
     public string SelectedFolderBytesDisplay => FormatBytes(_selectedFolderBytes);
@@ -287,6 +310,66 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _statusText, value);
     }
 
+    public string NdImportPath
+    {
+        get => _ndImportPath;
+        set => SetField(ref _ndImportPath, value);
+    }
+
+    public string NdImportHost
+    {
+        get => _ndImportHost;
+        set => SetField(ref _ndImportHost, value);
+    }
+
+    public string NdImportCabinet
+    {
+        get => _ndImportCabinet;
+        set => SetField(ref _ndImportCabinet, value);
+    }
+
+    public string NdImportUsername
+    {
+        get => _ndImportUsername;
+        set => SetField(ref _ndImportUsername, value);
+    }
+
+    public string NdImportPassword
+    {
+        get => _ndImportPassword;
+        set => SetField(ref _ndImportPassword, value);
+    }
+
+    public bool NdImportIncludePassword
+    {
+        get => _ndImportIncludePassword;
+        set => SetField(ref _ndImportIncludePassword, value);
+    }
+
+    public bool NdImportUtf8
+    {
+        get => _ndImportUtf8;
+        set => SetField(ref _ndImportUtf8, value);
+    }
+
+    public bool NdImportDateFormat
+    {
+        get => _ndImportDateFormat;
+        set => SetField(ref _ndImportDateFormat, value);
+    }
+
+    public bool NdImportNoValidation
+    {
+        get => _ndImportNoValidation;
+        set => SetField(ref _ndImportNoValidation, value);
+    }
+
+    public int NdImportMaxErrors
+    {
+        get => _ndImportMaxErrors;
+        set => SetField(ref _ndImportMaxErrors, value);
+    }
+
     public MainViewModel()
     {
         _paths = new AppPaths();
@@ -296,6 +379,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _folderProvider = new JobStoreFolderTreeProvider(_jobStore);
 
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
+        FolderRoots.CollectionChanged += (_, _) => HasFolderRoots = FolderRoots.Count > 0;
     }
     public async Task SelectFolderAndScanAsync()
     {
@@ -429,6 +513,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var root = await _jobStore.GetRootFolderAsync(CurrentJobId);
         if (root is null)
         {
+            UpdateOnUi(() =>
+            {
+                FolderRoots.Clear();
+                SelectFolderNode(null);
+            });
             return;
         }
 
@@ -437,17 +526,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
             FolderRoots.Clear();
             var rootNode = new FolderNodeViewModel(_folderProvider, UpdateOnUi, CurrentJobId, root, null, 200);
             FolderRoots.Add(rootNode);
-            _selectedFolderNode = rootNode;
-            _selectedFolderPath = rootNode.FullPath;
-            _selectedFolderRelativePath = string.IsNullOrWhiteSpace(rootNode.RelativePath) ? "." : rootNode.RelativePath;
-            OnPropertyChanged(nameof(SelectedFolderPath));
-            OnPropertyChanged(nameof(SelectedFolderRelativePath));
+            rootNode.IsSelected = true;
+            rootNode.IsExpanded = true;
+            SelectFolderNode(rootNode);
         });
 
         ApplyTreeFilter();
-        await RefreshSelectedFolderSummaryAsync();
-        await RefreshImportSelectionCountsAsync();
-        await RefreshFolderFilesAsync();
+        await RefreshFolderImportCountsAsync();
+    }
+
+    private async Task RefreshFolderImportCountsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentJobId))
+        {
+            return;
+        }
+
+        var counts = await _jobStore.GetFolderImportCountsForJobAsync(CurrentJobId);
+        var map = counts.ToDictionary(c => c.FolderId, c => c, StringComparer.OrdinalIgnoreCase);
+
+        UpdateOnUi(() =>
+        {
+            foreach (var root in FolderRoots.OfType<FolderNodeViewModel>())
+            {
+                root.ApplyImportCounts(map);
+            }
+
+            _selectedFolderIsEffectivelyEmpty = _selectedFolderNode?.IsEffectivelyEmpty ?? false;
+            OnPropertyChanged(nameof(SelectedFolderIsEffectivelyEmpty));
+        });
     }
 
     public async Task ExpandFolderNodeAsync(FolderNodeViewModel node)
@@ -462,8 +569,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _selectedFolderPath = node?.FullPath ?? "Select a folder.";
         var relative = node?.RelativePath ?? string.Empty;
         _selectedFolderRelativePath = string.IsNullOrWhiteSpace(relative) ? "." : relative;
+        _selectedFolderIsEffectivelyEmpty = node?.IsEffectivelyEmpty ?? false;
         OnPropertyChanged(nameof(SelectedFolderPath));
         OnPropertyChanged(nameof(SelectedFolderRelativePath));
+        OnPropertyChanged(nameof(SelectedFolderIsEffectivelyEmpty));
         _ = RefreshSelectedFolderSummaryAsync();
         _ = RefreshFolderFilesAsync();
     }
@@ -576,7 +685,178 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OpenFolder(_paths.ReportsDirectory);
     }
 
+    public async Task<NdImportExportResult?> ExportNdImportAsync(NdImportExportOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(CurrentJobId))
+        {
+            StatusText = "Select a job before exporting for ndImport.";
+            return null;
+        }
+
+        try
+        {
+            var exporter = new NdImportCsvExporter(_jobStore);
+            var result = await exporter.ExportAsync(CurrentJobId, _paths.ReportsDirectory, options);
+            StatusText = $"ndImport export created ({result.TotalFiles:N0} files).";
+            return result;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"ndImport export failed: {ex.Message}";
+            return null;
+        }
+    }
+
+    public Task LoadNdImportSettingsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(NdImportPath))
+        {
+            var localCandidate = Path.Combine(AppContext.BaseDirectory, "ndimport.exe");
+            if (File.Exists(localCandidate))
+            {
+                NdImportPath = localCandidate;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task ExportNdImportListAsync()
+    {
+        var options = new NdImportExportOptions
+        {
+            IncludeAuditStamps = true,
+            MappingMode = NdImportMappingMode.Mirror,
+            AnchorFolderPath = string.Empty,
+            ImportedBy = string.IsNullOrWhiteSpace(NdImportUsername) ? "Imported Content" : NdImportUsername
+        };
+
+        var result = await ExportNdImportAsync(options);
+        if (result is null)
+        {
+            return;
+        }
+
+        _lastNdImportExportPath = result.OutputPath;
+        NdImportSessions.Insert(0, new NdImportSessionView(DateTime.Now, "Exported", Path.GetFileName(result.OutputPath)));
+
+        var message = string.Join(Environment.NewLine, new[]
+        {
+            $"Files exported: {result.TotalFiles:N0}",
+            $"Large file warnings: {result.LargeFileWarnings:N0}",
+            $"Empty folder warnings: {result.EmptyFolderWarnings:N0}",
+            $"Access denied warnings: {result.AccessDeniedWarnings:N0}",
+            string.Empty,
+            $"Export CSV: {result.OutputPath}",
+            $"Warnings CSV: {result.WarningsPath}"
+        });
+
+        var openExport = new TaskDialogButton("Open export CSV");
+        var openWarnings = new TaskDialogButton("Open warnings CSV");
+        var close = new TaskDialogButton("Close", true, false);
+
+        var dialog = new TaskDialogPage
+        {
+            Caption = "ndImport export",
+            Heading = "ndImport export created",
+            Text = message,
+            Buttons = { openExport, openWarnings, close }
+        };
+
+        var action = TaskDialog.ShowDialog(dialog);
+        if (action == openExport)
+        {
+            OpenFile(result.OutputPath);
+        }
+        else if (action == openWarnings)
+        {
+            OpenFile(result.WarningsPath);
+        }
+    }
+
+    public Task LaunchNdImportAsync()
+    {
+        if (string.IsNullOrWhiteSpace(NdImportPath) || !File.Exists(NdImportPath))
+        {
+            StatusText = "Select the path to ndimport.exe before launching.";
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(_lastNdImportExportPath) || !File.Exists(_lastNdImportExportPath))
+        {
+            StatusText = "Export an ndImport CSV before launching.";
+            return Task.CompletedTask;
+        }
+
+        var arguments = new List<string>
+        {
+            $"/host={NdImportHost}",
+            $"/cabinet={NdImportCabinet}",
+            $"/user={NdImportUsername}",
+            $"/input=\"{_lastNdImportExportPath}\""
+        };
+
+        if (NdImportIncludePassword && !string.IsNullOrWhiteSpace(NdImportPassword))
+        {
+            arguments.Add($"/password={NdImportPassword}");
+        }
+
+        if (NdImportUtf8)
+        {
+            arguments.Add("/utf8=Y");
+        }
+
+        if (NdImportDateFormat)
+        {
+            arguments.Add("/dateformat=Y");
+        }
+
+        if (NdImportNoValidation)
+        {
+            arguments.Add("/noval=Y");
+        }
+
+        if (NdImportMaxErrors > 0)
+        {
+            arguments.Add($"/maxerr={NdImportMaxErrors}");
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = NdImportPath,
+                Arguments = string.Join(" ", arguments),
+                UseShellExecute = true
+            });
+
+            NdImportSessions.Insert(0, new NdImportSessionView(DateTime.Now, "Launched", Path.GetFileName(_lastNdImportExportPath)));
+            StatusText = "ndImport launched.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to launch ndImport: {ex.Message}";
+        }
+
+        return Task.CompletedTask;
+    }
+
     private void OpenFolder(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+        }
+    }
+
+    private void OpenFile(string path)
     {
         try
         {
@@ -763,6 +1043,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _selectedFolderNode.SetImportMode(mode);
         await RefreshSelectedFolderSummaryAsync();
         await RefreshFolderFilesAsync();
+        await RefreshFolderImportCountsAsync();
     }
 
     public async Task ApplyImportModeToChildrenAsync()
@@ -774,6 +1055,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         await _jobStore.ApplyImportModeToDescendantsAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, _selectedFolderNode.ImportMode);
         await RefreshSelectedFolderSummaryAsync();
+        await RefreshFolderImportCountsAsync();
     }
 
     public async Task SetSelectedProfileModeAsync(string mode)
@@ -1076,6 +1358,22 @@ public sealed class TransferView
     public string DurationDisplay { get; }
 
     public string Error { get; }
+}
+
+public sealed class NdImportSessionView
+{
+    public NdImportSessionView(DateTime started, string status, string details)
+    {
+        StartedDisplay = started.ToString("g", CultureInfo.CurrentCulture);
+        StatusDisplay = status;
+        Details = details;
+    }
+
+    public string StartedDisplay { get; }
+
+    public string StatusDisplay { get; }
+
+    public string Details { get; }
 }
 
 public sealed class ProfileFieldView : INotifyPropertyChanged

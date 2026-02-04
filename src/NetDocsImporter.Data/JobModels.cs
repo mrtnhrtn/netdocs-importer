@@ -25,6 +25,12 @@ public sealed record FolderRecord(
     string ImportMode,
     string ProfileMode);
 
+public sealed record FolderImportCounts(
+    string FolderId,
+    long IncludedFileCount,
+    long IncludedDescendantFileCount,
+    bool EffectiveIncluded);
+
 public sealed record JobSummary(
     string JobId,
     DateTime CreatedUtc,

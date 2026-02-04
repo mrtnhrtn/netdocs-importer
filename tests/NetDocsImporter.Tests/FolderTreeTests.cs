@@ -183,6 +183,11 @@ public class FolderTreeTests
             return Task.FromResult<IReadOnlyList<FileRecord>>(Array.Empty<FileRecord>());
         }
 
+        public Task<IReadOnlyList<FolderImportCounts>> GetFolderImportCountsForJobAsync(string jobId, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyList<FolderImportCounts>>(Array.Empty<FolderImportCounts>());
+        }
+
         public Task UpdateFolderOverrideAsync(string folderId, bool isOverride, bool isIncluded, CancellationToken cancellationToken)
         {
             return Task.CompletedTask;

@@ -20,6 +20,9 @@
                             <DataTrigger Binding="{Binding EffectiveIncluded}" Value="False">
                                 <Setter Property="Opacity" Value="0.55" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding IsEffectivelyEmpty}" Value="True">
+                                <Setter Property="Opacity" Value="0.75" />
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </StackPanel.Style>
@@ -65,7 +68,23 @@
                         </TextBlock>
                     </StackPanel>
                 </Button>
-                <TextBlock Text="{Binding Name}" Margin="0,0,6,0">
+                <Path Width="10" Height="10" Margin="0,0,6,0" Fill="#D97706" Stroke="#B45309"
+                      Data="M5,0 L10,9 L0,9 Z">
+                    <Path.Style>
+                        <Style TargetType="Path">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsEffectivelyEmpty}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Path.Style>
+                    <Path.ToolTip>
+                        <ToolTip Content="Empty folder: ndImport will not create this folder because there are no files inside it." />
+                    </Path.ToolTip>
+                </Path>
+                <TextBlock Text="{Binding Name}" Margin="0,0,6,0" TextTrimming="CharacterEllipsis">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Foreground" Value="#222222" />
@@ -73,6 +92,20 @@
                                 <DataTrigger Binding="{Binding EffectiveIncluded}" Value="False">
                                     <Setter Property="Foreground" Value="#888888" />
                                 </DataTrigger>
+                                <DataTrigger Binding="{Binding IsEffectivelyEmpty}" Value="True">
+                                    <Setter Property="Foreground" Value="#6B7280" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                    <Setter Property="Foreground" Value="#0B2B5D" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding EffectiveIncluded}" Value="False" />
+                                        <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Foreground" Value="#5A6A7A" />
+                                </MultiDataTrigger>
                             </Style.Triggers>
                         </Style>
                     </TextBlock.Style>
@@ -162,12 +195,13 @@
 
         <Grid Grid.Row="1" Margin="0,12,0,12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="360" MinWidth="260" />
+                <ColumnDefinition Width="6" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="340" />
             </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+            <StackPanel Grid.Column="0">
                 <TextBlock Text="Folders" Style="{StaticResource SectionTitle}" />
                 <TextBox Text="{Binding TreeSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
                 <Border Background="#F8FAFC" BorderBrush="#D9E2EC" BorderThickness="1" CornerRadius="6" Padding="6">
@@ -176,6 +210,7 @@
                               VirtualizingStackPanel.IsVirtualizing="True"
                               VirtualizingStackPanel.VirtualizationMode="Recycling"
                               ScrollViewer.CanContentScroll="True"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                               BorderThickness="0">
                         <TreeView.ContextMenu>
                             <ContextMenu>
@@ -191,15 +226,19 @@
                                 <Setter Property="Padding" Value="4,3" />
                                 <Setter Property="Margin" Value="0,1,0,1" />
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                 <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="BorderThickness" Value="1" />
+                                <Setter Property="BorderBrush" Value="Transparent" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 <EventSetter Event="PreviewMouseRightButtonDown" Handler="OnFolderTreeRightButtonDown" />
                                 <EventSetter Event="Expanded" Handler="OnFolderTreeExpanded" />
                                 <EventSetter Event="Collapsed" Handler="OnFolderTreeCollapsed" />
                                 <Style.Triggers>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#E9EDF2" />
+                                        <Setter Property="Background" Value="#CFE3FF" />
+                                        <Setter Property="BorderBrush" Value="#8BB4FF" />
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
@@ -208,7 +247,10 @@
                 </Border>
             </StackPanel>
 
-            <StackPanel Grid.Column="1" Margin="0,0,12,0">
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          Background="#E4E7EB" ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
+
+            <StackPanel Grid.Column="2" Margin="8,0,12,0">
                 <TextBlock Text="Files" Style="{StaticResource SectionTitle}" />
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <TextBox Width="220" Text="{Binding FileSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0" />
@@ -217,6 +259,10 @@
                     <Button Content="Excluded" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterExcluded" />
                     <Button Content="Large" Style="{StaticResource SecondaryButton}" Click="OnFilterLarge" />
                 </StackPanel>
+                <TextBlock Text="No folders found. Run a scan to populate files."
+                           Foreground="#6B7280"
+                           Margin="0,0,0,8"
+                           Visibility="{Binding HasFolderRoots, Converter={StaticResource InverseBooleanConverter}}" />
                 <DataGrid ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
                           IsReadOnly="True" GridLinesVisibility="Horizontal" BorderThickness="1" BorderBrush="#CCD0D5">
                     <DataGrid.Columns>
@@ -230,11 +276,16 @@
                 </DataGrid>
             </StackPanel>
 
-            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Column="3" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
                     <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
+                               Foreground="#B45309"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,8"
+                               Visibility="{Binding SelectedFolderIsEffectivelyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
                     <StackPanel Orientation="Vertical" Margin="0,0,0,8">
                         <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
@@ -281,6 +332,37 @@
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                         <Button Content="Open Logs Folder" Width="130" Margin="0,0,6,0" Click="OnOpenLogs" Style="{StaticResource SecondaryButton}" />
                         <Button Content="Open Reports Folder" Width="140" Click="OnOpenReports" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+
+                    <TextBlock Text="ndImport" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" />
+                    </StackPanel>
+                    <TextBlock Text="Path to ndimport.exe" Foreground="#555555" />
+                    <TextBox Text="{Binding NdImportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                    <TextBlock Text="Host" Foreground="#555555" />
+                    <ComboBox SelectedValue="{Binding NdImportHost}" SelectedValuePath="Content" Margin="0,2,0,6">
+                        <ComboBoxItem Content="upload.au.netdocuments.com" />
+                        <ComboBoxItem Content="upload.eu.netdocuments.com" />
+                        <ComboBoxItem Content="upload.vault.netvoyage.com" />
+                    </ComboBox>
+                    <TextBlock Text="Cabinet" Foreground="#555555" />
+                    <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                    <TextBlock Text="Username" Foreground="#555555" />
+                    <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                    <TextBlock Text="Password (optional, not saved)" Foreground="#555555" />
+                    <TextBox Text="{Binding NdImportPassword, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+                    <CheckBox Content="Include password on CLI (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
+                    <TextBlock Text="Warning: CLI passwords are sensitive. Prefer ndImport's prompt when possible." Foreground="#9F6000" TextWrapping="Wrap" Margin="0,0,0,6" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <CheckBox Content="/utf8=Y" IsChecked="{Binding NdImportUtf8}" Margin="0,0,10,0" />
+                        <CheckBox Content="/dateformat=Y" IsChecked="{Binding NdImportDateFormat}" Margin="0,0,10,0" />
+                        <CheckBox Content="/noval=Y" IsChecked="{Binding NdImportNoValidation}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="/maxerr" VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBox Width="70" Text="{Binding NdImportMaxErrors, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
 
                     <TextBlock Text="Profiling" Style="{StaticResource SectionTitle}" />
@@ -336,6 +418,17 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <TextBlock Text="ndImport Sessions" Style="{StaticResource SectionTitle}" />
+                    <ListView ItemsSource="{Binding NdImportSessions}" Height="140" Margin="0,0,0,10">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Started" Width="110" DisplayMemberBinding="{Binding StartedDisplay}" />
+                                <GridViewColumn Header="Status" Width="110" DisplayMemberBinding="{Binding StatusDisplay}" />
+                                <GridViewColumn Header="Details" Width="160" DisplayMemberBinding="{Binding Details}" />
                             </GridView>
                         </ListView.View>
                     </ListView>

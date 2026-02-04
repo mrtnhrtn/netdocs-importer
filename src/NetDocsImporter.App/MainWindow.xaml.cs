@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         await _viewModel.LoadRecentJobsAsync();
+        await _viewModel.LoadNdImportSettingsAsync();
     }
 
     private async void OnSelectFolder(object sender, RoutedEventArgs e)
@@ -171,5 +172,15 @@ public partial class MainWindow : Window
     private void OnFilterLarge(object sender, RoutedEventArgs e)
     {
         _viewModel.SelectedFileFilter = "Large";
+    }
+
+    private async void OnExportNdImport(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ExportNdImportListAsync();
+    }
+
+    private async void OnLaunchNdImport(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LaunchNdImportAsync();
     }
 }
