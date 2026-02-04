@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using NetDocsImporter.Core;
@@ -144,6 +145,21 @@ public partial class MainWindow : Window
         await _viewModel.ApplyProfileToChildrenAsync();
     }
 
+    private async void OnLoadSchema(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Schema files (*.json;*.csv)|*.json;*.csv|All files (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.LoadSchemaAsync(dialog.FileName);
+    }
+
     private void OnOpenLogs(object sender, RoutedEventArgs e)
     {
         _viewModel.OpenLogsFolder();
@@ -169,6 +185,11 @@ public partial class MainWindow : Window
         _viewModel.SelectedFileFilter = "Excluded";
     }
 
+    private void OnFilterOverrides(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SelectedFileFilter = "Overrides";
+    }
+
     private void OnFilterLarge(object sender, RoutedEventArgs e)
     {
         _viewModel.SelectedFileFilter = "Large";
@@ -182,5 +203,31 @@ public partial class MainWindow : Window
     private async void OnLaunchNdImport(object sender, RoutedEventArgs e)
     {
         await _viewModel.LaunchNdImportAsync();
+    }
+
+    private async void OnSetFileInclude(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SetFileImportModeAsync(GetSelectedFileRows(), "include");
+    }
+
+    private async void OnSetFileExclude(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SetFileImportModeAsync(GetSelectedFileRows(), "exclude");
+    }
+
+    private async void OnClearFileOverride(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SetFileImportModeAsync(GetSelectedFileRows(), "inherit");
+    }
+
+    private IReadOnlyList<FileRowView> GetSelectedFileRows()
+    {
+        var rows = FolderFilesGrid.SelectedItems.OfType<FileRowView>().ToList();
+        if (rows.Count == 0 && FolderFilesGrid.SelectedItem is FileRowView row)
+        {
+            rows.Add(row);
+        }
+
+        return rows;
     }
 }

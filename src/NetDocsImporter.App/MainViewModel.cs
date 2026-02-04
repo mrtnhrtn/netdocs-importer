@@ -8,7 +8,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -72,6 +71,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _ndImportNoValidation;
     private int _ndImportMaxErrors = 50;
     private string? _lastNdImportExportPath;
+    private string _ndImportExportPreset = "Standard";
+    private string _schemaPath = string.Empty;
+    private string _schemaStatus = "No schema loaded.";
+    private bool _schemaCabinetMatches;
+    private string _schemaCabinetName = string.Empty;
+    private bool _hasSchemaLoaded;
+    private AppSettings _settings = new();
+    private ProfileSchemaCatalog? _schemaCatalog;
+    private ProfileSchemaDictionary? _schema;
+    private readonly object _settingsSaveLock = new();
+    private bool _settingsSavePending;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
@@ -96,6 +106,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
     public ObservableCollection<FileRowView> FolderFiles { get; } = new();
     public ObservableCollection<NdImportSessionView> NdImportSessions { get; } = new();
+    public ObservableCollection<string> NdImportExportPresets { get; } = new()
+    {
+        "Standard",
+        "Rich metadata (schema-backed)"
+    };
 
     public bool HasFolderRoots
     {
@@ -310,28 +325,89 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _statusText, value);
     }
 
+    public string NdImportExportPreset
+    {
+        get => _ndImportExportPreset;
+        set => SetField(ref _ndImportExportPreset, value);
+    }
+
+    public string SchemaPath
+    {
+        get => _schemaPath;
+        private set => SetField(ref _schemaPath, value);
+    }
+
+    public string SchemaStatus
+    {
+        get => _schemaStatus;
+        private set => SetField(ref _schemaStatus, value);
+    }
+
+    public bool SchemaCabinetMatches
+    {
+        get => _schemaCabinetMatches;
+        private set => SetField(ref _schemaCabinetMatches, value);
+    }
+
+    public string SchemaCabinetName
+    {
+        get => _schemaCabinetName;
+        private set => SetField(ref _schemaCabinetName, value);
+    }
+
+    public bool HasSchemaLoaded
+    {
+        get => _hasSchemaLoaded;
+        private set => SetField(ref _hasSchemaLoaded, value);
+    }
+
     public string NdImportPath
     {
         get => _ndImportPath;
-        set => SetField(ref _ndImportPath, value);
+        set
+        {
+            if (SetField(ref _ndImportPath, value))
+            {
+                QueueSettingsSave();
+            }
+        }
     }
 
     public string NdImportHost
     {
         get => _ndImportHost;
-        set => SetField(ref _ndImportHost, value);
+        set
+        {
+            if (SetField(ref _ndImportHost, value))
+            {
+                QueueSettingsSave();
+            }
+        }
     }
 
     public string NdImportCabinet
     {
         get => _ndImportCabinet;
-        set => SetField(ref _ndImportCabinet, value);
+        set
+        {
+            if (SetField(ref _ndImportCabinet, value))
+            {
+                UpdateSchemaMatch();
+                QueueSettingsSave();
+            }
+        }
     }
 
     public string NdImportUsername
     {
         get => _ndImportUsername;
-        set => SetField(ref _ndImportUsername, value);
+        set
+        {
+            if (SetField(ref _ndImportUsername, value))
+            {
+                QueueSettingsSave();
+            }
+        }
     }
 
     public string NdImportPassword
@@ -707,8 +783,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public Task LoadNdImportSettingsAsync()
+    public async Task LoadNdImportSettingsAsync()
     {
+        await LoadSettingsAsync();
         if (string.IsNullOrWhiteSpace(NdImportPath))
         {
             var localCandidate = Path.Combine(AppContext.BaseDirectory, "ndimport.exe");
@@ -718,7 +795,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
         }
 
-        return Task.CompletedTask;
+        if (!string.IsNullOrWhiteSpace(SchemaPath) && File.Exists(SchemaPath))
+        {
+            await LoadSchemaAsync(SchemaPath);
+        }
     }
 
     public async Task ExportNdImportListAsync()
@@ -730,6 +810,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             AnchorFolderPath = string.Empty,
             ImportedBy = string.IsNullOrWhiteSpace(NdImportUsername) ? "Imported Content" : NdImportUsername
         };
+
+        if (string.Equals(NdImportExportPreset, "Rich metadata (schema-backed)", StringComparison.OrdinalIgnoreCase))
+        {
+            options.IncludeProfileMetadata = true;
+            options.ProfileSchema = _schema;
+        }
 
         var result = await ExportNdImportAsync(options);
         if (result is null)
@@ -745,6 +831,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             $"Files exported: {result.TotalFiles:N0}",
             $"Large file warnings: {result.LargeFileWarnings:N0}",
             $"Empty folder warnings: {result.EmptyFolderWarnings:N0}",
+            $"Unresolved field warnings: {result.UnresolvedFieldWarnings:N0}",
+            $"Unresolved value warnings: {result.UnresolvedValueWarnings:N0}",
+            $"File include overrides: {result.FileIncludeOverrides:N0}",
+            $"File exclude overrides: {result.FileExcludeOverrides:N0}",
             $"Access denied warnings: {result.AccessDeniedWarnings:N0}",
             string.Empty,
             $"Export CSV: {result.OutputPath}",
@@ -771,6 +861,130 @@ public sealed class MainViewModel : INotifyPropertyChanged
         else if (action == openWarnings)
         {
             OpenFile(result.WarningsPath);
+        }
+    }
+
+    public async Task LoadSchemaAsync(string path)
+    {
+        try
+        {
+            _schemaCatalog = await ProfileSchemaLoader.LoadAsync(path);
+            _schema = _schemaCatalog.GetForCabinet(NdImportCabinet);
+            SchemaPath = path;
+            SchemaCabinetName = _schema?.CabinetName ?? string.Empty;
+            SchemaStatus = _schema is null
+                ? "No schema loaded."
+                : string.IsNullOrWhiteSpace(_schema.SchemaVersion)
+                    ? "Schema loaded."
+                    : $"Schema loaded (version {_schema.SchemaVersion}).";
+            HasSchemaLoaded = _schema is not null;
+            UpdateSchemaMatch();
+            ResolveProfileFieldHints();
+            QueueSettingsSave();
+        }
+        catch (Exception ex)
+        {
+            SchemaStatus = $"Failed to load schema: {ex.Message}";
+            HasSchemaLoaded = false;
+        }
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _settings = await AppSettings.LoadAsync(_paths.SettingsPath);
+        if (!string.IsNullOrWhiteSpace(_settings.NdImportPath))
+        {
+            _ndImportPath = _settings.NdImportPath;
+            OnPropertyChanged(nameof(NdImportPath));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.NdImportHost))
+        {
+            _ndImportHost = _settings.NdImportHost;
+            OnPropertyChanged(nameof(NdImportHost));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.NdImportCabinet))
+        {
+            _ndImportCabinet = _settings.NdImportCabinet;
+            OnPropertyChanged(nameof(NdImportCabinet));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.NdImportUsername))
+        {
+            _ndImportUsername = _settings.NdImportUsername;
+            OnPropertyChanged(nameof(NdImportUsername));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.ProfileSchemaPath))
+        {
+            SchemaPath = _settings.ProfileSchemaPath;
+        }
+
+        UpdateSchemaMatch();
+    }
+
+    private void QueueSettingsSave()
+    {
+        lock (_settingsSaveLock)
+        {
+            if (_settingsSavePending)
+            {
+                return;
+            }
+
+            _settingsSavePending = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(200);
+            await SaveSettingsAsync();
+            lock (_settingsSaveLock)
+            {
+                _settingsSavePending = false;
+            }
+        });
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        _settings.NdImportPath = NdImportPath;
+        _settings.NdImportHost = NdImportHost;
+        _settings.NdImportCabinet = NdImportCabinet;
+        _settings.NdImportUsername = NdImportUsername;
+        _settings.ProfileSchemaPath = SchemaPath;
+        await AppSettings.SaveAsync(_paths.SettingsPath, _settings);
+    }
+
+    private void UpdateSchemaMatch()
+    {
+        if (_schema is null)
+        {
+            SchemaCabinetMatches = false;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(NdImportCabinet))
+        {
+            SchemaCabinetMatches = true;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_schema.CabinetName))
+        {
+            SchemaCabinetMatches = true;
+            return;
+        }
+
+        SchemaCabinetMatches = string.Equals(_schema.CabinetName, NdImportCabinet, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ResolveProfileFieldHints()
+    {
+        foreach (var field in ProfileFields)
+        {
+            UpdateProfileFieldResolution(field);
         }
     }
 
@@ -1006,20 +1220,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         var files = await _jobStore.GetChildFilesAsync(CurrentJobId, _selectedFolderNode.FolderId, FilePreviewLimit);
-        var effectiveIncluded = _selectedFolderNode.EffectiveIncluded;
+        var folderEffectiveIncluded = _selectedFolderNode.EffectiveIncluded;
         var filter = SelectedFileFilter;
         var search = FileSearchText?.Trim();
 
         var filtered = files
             .Where(f => string.IsNullOrWhiteSpace(search) || f.FullPath.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Select(f => new
+            {
+                Record = f,
+                EffectiveIncluded = ResolveFileEffectiveIncluded(f, folderEffectiveIncluded)
+            })
             .Where(f => filter switch
             {
-                "Included" => effectiveIncluded,
-                "Excluded" => !effectiveIncluded,
-                "Large" => f.IsLargeWarning,
+                "Included" => f.EffectiveIncluded,
+                "Excluded" => !f.EffectiveIncluded,
+                "Overrides" => !string.Equals(f.Record.ImportMode, "inherit", StringComparison.OrdinalIgnoreCase),
+                "Large" => f.Record.IsLargeWarning,
                 _ => true
             })
-            .Select(f => new FileRowView(f, effectiveIncluded))
+            .Select(f => new FileRowView(f.Record, f.EffectiveIncluded))
             .ToList();
 
         UpdateOnUi(() =>
@@ -1030,6 +1250,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 FolderFiles.Add(file);
             }
         });
+    }
+
+    private static bool ResolveFileEffectiveIncluded(FileRecord record, bool folderEffectiveIncluded)
+    {
+        return record.ImportMode switch
+        {
+            "include" => true,
+            "exclude" => false,
+            _ => folderEffectiveIncluded
+        };
     }
 
     public async Task SetSelectedFolderImportModeAsync(string mode)
@@ -1058,6 +1288,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
         await RefreshFolderImportCountsAsync();
     }
 
+    public async Task SetFileImportModeAsync(IReadOnlyList<FileRowView> rows, string importMode)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var reason = importMode switch
+        {
+            "include" => "User included",
+            "exclude" => "User excluded",
+            _ => null
+        };
+
+        var fileIds = rows.Select(r => r.FileId).ToList();
+        await _jobStore.UpdateFileImportModeAsync(fileIds, importMode, reason);
+
+        await RefreshFolderFilesAsync();
+        await RefreshSelectedFolderSummaryAsync();
+        await RefreshFolderImportCountsAsync();
+    }
+
     public async Task SetSelectedProfileModeAsync(string mode)
     {
         if (_selectedFolderNode is null)
@@ -1075,7 +1327,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void AddProfileField()
     {
-        ProfileFields.Add(new ProfileFieldView(string.Empty, string.Empty));
+        ProfileFields.Add(new ProfileFieldView(string.Empty, string.Empty, ProfileFieldMode.Label));
     }
 
     public void RemoveSelectedProfileField(ProfileFieldView? field)
@@ -1104,21 +1356,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ProfileFields.CollectionChanged -= OnProfileFieldsChanged;
         ProfileFields.Clear();
 
-        if (!string.IsNullOrWhiteSpace(payloadJson))
+        var entries = ProfilePayloadCodec.Deserialize(payloadJson);
+        foreach (var entry in entries)
         {
-            try
-            {
-                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(payloadJson) ?? new Dictionary<string, string>();
-                foreach (var pair in dict)
-                {
-                    var field = new ProfileFieldView(pair.Key, pair.Value);
-                    field.PropertyChanged += OnProfileFieldPropertyChanged;
-                    ProfileFields.Add(field);
-                }
-            }
-            catch
-            {
-            }
+            var field = new ProfileFieldView(entry.Field, entry.Value, entry.Mode);
+            field.PropertyChanged += OnProfileFieldPropertyChanged;
+            ProfileFields.Add(field);
+            UpdateProfileFieldResolution(field);
         }
 
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
@@ -1126,23 +1370,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string? SerializeProfileFields()
     {
-        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var field in ProfileFields)
-        {
-            if (string.IsNullOrWhiteSpace(field.Key))
-            {
-                continue;
-            }
+        var entries = ProfileFields
+            .Where(field => !string.IsNullOrWhiteSpace(field.Key))
+            .Select(field => new ProfileFieldEntry(field.Key, field.Value ?? string.Empty, field.Mode))
+            .ToList();
 
-            dict[field.Key] = field.Value ?? string.Empty;
-        }
-
-        if (dict.Count == 0)
-        {
-            return null;
-        }
-
-        return JsonSerializer.Serialize(dict);
+        return ProfilePayloadCodec.Serialize(entries);
     }
 
     private void OnProfileFieldsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1152,6 +1385,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             foreach (ProfileFieldView field in e.NewItems)
             {
                 field.PropertyChanged += OnProfileFieldPropertyChanged;
+                UpdateProfileFieldResolution(field);
             }
         }
 
@@ -1168,7 +1402,69 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void OnProfileFieldPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (sender is ProfileFieldView field)
+        {
+            UpdateProfileFieldResolution(field);
+        }
+
         QueueProfileSave();
+    }
+
+    private void UpdateProfileFieldResolution(ProfileFieldView field)
+    {
+        if (_schema is null)
+        {
+            field.ClearResolution();
+            return;
+        }
+
+        if (field.Mode == ProfileFieldMode.Code)
+        {
+            if (_schema.TryResolveFieldName(field.Key, out var name))
+            {
+                field.ResolvedFieldLabel = name;
+                field.HasFieldWarning = false;
+            }
+            else
+            {
+                field.ResolvedFieldLabel = string.Empty;
+                field.HasFieldWarning = true;
+            }
+
+            if (_schema.TryResolveValueLabel(field.Key, field.Value, out var label))
+            {
+                field.ResolvedValueLabel = label;
+                field.HasValueWarning = false;
+            }
+            else
+            {
+                field.ResolvedValueLabel = string.Empty;
+                field.HasValueWarning = !string.IsNullOrWhiteSpace(field.Value);
+            }
+        }
+        else
+        {
+            if (_schema.TryResolveFieldCode(field.Key, out _))
+            {
+                field.HasFieldWarning = false;
+            }
+            else
+            {
+                field.HasFieldWarning = !string.IsNullOrWhiteSpace(field.Key);
+            }
+
+            if (_schema.TryResolveValueCode(field.Key, field.Value, out _))
+            {
+                field.HasValueWarning = false;
+            }
+            else
+            {
+                field.HasValueWarning = !string.IsNullOrWhiteSpace(field.Value);
+            }
+
+            field.ResolvedFieldLabel = string.Empty;
+            field.ResolvedValueLabel = string.Empty;
+        }
     }
 
     private void QueueProfileSave()
@@ -1380,13 +1676,19 @@ public sealed class ProfileFieldView : INotifyPropertyChanged
 {
     private string _key;
     private string _value;
+    private ProfileFieldMode _mode;
+    private string _resolvedFieldLabel = string.Empty;
+    private string _resolvedValueLabel = string.Empty;
+    private bool _hasFieldWarning;
+    private bool _hasValueWarning;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public ProfileFieldView(string key, string value)
+    public ProfileFieldView(string key, string value, ProfileFieldMode mode)
     {
         _key = key;
         _value = value;
+        _mode = mode;
     }
 
     public string Key
@@ -1418,19 +1720,107 @@ public sealed class ProfileFieldView : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
         }
     }
+
+    public ProfileFieldMode Mode
+    {
+        get => _mode;
+        set
+        {
+            if (_mode == value)
+            {
+                return;
+            }
+
+            _mode = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Mode)));
+        }
+    }
+
+    public string ResolvedFieldLabel
+    {
+        get => _resolvedFieldLabel;
+        set
+        {
+            if (_resolvedFieldLabel == value)
+            {
+                return;
+            }
+
+            _resolvedFieldLabel = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ResolvedFieldLabel)));
+        }
+    }
+
+    public string ResolvedValueLabel
+    {
+        get => _resolvedValueLabel;
+        set
+        {
+            if (_resolvedValueLabel == value)
+            {
+                return;
+            }
+
+            _resolvedValueLabel = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ResolvedValueLabel)));
+        }
+    }
+
+    public bool HasFieldWarning
+    {
+        get => _hasFieldWarning;
+        set
+        {
+            if (_hasFieldWarning == value)
+            {
+                return;
+            }
+
+            _hasFieldWarning = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasFieldWarning)));
+        }
+    }
+
+    public bool HasValueWarning
+    {
+        get => _hasValueWarning;
+        set
+        {
+            if (_hasValueWarning == value)
+            {
+                return;
+            }
+
+            _hasValueWarning = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasValueWarning)));
+        }
+    }
+
+    public void ClearResolution()
+    {
+        ResolvedFieldLabel = string.Empty;
+        ResolvedValueLabel = string.Empty;
+        HasFieldWarning = false;
+        HasValueWarning = false;
+    }
 }
 
 public sealed class FileRowView
 {
     public FileRowView(FileRecord record, bool effectiveIncluded)
     {
+        FileId = record.FileId;
         Name = Path.GetFileName(record.FullPath);
         RelativePath = record.RelativePath;
         SizeDisplay = FormatBytes(record.SizeBytes);
         ModifiedDisplay = record.ModifiedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
         LargeWarning = record.IsLargeWarning ? "Yes" : "No";
         EffectiveImport = effectiveIncluded ? "Yes" : "No";
+        OverrideMode = record.ImportMode;
+        ImportReason = record.ImportReason ?? string.Empty;
     }
+
+    public string FileId { get; }
 
     public string Name { get; }
 
@@ -1443,6 +1833,10 @@ public sealed class FileRowView
     public string LargeWarning { get; }
 
     public string EffectiveImport { get; }
+
+    public string OverrideMode { get; }
+
+    public string ImportReason { get; }
 
     private static string FormatBytes(long bytes)
     {

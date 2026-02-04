@@ -257,13 +257,15 @@
                     <Button Content="All" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterAll" />
                     <Button Content="Included" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterIncluded" />
                     <Button Content="Excluded" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterExcluded" />
+                    <Button Content="Overrides" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterOverrides" />
                     <Button Content="Large" Style="{StaticResource SecondaryButton}" Click="OnFilterLarge" />
                 </StackPanel>
                 <TextBlock Text="No folders found. Run a scan to populate files."
                            Foreground="#6B7280"
                            Margin="0,0,0,8"
                            Visibility="{Binding HasFolderRoots, Converter={StaticResource InverseBooleanConverter}}" />
-                <DataGrid ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
+                <DataGrid x:Name="FolderFilesGrid" ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
+                          SelectionMode="Extended" SelectionUnit="FullRow"
                           IsReadOnly="True" GridLinesVisibility="Horizontal" BorderThickness="1" BorderBrush="#CCD0D5">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="200" />
@@ -272,6 +274,7 @@
                         <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedDisplay}" Width="140" />
                         <DataGridTextColumn Header="Large" Binding="{Binding LargeWarning}" Width="70" />
                         <DataGridTextColumn Header="Import" Binding="{Binding EffectiveImport}" Width="70" />
+                        <DataGridTextColumn Header="Override" Binding="{Binding OverrideMode}" Width="90" />
                     </DataGrid.Columns>
                 </DataGrid>
             </StackPanel>
@@ -294,29 +297,52 @@
                         <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
                     </StackPanel>
 
-                    <TextBlock Text="Import Mode" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="Folder selection" Style="{StaticResource SectionTitle}" />
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                        <Button Width="96" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
                                 <TextBlock Text="Inherit" />
                             </StackPanel>
                         </Button>
-                        <Button Width="96" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
                             <StackPanel Orientation="Horizontal">
                                 <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
                                 <TextBlock Text="Include" />
                             </StackPanel>
                         </Button>
-                        <Button Width="96" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
+                        <Button Width="110" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
                             <StackPanel Orientation="Horizontal">
                                 <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
                                 <TextBlock Text="Exclude" />
                             </StackPanel>
                         </Button>
                     </StackPanel>
+                    <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
                     <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
-                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,12" />
+                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
+
+                    <TextBlock Text="File selection" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileInclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                                <TextBlock Text="Include" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileExclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                                <TextBlock Text="Exclude" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Click="OnClearFileOverride" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
+                                <TextBlock Text="Clear" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
 
                     <TextBlock Text="Import Controls" Style="{StaticResource SectionTitle}" />
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -360,12 +386,58 @@
                         <CheckBox Content="/dateformat=Y" IsChecked="{Binding NdImportDateFormat}" Margin="0,0,10,0" />
                         <CheckBox Content="/noval=Y" IsChecked="{Binding NdImportNoValidation}" />
                     </StackPanel>
+                    <TextBlock Text="Export preset" Foreground="#555555" />
+                    <ComboBox ItemsSource="{Binding NdImportExportPresets}" SelectedItem="{Binding NdImportExportPreset}" Margin="0,2,0,6" />
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                         <TextBlock Text="/maxerr" VerticalAlignment="Center" Margin="0,0,6,0" />
                         <TextBox Width="70" Text="{Binding NdImportMaxErrors, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
 
                     <TextBlock Text="Profiling" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Schema:" Foreground="#555555" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding SchemaPath}" Foreground="#333333" TextTrimming="CharacterEllipsis" Width="170" />
+                        <Button Content="Load Schema..." Width="110" Margin="6,0,0,0" Click="OnLoadSchema" Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding SchemaStatus}" Foreground="#555555" TextWrapping="Wrap" Width="240" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="Cabinet:" Foreground="#555555" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding NdImportCabinet}" Foreground="#333333" />
+                        <TextBlock Text="(schema match)" Foreground="#2E7D32" Margin="8,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasSchemaLoaded}" Value="True" />
+                                                <Condition Binding="{Binding SchemaCabinetMatches}" Value="True" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="(schema mismatch)" Foreground="#B45309" Margin="8,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasSchemaLoaded}" Value="True" />
+                                                <Condition Binding="{Binding SchemaCabinetMatches}" Value="False" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                         <RadioButton Content="Inherit" GroupName="ProfileMode" Margin="0,0,12,0"
                                      Checked="OnProfileInheritChecked">
@@ -404,17 +476,79 @@
                     <ListView ItemsSource="{Binding ProfileFields}" SelectedItem="{Binding SelectedProfileField, Mode=TwoWay}" Height="140">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Key" Width="120">
+                                <GridViewColumn Header="Field" Width="150">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                            <StackPanel>
+                                                <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock Text="{Binding ResolvedFieldLabel}" Foreground="#6B7280" FontSize="11" Margin="2,2,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Mode}" Value="{x:Static core:ProfileFieldMode.Code}">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="Unresolved field" Foreground="#B45309" FontSize="11" Margin="2,2,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasFieldWarning}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="Value" Width="160">
+                                <GridViewColumn Header="Value" Width="170">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
+                                            <StackPanel>
+                                                <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock Text="{Binding ResolvedValueLabel}" Foreground="#6B7280" FontSize="11" Margin="2,2,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Mode}" Value="{x:Static core:ProfileFieldMode.Code}">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="Unresolved value" Foreground="#B45309" FontSize="11" Margin="2,2,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasValueWarning}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Mode" Width="90">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedValue="{Binding Mode}" SelectedValuePath="Tag">
+                                                <ComboBoxItem Content="Label" Tag="{x:Static core:ProfileFieldMode.Label}" />
+                                                <ComboBoxItem Content="Code" Tag="{x:Static core:ProfileFieldMode.Code}" />
+                                            </ComboBox>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

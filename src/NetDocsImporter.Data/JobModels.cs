@@ -10,7 +10,9 @@ public sealed record FileRecord(
     long SizeBytes,
     DateTime ModifiedUtc,
     bool IsLargeWarning,
-    string? FolderId);
+    string? FolderId,
+    string ImportMode,
+    string? ImportReason);
 
 public sealed record FolderRecord(
     string FolderId,

@@ -164,7 +164,9 @@ public sealed class ScanJobRunner
                     info.Length,
                     info.LastWriteTimeUtc,
                     isLargeWarning,
-                    folderId);
+                    folderId,
+                    "inherit",
+                    null);
                 fileWriter.Insert(fileRecord);
 
                 if (progress is not null && (totalFiles % ReportEveryFiles == 0 || largeFile is not null))

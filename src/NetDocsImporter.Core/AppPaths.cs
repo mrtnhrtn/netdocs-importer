@@ -19,6 +19,8 @@ public sealed class AppPaths
 
     public string DatabasePath => Path.Combine(BaseDataDirectory, "jobs.db");
 
+    public string SettingsPath => Path.Combine(BaseDataDirectory, "settings.json");
+
     public static string ResolveBaseDataDirectory(string? executablePath = null)
     {
         var path = executablePath;

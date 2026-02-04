@@ -39,7 +39,9 @@ public class FolderTreeTests
             123,
             DateTime.UtcNow,
             false,
-            rootFolderId);
+            rootFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(file);
 
         var files = await store.GetFilesForJobAsync(jobId);

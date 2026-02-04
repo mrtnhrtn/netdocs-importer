@@ -149,7 +149,9 @@ public class ImportPipelineTests
                 100 + i,
                 DateTime.UtcNow,
                 false,
-                folderId);
+                folderId,
+                "inherit",
+                null);
 
             await store.InsertFileAsync(file);
             results.Add(file);

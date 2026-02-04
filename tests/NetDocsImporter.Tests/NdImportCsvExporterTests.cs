@@ -40,7 +40,9 @@ public class NdImportCsvExporterTests
             123,
             modifiedUtc,
             false,
-            subFolderId);
+            subFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(fileRecord);
 
         var options = new NdImportExportOptions
@@ -91,7 +93,7 @@ public class NdImportCsvExporterTests
 
         var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
         Assert.Single(warningLines);
-        Assert.Equal("TYPE,RELATIVE PATH,FULL PATH,SIZE BYTES", warningLines[0]);
+        Assert.Equal("TYPE,FIELD,VALUE,RELATIVE PATH,FULL PATH,SIZE BYTES,DETAILS", warningLines[0]);
 
         CleanupTempRoot(tempRoot);
     }
@@ -119,7 +121,9 @@ public class NdImportCsvExporterTests
             456,
             new DateTime(2024, 3, 4, 5, 6, 7, DateTimeKind.Utc),
             false,
-            deepFolderId);
+            deepFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(fileRecord);
 
         var options = new NdImportExportOptions
@@ -168,7 +172,9 @@ public class NdImportCsvExporterTests
             100,
             DateTime.UtcNow,
             false,
-            excludedFolderId);
+            excludedFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(excludedFile);
 
         var includedFile = new FileRecord(
@@ -179,7 +185,9 @@ public class NdImportCsvExporterTests
             200,
             DateTime.UtcNow,
             false,
-            includedFolderId);
+            includedFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(includedFile);
 
         var options = new NdImportExportOptions
@@ -228,8 +236,23 @@ public class NdImportCsvExporterTests
             2_000_000_000,
             DateTime.UtcNow,
             true,
-            largeFolderId);
+            largeFolderId,
+            "inherit",
+            null);
         await store.InsertFileAsync(largeFile);
+
+        var excludedFile = new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            Path.Combine(tempRoot, "excluded.txt"),
+            "excluded.txt",
+            10,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "exclude",
+            "User excluded");
+        await store.InsertFileAsync(excludedFile);
 
         var options = new NdImportExportOptions
         {
@@ -241,12 +264,80 @@ public class NdImportCsvExporterTests
         var result = await exporter.ExportAsync(jobId, reportsDir, options);
 
         var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
-        Assert.Equal(3, warningLines.Length);
-        Assert.Contains("LARGE_FILE", warningLines[1]);
-        Assert.Contains("huge.bin", warningLines[1]);
-        Assert.Contains("2000000000", warningLines[1]);
-        Assert.Contains("EMPTY_FOLDER", warningLines[2]);
-        Assert.Contains("empty", warningLines[2]);
+        Assert.Equal(4, warningLines.Length);
+        Assert.Contains(warningLines, line => line.Contains("LARGE_FILE"));
+        Assert.Contains(warningLines, line => line.Contains("huge.bin"));
+        Assert.Contains(warningLines, line => line.Contains("2000000000"));
+        Assert.Contains(warningLines, line => line.Contains("EMPTY_FOLDER"));
+        Assert.Contains(warningLines, line => line.Contains("empty"));
+        Assert.Contains(warningLines, line => line.Contains("EXCLUDED_FILE"));
+        Assert.Contains(warningLines, line => line.Contains("excluded.txt"));
+
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_UsesSchemaForProfileColumnsAndWarnings()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include", "override");
+
+        var fileRecord = new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\file.txt",
+            "file.txt",
+            100,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null);
+        await store.InsertFileAsync(fileRecord);
+
+        var payload = ProfilePayloadCodec.Serialize(new[]
+        {
+            new ProfileFieldEntry("1001", "2001", ProfileFieldMode.Code),
+            new ProfileFieldEntry("1001", "9999", ProfileFieldMode.Code)
+        });
+        await store.UpsertFolderProfileAsync(jobId, rootFolderId, payload);
+
+        var schema = new ProfileSchemaDictionary(
+            "Cabinet",
+            "1",
+            new[]
+            {
+                new ProfileSchemaField(
+                    "1001",
+                    "Document Type",
+                    new[] { new ProfileSchemaValue("2001", "Correspondence") })
+            });
+
+        var options = new NdImportExportOptions
+        {
+            IncludeAuditStamps = false,
+            MappingMode = NdImportMappingMode.Mirror,
+            IncludeProfileMetadata = true,
+            ProfileSchema = schema
+        };
+
+        var exporter = new NdImportCsvExporter(store);
+        var result = await exporter.ExportAsync(jobId, reportsDir, options);
+
+        var lines = await File.ReadAllLinesAsync(result.OutputPath);
+        Assert.Contains("Document Type", lines[0]);
+        Assert.Contains("Correspondence", lines[1]);
+
+        var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
+        Assert.Contains("UNRESOLVED_VALUE", warningLines[1]);
 
         CleanupTempRoot(tempRoot);
     }
@@ -258,7 +349,8 @@ public class NdImportCsvExporterTests
         string relativePath,
         string? parentFolderId,
         int depth,
-        string importMode)
+        string importMode,
+        string profileMode = "inherit")
     {
         var folderId = Guid.NewGuid().ToString("N");
         var folder = new FolderRecord(
@@ -272,7 +364,7 @@ public class NdImportCsvExporterTests
             false,
             DateTime.UtcNow,
             importMode,
-            "inherit");
+            profileMode);
 
         await store.InsertFolderAsync(folder);
         return folderId;

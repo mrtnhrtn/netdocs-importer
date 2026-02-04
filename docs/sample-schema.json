@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "cabinet": "Test Cabinet",
+  "schemaVersion": "2024.1",
+  "fields": [
+    {
+      "code": "1001",
+      "name": "Document Type",
+      "values": [
+        { "code": "2001", "label": "Correspondence" },
+        { "code": "2002", "label": "Agreement" }
+      ]
+    },
+    {
+      "code": "1002",
+      "name": "Client",
+      "values": [
+        { "code": "3001", "label": "Acme Corp" }
+      ]
+    }
+  ]
+}

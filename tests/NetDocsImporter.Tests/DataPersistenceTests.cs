@@ -74,6 +74,8 @@ public class DataPersistenceTests
                 120,
                 created,
                 false,
+                null,
+                "inherit",
                 null);
             var file2 = new FileRecord(
                 Guid.NewGuid().ToString("N"),
@@ -83,6 +85,8 @@ public class DataPersistenceTests
                 2048,
                 created.AddMinutes(2),
                 true,
+                null,
+                "inherit",
                 null);
 
             await store.InsertFileAsync(file1);

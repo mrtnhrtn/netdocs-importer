@@ -28,6 +28,10 @@ public sealed class NdImportExportOptions
     public bool IncludeAuditStamps { get; set; } = true;
 
     public string ImportedBy { get; set; } = "Imported Content";
+
+    public bool IncludeProfileMetadata { get; set; }
+
+    public ProfileSchemaDictionary? ProfileSchema { get; set; }
 }
 
 public sealed class NdImportExportResult
@@ -38,6 +42,10 @@ public sealed class NdImportExportResult
         int totalFiles,
         int largeFileWarnings,
         int emptyFolderWarnings,
+        int unresolvedFieldWarnings,
+        int unresolvedValueWarnings,
+        int fileIncludeOverrides,
+        int fileExcludeOverrides,
         int accessDeniedWarnings)
     {
         OutputPath = outputPath;
@@ -45,6 +53,10 @@ public sealed class NdImportExportResult
         TotalFiles = totalFiles;
         LargeFileWarnings = largeFileWarnings;
         EmptyFolderWarnings = emptyFolderWarnings;
+        UnresolvedFieldWarnings = unresolvedFieldWarnings;
+        UnresolvedValueWarnings = unresolvedValueWarnings;
+        FileIncludeOverrides = fileIncludeOverrides;
+        FileExcludeOverrides = fileExcludeOverrides;
         AccessDeniedWarnings = accessDeniedWarnings;
     }
 
@@ -57,6 +69,14 @@ public sealed class NdImportExportResult
     public int LargeFileWarnings { get; }
 
     public int EmptyFolderWarnings { get; }
+
+    public int UnresolvedFieldWarnings { get; }
+
+    public int UnresolvedValueWarnings { get; }
+
+    public int FileIncludeOverrides { get; }
+
+    public int FileExcludeOverrides { get; }
 
     public int AccessDeniedWarnings { get; }
 }
@@ -112,6 +132,9 @@ public sealed class NdImportCsvExporter
 
         await _jobStore.InitializeAsync(cancellationToken);
         var files = await _jobStore.GetIncludedFilesForJobAsync(jobId, cancellationToken);
+        var allFiles = await _jobStore.GetFilesForJobAsync(jobId, cancellationToken);
+        var folders = await _jobStore.GetFoldersForJobAsync(jobId, cancellationToken);
+        var folderProfiles = await _jobStore.GetFolderProfilesForJobAsync(jobId, cancellationToken);
 
         Directory.CreateDirectory(reportsDirectory);
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
@@ -132,6 +155,12 @@ public sealed class NdImportCsvExporter
             "FOLDER"
         };
 
+        var profileColumns = options.IncludeProfileMetadata
+            ? BuildProfileColumns(folders, folderProfiles, options.ProfileSchema)
+            : new List<string>();
+
+        header.AddRange(profileColumns);
+
         if (options.IncludeAuditStamps)
         {
             header.Add("CREATED BY");
@@ -142,18 +171,15 @@ public sealed class NdImportCsvExporter
 
         await writer.WriteLineAsync(string.Join(",", header));
 
+        var effectiveProfiles = options.IncludeProfileMetadata
+            ? BuildEffectiveProfiles(folders, folderProfiles)
+            : new Dictionary<string, IReadOnlyList<ProfileFieldEntry>>(StringComparer.OrdinalIgnoreCase);
+
+        var warnings = new List<ExportWarning>();
+
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (file.IsLargeWarning)
-            {
-                largeFileWarnings++;
-            }
-            else if (file.SizeBytes > LargeFileThresholdBytes)
-            {
-                largeFileWarnings++;
-            }
 
             var documentName = Path.GetFileNameWithoutExtension(file.FullPath);
             var documentExtension = Path.GetExtension(file.FullPath).TrimStart('.');
@@ -166,6 +192,17 @@ public sealed class NdImportCsvExporter
                 NdImportCsv.Escape(documentExtension),
                 NdImportCsv.Escape(folder)
             };
+
+            if (options.IncludeProfileMetadata)
+            {
+                if (!effectiveProfiles.TryGetValue(file.FolderId ?? string.Empty, out var profileEntries))
+                {
+                    profileEntries = Array.Empty<ProfileFieldEntry>();
+                }
+
+                var profileValues = BuildProfileValues(profileColumns, profileEntries, options.ProfileSchema, file, warnings);
+                row.AddRange(profileValues);
+            }
 
             if (options.IncludeAuditStamps)
             {
@@ -189,17 +226,33 @@ public sealed class NdImportCsvExporter
             await writer.WriteLineAsync(string.Join(",", row));
         }
 
-        var emptyFolderWarnings = await WriteWarningsReportAsync(jobId, warningsPath, files, cancellationToken);
-        return new NdImportExportResult(outputPath, warningsPath, files.Count, largeFileWarnings, emptyFolderWarnings, accessDeniedWarnings);
+        largeFileWarnings = allFiles.Count(f => f.IsLargeWarning || f.SizeBytes > LargeFileThresholdBytes);
+        var emptyFolderWarnings = await WriteWarningsReportAsync(jobId, warningsPath, allFiles, folders, warnings, cancellationToken);
+        var unresolvedFieldWarnings = warnings.Count(w => w.Type == "UNRESOLVED_FIELD");
+        var unresolvedValueWarnings = warnings.Count(w => w.Type == "UNRESOLVED_VALUE");
+        var fileIncludeOverrides = allFiles.Count(f => string.Equals(f.ImportMode, "include", StringComparison.OrdinalIgnoreCase));
+        var fileExcludeOverrides = allFiles.Count(f => string.Equals(f.ImportMode, "exclude", StringComparison.OrdinalIgnoreCase));
+        return new NdImportExportResult(
+            outputPath,
+            warningsPath,
+            files.Count,
+            largeFileWarnings,
+            emptyFolderWarnings,
+            unresolvedFieldWarnings,
+            unresolvedValueWarnings,
+            fileIncludeOverrides,
+            fileExcludeOverrides,
+            accessDeniedWarnings);
     }
 
     private async Task<int> WriteWarningsReportAsync(
         string jobId,
         string warningsPath,
-        IReadOnlyList<FileRecord> includedFiles,
+        IReadOnlyList<FileRecord> allFiles,
+        IReadOnlyList<FolderRecord> folders,
+        List<ExportWarning> warnings,
         CancellationToken cancellationToken)
     {
-        var folders = await _jobStore.GetFoldersForJobAsync(jobId, cancellationToken);
         var counts = await _jobStore.GetFolderImportCountsForJobAsync(jobId, cancellationToken);
         var countsByFolder = counts.ToDictionary(c => c.FolderId, c => c, StringComparer.OrdinalIgnoreCase);
 
@@ -208,9 +261,9 @@ public sealed class NdImportCsvExporter
         await using var stream = new FileStream(warningsPath, FileMode.Create, FileAccess.Write, FileShare.Read);
         await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
 
-        await writer.WriteLineAsync("TYPE,RELATIVE PATH,FULL PATH,SIZE BYTES");
+        await writer.WriteLineAsync("TYPE,FIELD,VALUE,RELATIVE PATH,FULL PATH,SIZE BYTES,DETAILS");
 
-        foreach (var file in includedFiles)
+        foreach (var file in allFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -219,14 +272,26 @@ public sealed class NdImportCsvExporter
                 continue;
             }
 
-            var row = string.Join(",", new[]
-            {
+            warnings.Add(new ExportWarning(
                 "LARGE_FILE",
-                NdImportCsv.Escape(file.RelativePath),
-                NdImportCsv.Escape(file.FullPath),
-                file.SizeBytes.ToString(CultureInfo.InvariantCulture)
-            });
-            await writer.WriteLineAsync(row);
+                string.Empty,
+                string.Empty,
+                file.RelativePath,
+                file.FullPath,
+                file.SizeBytes.ToString(CultureInfo.InvariantCulture),
+                "File exceeds 1.8GB"));
+        }
+
+        foreach (var file in allFiles.Where(f => string.Equals(f.ImportMode, "exclude", StringComparison.OrdinalIgnoreCase)))
+        {
+            warnings.Add(new ExportWarning(
+                "EXCLUDED_FILE",
+                string.Empty,
+                string.Empty,
+                file.RelativePath,
+                file.FullPath,
+                file.SizeBytes.ToString(CultureInfo.InvariantCulture),
+                file.ImportReason ?? "User excluded"));
         }
 
         foreach (var folder in folders)
@@ -244,18 +309,222 @@ public sealed class NdImportCsvExporter
             }
 
             emptyFolderWarnings++;
+            warnings.Add(new ExportWarning(
+                "EMPTY_FOLDER",
+                string.Empty,
+                string.Empty,
+                folder.RelativePath,
+                folder.FullPath,
+                string.Empty,
+                "No included files"));
+        }
+
+        foreach (var warning in warnings)
+        {
             var row = string.Join(",", new[]
             {
-                "EMPTY_FOLDER",
-                NdImportCsv.Escape(folder.RelativePath),
-                NdImportCsv.Escape(folder.FullPath),
-                string.Empty
+                warning.Type,
+                NdImportCsv.Escape(warning.Field),
+                NdImportCsv.Escape(warning.Value),
+                NdImportCsv.Escape(warning.RelativePath),
+                NdImportCsv.Escape(warning.FullPath),
+                warning.SizeBytes,
+                NdImportCsv.Escape(warning.Details)
             });
             await writer.WriteLineAsync(row);
         }
 
         return emptyFolderWarnings;
     }
+
+    private static IReadOnlyList<string> BuildProfileColumns(
+        IReadOnlyList<FolderRecord> folders,
+        IReadOnlyDictionary<string, string> folderProfiles,
+        ProfileSchemaDictionary? schema)
+    {
+        var columns = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var effectiveProfiles = BuildEffectiveProfiles(folders, folderProfiles);
+        foreach (var profile in effectiveProfiles.Values)
+        {
+            foreach (var entry in profile)
+            {
+                var columnName = ResolveFieldName(entry, schema);
+                if (string.IsNullOrWhiteSpace(columnName))
+                {
+                    continue;
+                }
+
+                if (seen.Add(columnName))
+                {
+                    columns.Add(columnName);
+                }
+            }
+        }
+
+        return columns;
+    }
+
+    private static Dictionary<string, IReadOnlyList<ProfileFieldEntry>> BuildEffectiveProfiles(
+        IReadOnlyList<FolderRecord> folders,
+        IReadOnlyDictionary<string, string> folderProfiles)
+    {
+        var map = new Dictionary<string, FolderRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (var folder in folders)
+        {
+            map[folder.FolderId] = folder;
+        }
+
+        var ordered = folders.OrderBy(f => f.Depth).ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
+        var effective = new Dictionary<string, IReadOnlyList<ProfileFieldEntry>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var folder in ordered)
+        {
+            if (string.Equals(folder.ProfileMode, "override", StringComparison.OrdinalIgnoreCase) &&
+                folderProfiles.TryGetValue(folder.FolderId, out var payload))
+            {
+                effective[folder.FolderId] = ProfilePayloadCodec.Deserialize(payload);
+                continue;
+            }
+
+            if (folder.ParentFolderId is not null && effective.TryGetValue(folder.ParentFolderId, out var parentProfile))
+            {
+                effective[folder.FolderId] = parentProfile;
+            }
+            else
+            {
+                effective[folder.FolderId] = Array.Empty<ProfileFieldEntry>();
+            }
+        }
+
+        return effective;
+    }
+
+    private static List<string> BuildProfileValues(
+        IReadOnlyList<string> columns,
+        IReadOnlyList<ProfileFieldEntry> entries,
+        ProfileSchemaDictionary? schema,
+        FileRecord file,
+        List<ExportWarning> warnings)
+    {
+        var valuesByColumn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            var column = ResolveFieldName(entry, schema);
+            if (string.IsNullOrWhiteSpace(column))
+            {
+                continue;
+            }
+
+            var value = ResolveFieldValue(entry, schema, file, warnings);
+            if (!valuesByColumn.ContainsKey(column))
+            {
+                valuesByColumn[column] = value;
+            }
+        }
+
+        var values = new List<string>(columns.Count);
+        foreach (var column in columns)
+        {
+            values.Add(NdImportCsv.Escape(valuesByColumn.TryGetValue(column, out var value) ? value : string.Empty));
+        }
+
+        return values;
+    }
+
+    private static string ResolveFieldName(ProfileFieldEntry entry, ProfileSchemaDictionary? schema)
+    {
+        if (entry.Mode == ProfileFieldMode.Code)
+        {
+            if (schema is not null && schema.TryResolveFieldName(entry.Field, out var name))
+            {
+                return name;
+            }
+
+            return entry.Field;
+        }
+
+        return entry.Field;
+    }
+
+    private static string ResolveFieldValue(
+        ProfileFieldEntry entry,
+        ProfileSchemaDictionary? schema,
+        FileRecord file,
+        List<ExportWarning> warnings)
+    {
+        if (schema is null)
+        {
+            return entry.Value;
+        }
+
+        if (entry.Mode == ProfileFieldMode.Code)
+        {
+            if (!schema.TryResolveFieldName(entry.Field, out _))
+            {
+                warnings.Add(new ExportWarning(
+                    "UNRESOLVED_FIELD",
+                    entry.Field,
+                    entry.Value,
+                    file.RelativePath,
+                    file.FullPath,
+                    string.Empty,
+                    "Field code not found in schema"));
+            }
+
+            if (schema.TryResolveValueLabel(entry.Field, entry.Value, out var label))
+            {
+                return label;
+            }
+
+            warnings.Add(new ExportWarning(
+                "UNRESOLVED_VALUE",
+                entry.Field,
+                entry.Value,
+                file.RelativePath,
+                file.FullPath,
+                string.Empty,
+                "Value code not found in schema"));
+            return entry.Value;
+        }
+
+        if (!schema.TryResolveFieldCode(entry.Field, out _))
+        {
+            warnings.Add(new ExportWarning(
+                "UNRESOLVED_FIELD",
+                entry.Field,
+                entry.Value,
+                file.RelativePath,
+                file.FullPath,
+                string.Empty,
+                "Field name not found in schema"));
+            return entry.Value;
+        }
+
+        if (!schema.TryResolveValueCode(entry.Field, entry.Value, out _))
+        {
+            warnings.Add(new ExportWarning(
+                "UNRESOLVED_VALUE",
+                entry.Field,
+                entry.Value,
+                file.RelativePath,
+                file.FullPath,
+                string.Empty,
+                "Value label not found in schema"));
+        }
+
+        return entry.Value;
+    }
+
+    private sealed record ExportWarning(
+        string Type,
+        string Field,
+        string Value,
+        string RelativePath,
+        string FullPath,
+        string SizeBytes,
+        string Details);
 
     private static string ResolveFolderPath(string relativePath, NdImportMappingMode mappingMode, string anchorFolderPath)
     {

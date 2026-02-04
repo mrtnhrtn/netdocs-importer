@@ -27,7 +27,9 @@ public class FolderImportCountsTests
             100,
             DateTime.UtcNow,
             false,
-            overrideId);
+            overrideId,
+            "inherit",
+            null);
         await store.InsertFileAsync(file);
 
         var counts = await store.GetFolderImportCountsForJobAsync(jobId);

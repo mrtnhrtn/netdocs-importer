@@ -48,7 +48,9 @@ public sealed class JobStore
                 SizeBytes INTEGER,
                 ModifiedUtc TEXT,
                 IsLargeWarning INTEGER,
-                FolderId TEXT NULL
+                FolderId TEXT NULL,
+                ImportMode TEXT NOT NULL DEFAULT 'inherit',
+                ImportReason TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS Transfers (
@@ -111,6 +113,8 @@ public sealed class JobStore
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await EnsureColumnExistsAsync(connection, "Files", "FolderId", "TEXT NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "Files", "ImportMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "Files", "ImportReason", "TEXT NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "Folders", "ImportMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
         await EnsureColumnExistsAsync(connection, "Folders", "ProfileMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
         await EnsureColumnExistsAsync(connection, "FolderProfiles", "FolderId", "TEXT NOT NULL", cancellationToken);
@@ -129,6 +133,10 @@ public sealed class JobStore
         await using var fixProfileMode = connection.CreateCommand();
         fixProfileMode.CommandText = "UPDATE Folders SET ProfileMode = 'inherit' WHERE ProfileMode IS NULL;";
         await fixProfileMode.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var fixFileImportMode = connection.CreateCommand();
+        fixFileImportMode.CommandText = "UPDATE Files SET ImportMode = 'inherit' WHERE ImportMode IS NULL;";
+        await fixFileImportMode.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task InsertJobAsync(JobRecord job, CancellationToken cancellationToken = default)
@@ -176,8 +184,8 @@ public sealed class JobStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO Files
-            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId)
-            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId);
+            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId, ImportMode, ImportReason)
+            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId, $importMode, $importReason);
             """;
 
         BindFileParameters(command, file);
@@ -220,7 +228,7 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId
+            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId, ImportMode, ImportReason
             FROM Files
             WHERE JobId = $jobId
             ORDER BY RelativePath;
@@ -239,7 +247,9 @@ public sealed class JobStore
                 reader.GetInt64(4),
                 ParseUtc(reader.GetString(5)),
                 reader.GetInt64(6) == 1,
-                reader.IsDBNull(7) ? null : reader.GetString(7)));
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? "inherit" : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return results;
@@ -693,7 +703,7 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId
+            SELECT FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId, ImportMode, ImportReason
             FROM Files
             WHERE JobId = $jobId AND FolderId = $folderId
             ORDER BY RelativePath
@@ -715,7 +725,9 @@ public sealed class JobStore
                 reader.GetInt64(4),
                 ParseUtc(reader.GetString(5)),
                 reader.GetInt64(6) == 1,
-                reader.IsDBNull(7) ? null : reader.GetString(7)));
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? "inherit" : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return results;
@@ -761,6 +773,42 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$folderId", folderId);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateFileImportModeAsync(
+        IReadOnlyList<string> fileIds,
+        string importMode,
+        string? reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (fileIds.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = """
+            UPDATE Files
+            SET ImportMode = $importMode,
+                ImportReason = $importReason
+            WHERE FileId = $fileId;
+            """;
+        var fileIdParam = command.Parameters.Add("$fileId", SqliteType.Text);
+        command.Parameters.AddWithValue("$importMode", importMode);
+        command.Parameters.AddWithValue("$importReason", (object?)reason ?? DBNull.Value);
+
+        foreach (var fileId in fileIds)
+        {
+            fileIdParam.Value = fileId;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task UpdateFolderProfileModeAsync(string folderId, string profileMode, CancellationToken cancellationToken = default)
@@ -820,6 +868,37 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$updatedUtc", ToUtcString(DateTime.UtcNow));
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>> GetFolderProfilesForJobAsync(
+        string jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT FolderId, PayloadJson
+            FROM FolderProfiles
+            WHERE JobId = $jobId;
+            """;
+        command.Parameters.AddWithValue("$jobId", jobId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.IsDBNull(1))
+            {
+                continue;
+            }
+
+            results[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        return results;
     }
 
     public async Task<string?> GetEffectiveFolderProfilePayloadAsync(string folderId, CancellationToken cancellationToken = default)
@@ -1072,8 +1151,20 @@ public sealed class JobStore
                 JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
             )
             SELECT
-                COALESCE(SUM(CASE WHEN files.FileId IS NOT NULL AND ft.EffectiveIncluded = 1 THEN 1 ELSE 0 END), 0) AS IncludedFiles,
-                COALESCE(SUM(CASE WHEN files.FileId IS NOT NULL AND ft.EffectiveIncluded = 0 THEN 1 ELSE 0 END), 0) AS ExcludedFiles
+                COALESCE(SUM(CASE
+                    WHEN files.FileId IS NULL THEN 0
+                    WHEN files.ImportMode = 'include' THEN 1
+                    WHEN files.ImportMode = 'exclude' THEN 0
+                    WHEN ft.EffectiveIncluded = 1 THEN 1
+                    ELSE 0
+                END), 0) AS IncludedFiles,
+                COALESCE(SUM(CASE
+                    WHEN files.FileId IS NULL THEN 0
+                    WHEN files.ImportMode = 'exclude' THEN 1
+                    WHEN files.ImportMode = 'include' THEN 0
+                    WHEN ft.EffectiveIncluded = 0 THEN 1
+                    ELSE 0
+                END), 0) AS ExcludedFiles
             FROM folder_tree ft
             LEFT JOIN Files files ON files.FolderId = ft.FolderId;
             """;
@@ -1121,9 +1212,20 @@ public sealed class JobStore
                 FROM Folders f
                 JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
             ),
+            file_effective AS (
+                SELECT files.FileId,
+                       files.FolderId,
+                       CASE
+                           WHEN files.ImportMode = 'include' THEN 1
+                           WHEN files.ImportMode = 'exclude' THEN 0
+                           ELSE ft.EffectiveIncluded
+                       END AS EffectiveIncluded
+                FROM Files files
+                JOIN folder_tree ft ON ft.FolderId = files.FolderId
+            ),
             direct_files AS (
-                SELECT FolderId, COUNT(*) AS DirectFiles
-                FROM Files
+                SELECT FolderId, COALESCE(SUM(EffectiveIncluded), 0) AS DirectFiles
+                FROM file_effective
                 GROUP BY FolderId
             ),
             descendants(AncestorId, DescendantId) AS (
@@ -1192,10 +1294,15 @@ public sealed class JobStore
                 FROM Folders f
                 JOIN folder_tree ft ON f.ParentFolderId = ft.FolderId
             )
-            SELECT files.FileId, files.JobId, files.FullPath, files.RelativePath, files.SizeBytes, files.ModifiedUtc, files.IsLargeWarning, files.FolderId
+            SELECT files.FileId, files.JobId, files.FullPath, files.RelativePath, files.SizeBytes, files.ModifiedUtc, files.IsLargeWarning, files.FolderId,
+                   files.ImportMode, files.ImportReason
             FROM folder_tree ft
             JOIN Files files ON files.FolderId = ft.FolderId
-            WHERE ft.EffectiveIncluded = 1
+            WHERE CASE
+                    WHEN files.ImportMode = 'include' THEN 1
+                    WHEN files.ImportMode = 'exclude' THEN 0
+                    ELSE ft.EffectiveIncluded
+                  END = 1
             ORDER BY files.RelativePath;
             """;
 
@@ -1212,7 +1319,9 @@ public sealed class JobStore
                 reader.GetInt64(4),
                 ParseUtc(reader.GetString(5)),
                 reader.GetInt64(6) == 1,
-                reader.IsDBNull(7) ? null : reader.GetString(7)));
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? "inherit" : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return results;
@@ -1228,6 +1337,8 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$modifiedUtc", ToUtcString(file.ModifiedUtc));
         command.Parameters.AddWithValue("$isLargeWarning", file.IsLargeWarning ? 1 : 0);
         command.Parameters.AddWithValue("$folderId", (object?)file.FolderId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$importMode", file.ImportMode);
+        command.Parameters.AddWithValue("$importReason", (object?)file.ImportReason ?? DBNull.Value);
     }
 
     private static void BindFolderParameters(SqliteCommand command, FolderRecord folder)
@@ -1293,8 +1404,8 @@ public sealed class JobFileWriter : IDisposable
         _command = _connection.CreateCommand();
         _command.CommandText = """
             INSERT OR REPLACE INTO Files
-            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId)
-            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId);
+            (FileId, JobId, FullPath, RelativePath, SizeBytes, ModifiedUtc, IsLargeWarning, FolderId, ImportMode, ImportReason)
+            VALUES ($fileId, $jobId, $fullPath, $relativePath, $sizeBytes, $modifiedUtc, $isLargeWarning, $folderId, $importMode, $importReason);
             """;
         _command.Parameters.Add("$fileId", SqliteType.Text);
         _command.Parameters.Add("$jobId", SqliteType.Text);
@@ -1304,6 +1415,8 @@ public sealed class JobFileWriter : IDisposable
         _command.Parameters.Add("$modifiedUtc", SqliteType.Text);
         _command.Parameters.Add("$isLargeWarning", SqliteType.Integer);
         _command.Parameters.Add("$folderId", SqliteType.Text);
+        _command.Parameters.Add("$importMode", SqliteType.Text);
+        _command.Parameters.Add("$importReason", SqliteType.Text);
     }
 
     public void Insert(FileRecord file)
@@ -1316,6 +1429,8 @@ public sealed class JobFileWriter : IDisposable
         _command.Parameters["$modifiedUtc"].Value = file.ModifiedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         _command.Parameters["$isLargeWarning"].Value = file.IsLargeWarning ? 1 : 0;
         _command.Parameters["$folderId"].Value = (object?)file.FolderId ?? DBNull.Value;
+        _command.Parameters["$importMode"].Value = file.ImportMode;
+        _command.Parameters["$importReason"].Value = (object?)file.ImportReason ?? DBNull.Value;
 
         _command.ExecuteNonQuery();
     }
