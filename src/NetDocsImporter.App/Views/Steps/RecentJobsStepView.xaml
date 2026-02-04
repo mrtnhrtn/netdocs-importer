@@ -1,0 +1,23 @@
+<UserControl x:Class="NetDocsImporter.App.Views.Steps.RecentJobsStepView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="400" d:DesignWidth="700">
+    <StackPanel>
+        <TextBlock Text="Recent Jobs" Style="{StaticResource SectionTitle}" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <Button Content="Load Recent" Width="110" Click="OnLoadRecentJobs" Style="{StaticResource SecondaryButton}" />
+        </StackPanel>
+        <ListView ItemsSource="{Binding RecentJobs}" SelectedItem="{Binding SelectedRecentJob, Mode=TwoWay}" Height="240">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Job" Width="70" DisplayMemberBinding="{Binding JobIdShort}" />
+                    <GridViewColumn Header="Created" Width="110" DisplayMemberBinding="{Binding CreatedDisplay}" />
+                    <GridViewColumn Header="Status" Width="90" DisplayMemberBinding="{Binding Status}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </StackPanel>
+</UserControl>

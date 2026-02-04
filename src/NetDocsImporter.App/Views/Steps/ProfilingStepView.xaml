@@ -1,0 +1,173 @@
+<UserControl x:Class="NetDocsImporter.App.Views.Steps.ProfilingStepView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:core="clr-namespace:NetDocsImporter.Core;assembly=NetDocsImporter.Core"
+             mc:Ignorable="d"
+             d:DesignHeight="500" d:DesignWidth="700">
+    <StackPanel>
+        <TextBlock Text="Profiling" Style="{StaticResource SectionTitle}" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <TextBlock Text="Schema:" Foreground="#555555" Margin="0,0,6,0" />
+            <TextBlock Text="{Binding SchemaPath}" Foreground="#333333" TextTrimming="CharacterEllipsis" Width="170" />
+            <Button Content="Load Schema..." Width="110" Margin="6,0,0,0" Click="OnLoadSchema" Style="{StaticResource SecondaryButton}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="{Binding SchemaStatus}" Foreground="#555555" TextWrapping="Wrap" Width="240" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="Cabinet:" Foreground="#555555" Margin="0,0,6,0" />
+            <TextBlock Text="{Binding NdImportCabinet}" Foreground="#333333" />
+            <TextBlock Text="(schema match)" Foreground="#2E7D32" Margin="8,0,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding HasSchemaLoaded}" Value="True" />
+                                    <Condition Binding="{Binding SchemaCabinetMatches}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="(schema mismatch)" Foreground="#B45309" Margin="8,0,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding HasSchemaLoaded}" Value="True" />
+                                    <Condition Binding="{Binding SchemaCabinetMatches}" Value="False" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <RadioButton Content="Inherit" GroupName="ProfileMode" Margin="0,0,12,0"
+                         Checked="OnProfileInheritChecked">
+                <RadioButton.Style>
+                    <Style TargetType="RadioButton">
+                        <Setter Property="IsChecked" Value="False" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SelectedProfileMode}" Value="inherit">
+                                <Setter Property="IsChecked" Value="True" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </RadioButton.Style>
+            </RadioButton>
+            <RadioButton Content="Override" GroupName="ProfileMode"
+                         Checked="OnProfileOverrideChecked">
+                <RadioButton.Style>
+                    <Style TargetType="RadioButton">
+                        <Setter Property="IsChecked" Value="False" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SelectedProfileMode}" Value="override">
+                                <Setter Property="IsChecked" Value="True" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </RadioButton.Style>
+            </RadioButton>
+        </StackPanel>
+        <TextBlock Text="{Binding SelectedProfileSource, StringFormat=Profile source: {0}}" Foreground="#555555" Margin="0,0,0,6" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <Button Content="Add field" Width="90" Margin="0,0,6,0" Click="OnAddProfileField" Style="{StaticResource SecondaryButton}" />
+            <Button Content="Remove field" Width="110" Margin="0,0,6,0" Click="OnRemoveProfileField" Style="{StaticResource SecondaryButton}" />
+            <Button Content="Apply to children" Width="130" Click="OnApplyProfileToChildren" Style="{StaticResource SecondaryButton}" />
+        </StackPanel>
+        <ListView ItemsSource="{Binding ProfileFields}" SelectedItem="{Binding SelectedProfileField, Mode=TwoWay}" Height="220">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Field" Width="150">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBox Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="{Binding ResolvedFieldLabel}" Foreground="#6B7280" FontSize="11" Margin="2,2,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Mode}" Value="{x:Static core:ProfileFieldMode.Code}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="Unresolved field" Foreground="#B45309" FontSize="11" Margin="2,2,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasFieldWarning}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                    <GridViewColumn Header="Value" Width="170">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="{Binding ResolvedValueLabel}" Foreground="#6B7280" FontSize="11" Margin="2,2,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Mode}" Value="{x:Static core:ProfileFieldMode.Code}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="Unresolved value" Foreground="#B45309" FontSize="11" Margin="2,2,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasValueWarning}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                    <GridViewColumn Header="Mode" Width="90">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <ComboBox SelectedValue="{Binding Mode}" SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="Label" Tag="{x:Static core:ProfileFieldMode.Label}" />
+                                    <ComboBoxItem Content="Code" Tag="{x:Static core:ProfileFieldMode.Code}" />
+                                </ComboBox>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </StackPanel>
+</UserControl>

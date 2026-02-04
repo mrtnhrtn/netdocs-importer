@@ -1,0 +1,42 @@
+<UserControl x:Class="NetDocsImporter.App.Views.Steps.NdImportConfigStepView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="500" d:DesignWidth="700">
+    <StackPanel>
+        <TextBlock Text="ndImport" Style="{StaticResource SectionTitle}" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
+            <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" />
+        </StackPanel>
+        <TextBlock Text="Path to ndimport.exe" Foreground="#555555" />
+        <TextBox Text="{Binding NdImportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+        <TextBlock Text="Host" Foreground="#555555" />
+        <ComboBox SelectedValue="{Binding NdImportHost}" SelectedValuePath="Content" Margin="0,2,0,6">
+            <ComboBoxItem Content="upload.au.netdocuments.com" />
+            <ComboBoxItem Content="upload.eu.netdocuments.com" />
+            <ComboBoxItem Content="upload.vault.netvoyage.com" />
+        </ComboBox>
+        <TextBlock Text="Cabinet" Foreground="#555555" />
+        <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+        <TextBlock Text="Username" Foreground="#555555" />
+        <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+        <TextBlock Text="Password (optional, not saved)" Foreground="#555555" />
+        <TextBox Text="{Binding NdImportPassword, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+        <CheckBox Content="Include password on CLI (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
+        <TextBlock Text="Warning: CLI passwords are sensitive. Prefer ndImport's prompt when possible." Foreground="#9F6000" TextWrapping="Wrap" Margin="0,0,0,6" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <CheckBox Content="/utf8=Y" IsChecked="{Binding NdImportUtf8}" Margin="0,0,10,0" />
+            <CheckBox Content="/dateformat=Y" IsChecked="{Binding NdImportDateFormat}" Margin="0,0,10,0" />
+            <CheckBox Content="/noval=Y" IsChecked="{Binding NdImportNoValidation}" />
+        </StackPanel>
+        <TextBlock Text="Export preset" Foreground="#555555" />
+        <ComboBox ItemsSource="{Binding NdImportExportPresets}" SelectedItem="{Binding NdImportExportPreset}" Margin="0,2,0,6" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="/maxerr" VerticalAlignment="Center" Margin="0,0,6,0" />
+            <TextBox Width="70" Text="{Binding NdImportMaxErrors, UpdateSourceTrigger=PropertyChanged}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

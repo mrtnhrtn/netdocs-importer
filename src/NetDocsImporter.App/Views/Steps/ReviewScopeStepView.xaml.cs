@@ -1,0 +1,149 @@
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+
+namespace NetDocsImporter.App.Views.Steps;
+
+public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
+{
+    public ReviewScopeStepView()
+    {
+        InitializeComponent();
+    }
+
+    public void OnFolderTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFolderTreeSelectedItemChanged(sender, e);
+        }
+    }
+
+    public void OnFolderTreeRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFolderTreeRightButtonDown(sender, e);
+        }
+    }
+
+    public void OnFolderTreeExpanded(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFolderTreeExpanded(sender, e);
+        }
+    }
+
+    public void OnFolderTreeCollapsed(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFolderTreeCollapsed(sender, e);
+        }
+    }
+
+    public void OnSetImportInclude(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSetImportInclude(sender, e);
+        }
+    }
+
+    public void OnSetImportExclude(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSetImportExclude(sender, e);
+        }
+    }
+
+    public void OnSetImportInherit(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSetImportInherit(sender, e);
+        }
+    }
+
+    public void OnApplyImportToChildren(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnApplyImportToChildren(sender, e);
+        }
+    }
+
+    public void OnFilterAll(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFilterAll(sender, e);
+        }
+    }
+
+    public void OnFilterIncluded(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFilterIncluded(sender, e);
+        }
+    }
+
+    public void OnFilterExcluded(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFilterExcluded(sender, e);
+        }
+    }
+
+    public void OnFilterOverrides(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFilterOverrides(sender, e);
+        }
+    }
+
+    public void OnFilterLarge(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnFilterLarge(sender, e);
+        }
+    }
+
+    public void OnSetFileInclude(object sender, RoutedEventArgs e)
+    {
+        _ = SetFileImportModeAsync("include");
+    }
+
+    public void OnSetFileExclude(object sender, RoutedEventArgs e)
+    {
+        _ = SetFileImportModeAsync("exclude");
+    }
+
+    public void OnClearFileOverride(object sender, RoutedEventArgs e)
+    {
+        _ = SetFileImportModeAsync("inherit");
+    }
+
+    private async Task SetFileImportModeAsync(string importMode)
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        var rows = FolderFilesGrid.SelectedItems.OfType<FileRowView>().ToList();
+        if (rows.Count == 0 && FolderFilesGrid.SelectedItem is FileRowView row)
+        {
+            rows.Add(row);
+        }
+
+        await viewModel.SetFileImportModeAsync(rows, importMode);
+    }
+}

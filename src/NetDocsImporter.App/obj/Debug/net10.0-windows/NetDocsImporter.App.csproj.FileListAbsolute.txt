@@ -57,3 +57,15 @@ C:\dev\netdocs-importer\src\NetDocsImporter.App\bin\Debug\net10.0-windows\NetDoc
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\NetDocsImporter.App.sourcelink.json
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Styles.baml
 C:\dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\App.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\NdImportConfigStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\ProfilingStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\RecentJobsStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\ReviewScopeStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\RunImportStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\SelectFolderStepView.baml
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\NdImportConfigStepView.g.cs
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\ProfilingStepView.g.cs
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\RecentJobsStepView.g.cs
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\ReviewScopeStepView.g.cs
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\RunImportStepView.g.cs
+C:\Dev\netdocs-importer\src\NetDocsImporter.App\obj\Debug\net10.0-windows\Views\Steps\SelectFolderStepView.g.cs

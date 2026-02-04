@@ -82,6 +82,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private ProfileSchemaDictionary? _schema;
     private readonly object _settingsSaveLock = new();
     private bool _settingsSavePending;
+    private StepItem? _currentStep;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
@@ -106,6 +107,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
     public ObservableCollection<FileRowView> FolderFiles { get; } = new();
     public ObservableCollection<NdImportSessionView> NdImportSessions { get; } = new();
+    public ObservableCollection<StepItem> Steps { get; } = new();
     public ObservableCollection<string> NdImportExportPresets { get; } = new()
     {
         "Standard",
@@ -325,6 +327,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _statusText, value);
     }
 
+    public StepItem? CurrentStep
+    {
+        get => _currentStep;
+        set => SetField(ref _currentStep, value);
+    }
+
     public string NdImportExportPreset
     {
         get => _ndImportExportPreset;
@@ -456,6 +464,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
         FolderRoots.CollectionChanged += (_, _) => HasFolderRoots = FolderRoots.Count > 0;
+
+        Steps.Add(new StepItem(1, StepKey.SelectFolder, "Select folder", "Choose a source folder and begin scan", this));
+        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Review & scope", "Browse folders/files, include/exclude", this));
+        Steps.Add(new StepItem(3, StepKey.Profiling, "Profiling", "Set profile fields and overrides", this));
+        Steps.Add(new StepItem(4, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
+        Steps.Add(new StepItem(5, StepKey.RunImport, "Run import", "Start/pause/resume/cancel + sessions", this));
+        Steps.Add(new StepItem(6, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+
+        CurrentStep = Steps[0];
     }
     public async Task SelectFolderAndScanAsync()
     {
@@ -1852,4 +1869,39 @@ public sealed class FileRowView
 
         return string.Format(CultureInfo.CurrentCulture, "{0:0.##} {1}", size, suffixes[order]);
     }
+}
+
+public enum StepKey
+{
+    SelectFolder,
+    ReviewScope,
+    Profiling,
+    NdImportConfig,
+    RunImport,
+    RecentJobs
+}
+
+public sealed class StepItem
+{
+    public StepItem(int number, StepKey key, string title, string subtitle, object viewModel)
+    {
+        Number = number;
+        Key = key;
+        Title = title;
+        Subtitle = subtitle;
+        ViewModel = viewModel;
+        IsEnabled = true;
+    }
+
+    public int Number { get; }
+
+    public StepKey Key { get; }
+
+    public string Title { get; }
+
+    public string Subtitle { get; }
+
+    public object ViewModel { get; }
+
+    public bool IsEnabled { get; set; }
 }
