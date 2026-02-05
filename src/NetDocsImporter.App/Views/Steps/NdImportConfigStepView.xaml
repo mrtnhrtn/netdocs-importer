@@ -23,8 +23,9 @@
         <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
         <TextBlock Text="Username" Foreground="#555555" />
         <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-        <TextBlock Text="Password (optional, not saved)" Foreground="#555555" />
+        <TextBlock Text="Password (optional)" Foreground="#555555" />
         <TextBox Text="{Binding NdImportPassword, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+        <CheckBox Content="Remember password on this device (encrypted)" IsChecked="{Binding RememberNdImportPassword}" Margin="0,0,0,6" />
         <CheckBox Content="Include password on CLI (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
         <TextBlock Text="Warning: CLI passwords are sensitive. Prefer ndImport's prompt when possible." Foreground="#9F6000" TextWrapping="Wrap" Margin="0,0,0,6" />
         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">

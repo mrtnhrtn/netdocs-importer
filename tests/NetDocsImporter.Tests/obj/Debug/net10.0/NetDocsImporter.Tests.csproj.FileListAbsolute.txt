@@ -128,3 +128,4 @@ C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\runtimes\w
 C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImporter.Data.dll
 C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImporter.Data.pdb
 C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\obj\Debug\net10.0\NetDocsImporter.Tests.sourcelink.json
+C:\Dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\System.Security.Cryptography.ProtectedData.dll

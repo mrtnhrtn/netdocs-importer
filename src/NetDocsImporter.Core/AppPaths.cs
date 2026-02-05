@@ -7,6 +7,7 @@ public sealed class AppPaths
         BaseDataDirectory = baseDataDirectory ?? ResolveBaseDataDirectory(executablePath);
         LogsDirectory = Path.Combine(BaseDataDirectory, "logs");
         ReportsDirectory = Path.Combine(BaseDataDirectory, "reports");
+        SecretsDirectory = Path.Combine(BaseDataDirectory, "secrets");
 
         EnsureDirectories();
     }
@@ -16,6 +17,8 @@ public sealed class AppPaths
     public string LogsDirectory { get; }
 
     public string ReportsDirectory { get; }
+
+    public string SecretsDirectory { get; }
 
     public string DatabasePath => Path.Combine(BaseDataDirectory, "jobs.db");
 
@@ -53,5 +56,6 @@ public sealed class AppPaths
         Directory.CreateDirectory(BaseDataDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(ReportsDirectory);
+        Directory.CreateDirectory(SecretsDirectory);
     }
 }

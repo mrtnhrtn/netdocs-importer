@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using NetDocsImporter.Core;
+using NetDocsImporter.Core.Security;
 using NetDocsImporter.Data;
 
 namespace NetDocsImporter.App;
@@ -65,6 +66,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _ndImportCabinet = string.Empty;
     private string _ndImportUsername = string.Empty;
     private string _ndImportPassword = string.Empty;
+    private bool _rememberNdImportPassword;
     private bool _ndImportIncludePassword;
     private bool _ndImportUtf8 = true;
     private bool _ndImportDateFormat = true;
@@ -86,6 +88,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
+    private readonly SecretStore _secretStore;
     private readonly JobStore _jobStore;
     private readonly ScanJobRunner _jobRunner;
     private readonly SynchronizationContext? _uiContext;
@@ -421,7 +424,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string NdImportPassword
     {
         get => _ndImportPassword;
-        set => SetField(ref _ndImportPassword, value);
+        set
+        {
+            if (SetField(ref _ndImportPassword, value) && RememberNdImportPassword)
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool RememberNdImportPassword
+    {
+        get => _rememberNdImportPassword;
+        set
+        {
+            if (SetField(ref _rememberNdImportPassword, value))
+            {
+                QueueSettingsSave();
+                if (!value)
+                {
+                    _secretStore.DeleteSecret(GetPasswordSecretName());
+                }
+            }
+        }
     }
 
     public bool NdImportIncludePassword
@@ -457,6 +482,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public MainViewModel()
     {
         _paths = new AppPaths();
+        _secretStore = new SecretStore(_paths.SecretsDirectory);
         _jobStore = new JobStore(_paths.DatabasePath);
         _jobRunner = new ScanJobRunner(_jobStore);
         _uiContext = SynchronizationContext.Current;
@@ -933,6 +959,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(NdImportUsername));
         }
 
+        _rememberNdImportPassword = _settings.RememberNdImportPassword;
+        OnPropertyChanged(nameof(RememberNdImportPassword));
+
+        if (_rememberNdImportPassword)
+        {
+            var secretName = GetPasswordSecretName();
+            var secret = await _secretStore.ReadSecretAsync(secretName);
+            if (!string.IsNullOrWhiteSpace(secret))
+            {
+                _ndImportPassword = secret;
+                OnPropertyChanged(nameof(NdImportPassword));
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(_settings.ProfileSchemaPath))
         {
             SchemaPath = _settings.ProfileSchemaPath;
@@ -966,12 +1006,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task SaveSettingsAsync()
     {
+        var previousSecretRef = _settings.NdImportPasswordRef;
+
         _settings.NdImportPath = NdImportPath;
         _settings.NdImportHost = NdImportHost;
         _settings.NdImportCabinet = NdImportCabinet;
         _settings.NdImportUsername = NdImportUsername;
+        _settings.RememberNdImportPassword = RememberNdImportPassword;
+        _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
+
+        if (RememberNdImportPassword && !string.IsNullOrWhiteSpace(NdImportPassword))
+        {
+            await _secretStore.WriteSecretAsync(_settings.NdImportPasswordRef, NdImportPassword);
+        }
+        else
+        {
+            var secretToDelete = string.IsNullOrWhiteSpace(previousSecretRef)
+                ? AppSettings.DefaultNdImportPasswordRef
+                : previousSecretRef;
+            _secretStore.DeleteSecret(secretToDelete);
+        }
+
         await AppSettings.SaveAsync(_paths.SettingsPath, _settings);
+    }
+
+    private string GetPasswordSecretName()
+    {
+        return string.IsNullOrWhiteSpace(_settings.NdImportPasswordRef)
+            ? AppSettings.DefaultNdImportPasswordRef
+            : _settings.NdImportPasswordRef;
     }
 
     private void UpdateSchemaMatch()

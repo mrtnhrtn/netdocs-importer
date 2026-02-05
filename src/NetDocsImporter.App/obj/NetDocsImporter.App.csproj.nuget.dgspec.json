@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj": {}
+    "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj": {}
   },
   "projects": {
-    "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj": {
+    "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
+        "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
         "projectName": "NetDocsImporter.App",
-        "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
+        "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
         "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-        "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\obj\\",
+        "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -26,11 +26,11 @@
           "net10.0-windows7.0": {
             "targetAlias": "net10.0-windows",
             "projectReferences": {
-              "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
-                "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
+              "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
+                "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
               },
-              "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-                "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+              "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+                "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
               }
             }
           }
@@ -373,14 +373,14 @@
         }
       }
     },
-    "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
+    "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
+        "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
         "projectName": "NetDocsImporter.Core",
-        "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
+        "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
         "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-        "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\obj\\",
+        "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -395,8 +395,8 @@
           "net10.0": {
             "targetAlias": "net10.0",
             "projectReferences": {
-              "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-                "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+              "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+                "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
               }
             }
           }
@@ -416,6 +416,12 @@
       "frameworks": {
         "net10.0": {
           "targetAlias": "net10.0",
+          "dependencies": {
+            "System.Security.Cryptography.ProtectedData": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            }
+          },
           "imports": [
             "net461",
             "net462",
@@ -710,14 +716,14 @@
         }
       }
     },
-    "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+    "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
+        "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
         "projectName": "NetDocsImporter.Data",
-        "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
+        "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
         "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-        "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\obj\\",
+        "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"

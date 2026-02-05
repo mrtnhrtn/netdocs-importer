@@ -4,7 +4,9 @@ namespace NetDocsImporter.Core;
 
 public sealed class AppSettings
 {
-    public int Version { get; set; } = 1;
+    public const string DefaultNdImportPasswordRef = "ndimport-password.dat";
+
+    public int Version { get; set; } = 2;
 
     public string NdImportPath { get; set; } = string.Empty;
 
@@ -13,6 +15,10 @@ public sealed class AppSettings
     public string NdImportCabinet { get; set; } = string.Empty;
 
     public string NdImportUsername { get; set; } = string.Empty;
+
+    public bool RememberNdImportPassword { get; set; }
+
+    public string NdImportPasswordRef { get; set; } = string.Empty;
 
     public string ProfileSchemaPath { get; set; } = string.Empty;
 
