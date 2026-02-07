@@ -30,6 +30,10 @@ public sealed partial class MainViewModel
 
     public string ReviewTargetContainerName => _jobContext.TargetContainerName;
 
+    public string ReviewTargetContainerType => _jobContext.TargetContainerType;
+
+    public string ReviewTargetPath => _jobContext.TargetPath;
+
     public string ReviewProfileLastSyncDisplay =>
         _jobContext.NetDocumentsProfileContext?.LastSyncUtc?.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) ?? "--";
 
@@ -52,7 +56,10 @@ public sealed partial class MainViewModel
 
     public bool HasReviewTargetContext =>
         !string.IsNullOrWhiteSpace(_jobContext.RepositoryId) &&
-        !string.IsNullOrWhiteSpace(_jobContext.CabinetId);
+        !string.IsNullOrWhiteSpace(_jobContext.CabinetId) &&
+        !string.IsNullOrWhiteSpace(_jobContext.TargetContainerId);
+
+    public ObservableCollection<NetDocumentsEffectiveDefaultView> ReviewEffectiveDefaults => EffectiveProfileDefaultsRows;
 
     public async Task ResyncAttributesForReviewScopeAsync()
     {
@@ -130,6 +137,11 @@ public sealed partial class MainViewModel
         _jobContext.RepositoryId = SelectedNetDocumentsRepositoryId;
         _jobContext.CabinetId = SelectedNetDocumentsCabinetId;
         _jobContext.CabinetName = SelectedNetDocumentsCabinetName;
+        _jobContext.TargetContainerId = SelectedNetDocumentsTargetId;
+        _jobContext.TargetContainerName = SelectedNetDocumentsTargetName;
+        _jobContext.TargetContainerType = SelectedNetDocumentsTargetTypeDisplay;
+        _jobContext.TargetPath = SelectedNetDocumentsTargetPath;
+        _jobContext.EffectiveProfileDefaults = EffectiveProfileDefaults;
     }
 
     private void NotifyReviewContextChanged()
@@ -138,6 +150,8 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(ReviewTargetCabinet));
         OnPropertyChanged(nameof(ReviewTargetContainerId));
         OnPropertyChanged(nameof(ReviewTargetContainerName));
+        OnPropertyChanged(nameof(ReviewTargetContainerType));
+        OnPropertyChanged(nameof(ReviewTargetPath));
         OnPropertyChanged(nameof(ReviewProfileLastSyncDisplay));
         OnPropertyChanged(nameof(ReviewProfileAttributeCountDisplay));
         OnPropertyChanged(nameof(ReviewProfileLookupCountDisplay));
@@ -224,6 +238,17 @@ public sealed partial class MainViewModel
             var target = isRoot ? "Job defaults" : folder.RelativePath;
 
             var resolvedValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (_jobContext.EffectiveProfileDefaults?.HasValues == true)
+            {
+                foreach (var value in _jobContext.EffectiveProfileDefaults.ValuesByAttributeId.Values)
+                {
+                    if (!string.IsNullOrWhiteSpace(value.AttributeName))
+                    {
+                        resolvedValues[value.AttributeName] = value.RawValue;
+                    }
+                }
+            }
+
             foreach (var entry in profileEntries)
             {
                 var fieldName = ResolveFieldNameForValidation(entry, _schema);
@@ -396,7 +421,13 @@ public sealed class ImportJobContext
 
     public string TargetContainerName { get; set; } = string.Empty;
 
+    public string TargetContainerType { get; set; } = string.Empty;
+
+    public string TargetPath { get; set; } = string.Empty;
+
     public NetDocumentsProfileContext? NetDocumentsProfileContext { get; set; }
+
+    public EffectiveProfileDefaults? EffectiveProfileDefaults { get; set; }
 }
 
 public sealed class NetDocumentsProfileContext

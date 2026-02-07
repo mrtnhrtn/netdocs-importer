@@ -98,7 +98,9 @@
                         <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{Binding ReviewTargetRepository, StringFormat=Repository: {0}}" Foreground="#555555" />
                         <TextBlock Text="{Binding ReviewTargetCabinet, StringFormat=Cabinet: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewTargetContainerType, StringFormat=Target type: {0}}" Foreground="#555555" />
                         <TextBlock Text="{Binding ReviewTargetContainerName, StringFormat=Container: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewTargetPath, StringFormat=Path: {0}}" Foreground="#555555" TextWrapping="Wrap" />
                         <TextBlock Text="{Binding ReviewProfileLastSyncDisplay, StringFormat=Last sync: {0}}" Foreground="#555555" />
                         <TextBlock Text="{Binding ReviewProfileAttributeCountDisplay, StringFormat=Attributes: {0}}" Foreground="#555555" />
                         <TextBlock Text="{Binding ReviewProfileRequiredCountDisplay, StringFormat=Required: {0}}" Foreground="#555555" />
@@ -150,6 +152,21 @@
                                     <GridViewColumn Header="Scope" Width="55" DisplayMemberBinding="{Binding ScopeDisplay}" />
                                     <GridViewColumn Header="Target" Width="95" DisplayMemberBinding="{Binding Target}" />
                                     <GridViewColumn Header="Message" Width="250" DisplayMemberBinding="{Binding Message}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </StackPanel>
+                </Border>
+
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Inherited Defaults (Read-only Baseline)" Style="{StaticResource SectionTitle}" />
+                        <ListView ItemsSource="{Binding ReviewEffectiveDefaults}" Height="120">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Attribute" Width="140" DisplayMemberBinding="{Binding AttributeName}" />
+                                    <GridViewColumn Header="Display" Width="110" DisplayMemberBinding="{Binding DisplayValue}" />
+                                    <GridViewColumn Header="Raw" Width="110" DisplayMemberBinding="{Binding RawValue}" />
                                 </GridView>
                             </ListView.View>
                         </ListView>

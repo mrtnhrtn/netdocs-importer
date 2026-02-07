@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using NetDocsImporter.Data;
 
@@ -34,6 +35,8 @@ public sealed class NdImportExportOptions
     public ProfileSchemaDictionary? ProfileSchema { get; set; }
 
     public bool ValidateLookupKeys { get; set; } = true;
+
+    public EffectiveProfileDefaults? EffectiveProfileDefaults { get; set; }
 }
 
 public sealed class NdImportExportResult
@@ -157,8 +160,10 @@ public sealed class NdImportCsvExporter
             "FOLDER"
         };
 
-        var profileColumns = options.IncludeProfileMetadata
-            ? BuildProfileColumns(folders, folderProfiles, options.ProfileSchema)
+        var includeProfileMetadata = options.IncludeProfileMetadata || (options.EffectiveProfileDefaults?.HasValues ?? false);
+
+        var profileColumns = includeProfileMetadata
+            ? BuildProfileColumns(folders, folderProfiles, options.ProfileSchema, options.EffectiveProfileDefaults)
             : new List<string>();
 
         header.AddRange(profileColumns);
@@ -173,9 +178,14 @@ public sealed class NdImportCsvExporter
 
         await writer.WriteLineAsync(string.Join(",", header));
 
-        var effectiveProfiles = options.IncludeProfileMetadata
+        var effectiveProfiles = includeProfileMetadata
             ? BuildEffectiveProfiles(folders, folderProfiles)
             : new Dictionary<string, IReadOnlyList<ProfileFieldEntry>>(StringComparer.OrdinalIgnoreCase);
+
+        if (options.EffectiveProfileDefaults?.HasValues == true)
+        {
+            Trace.WriteLine($"Applying effective profile defaults to export: columns={options.EffectiveProfileDefaults.ValuesByAttributeId.Count}");
+        }
 
         var warnings = new List<ExportWarning>();
 
@@ -195,7 +205,7 @@ public sealed class NdImportCsvExporter
                 NdImportCsv.Escape(folder)
             };
 
-            if (options.IncludeProfileMetadata)
+            if (includeProfileMetadata)
             {
                 if (!effectiveProfiles.TryGetValue(file.FolderId ?? string.Empty, out var profileEntries))
                 {
@@ -342,10 +352,27 @@ public sealed class NdImportCsvExporter
     private static IReadOnlyList<string> BuildProfileColumns(
         IReadOnlyList<FolderRecord> folders,
         IReadOnlyDictionary<string, string> folderProfiles,
-        ProfileSchemaDictionary? schema)
+        ProfileSchemaDictionary? schema,
+        EffectiveProfileDefaults? effectiveDefaults)
     {
         var columns = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (effectiveDefaults?.HasValues == true)
+        {
+            foreach (var value in effectiveDefaults.ValuesByAttributeId.Values)
+            {
+                if (string.IsNullOrWhiteSpace(value.AttributeName))
+                {
+                    continue;
+                }
+
+                if (seen.Add(value.AttributeName))
+                {
+                    columns.Add(value.AttributeName);
+                }
+            }
+        }
 
         var effectiveProfiles = BuildEffectiveProfiles(folders, folderProfiles);
         foreach (var profile in effectiveProfiles.Values)
@@ -411,7 +438,8 @@ public sealed class NdImportCsvExporter
         List<ExportWarning> warnings)
     {
         var schema = options.ProfileSchema;
-        var valuesByColumn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var valuesByColumn = BuildDefaultValuesByColumn(options.EffectiveProfileDefaults);
+        var explicitColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
             var column = ResolveFieldName(entry, schema);
@@ -420,11 +448,14 @@ public sealed class NdImportCsvExporter
                 continue;
             }
 
-            var value = ResolveFieldValue(entry, options, file, warnings);
-            if (!valuesByColumn.ContainsKey(column))
+            if (explicitColumns.Contains(column))
             {
-                valuesByColumn[column] = value;
+                continue;
             }
+
+            var value = ResolveFieldValue(entry, options, file, warnings);
+            valuesByColumn[column] = value;
+            explicitColumns.Add(column);
         }
 
         var values = new List<string>(columns.Count);
@@ -434,6 +465,28 @@ public sealed class NdImportCsvExporter
         }
 
         return values;
+    }
+
+    private static Dictionary<string, string> BuildDefaultValuesByColumn(EffectiveProfileDefaults? effectiveDefaults)
+    {
+        var valuesByColumn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (effectiveDefaults?.HasValues != true)
+        {
+            return valuesByColumn;
+        }
+
+        foreach (var value in effectiveDefaults.ValuesByAttributeId.Values)
+        {
+            if (string.IsNullOrWhiteSpace(value.AttributeName))
+            {
+                continue;
+            }
+
+            var raw = string.IsNullOrWhiteSpace(value.RawValue) ? value.DisplayValue : value.RawValue;
+            valuesByColumn[value.AttributeName] = EscapeInlineSemicolons(raw);
+        }
+
+        return valuesByColumn;
     }
 
     private static string ResolveFieldName(ProfileFieldEntry entry, ProfileSchemaDictionary? schema)

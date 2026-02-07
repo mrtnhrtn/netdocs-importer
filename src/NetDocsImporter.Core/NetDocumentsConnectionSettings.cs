@@ -34,5 +34,21 @@ public sealed class NetDocumentsConnectionSettings
 
     public string SelectedCabinetName { get; set; } = string.Empty;
 
+    public string SelectedTargetType { get; set; } = string.Empty;
+
+    public string SelectedTargetId { get; set; } = string.Empty;
+
+    public string SelectedTargetName { get; set; } = string.Empty;
+
+    public string SelectedTargetParentWorkspaceId { get; set; } = string.Empty;
+
+    public string EffectiveProfileDefaultsJson { get; set; } = string.Empty;
+
+    public string FavoriteTargetsJson { get; set; } = string.Empty;
+
+    public string RecentTargetsJson { get; set; } = string.Empty;
+
+    public string LastWorkspaceQuery { get; set; } = string.Empty;
+
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
 }

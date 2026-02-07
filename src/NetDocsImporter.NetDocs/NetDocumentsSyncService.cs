@@ -3,7 +3,7 @@ using NetDocsImporter.Data;
 
 namespace NetDocsImporter.NetDocs;
 
-public sealed class NetDocumentsSyncService
+public sealed partial class NetDocumentsSyncService
 {
     private readonly NetDocumentsApiClient _apiClient;
     private readonly JobStore _jobStore;

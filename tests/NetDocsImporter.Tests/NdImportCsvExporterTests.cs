@@ -306,7 +306,7 @@ public class NdImportCsvExporterTests
         var payload = ProfilePayloadCodec.Serialize(new[]
         {
             new ProfileFieldEntry("1001", "2001", ProfileFieldMode.Code),
-            new ProfileFieldEntry("1001", "9999", ProfileFieldMode.Code)
+            new ProfileFieldEntry("1002", "9999", ProfileFieldMode.Code)
         });
         await store.UpsertFolderProfileAsync(jobId, rootFolderId, payload);
 
@@ -318,7 +318,11 @@ public class NdImportCsvExporterTests
                 new ProfileSchemaField(
                     "1001",
                     "Document Type",
-                    new[] { new ProfileSchemaValue("2001", "Correspondence") })
+                    new[] { new ProfileSchemaValue("2001", "Correspondence") }),
+                new ProfileSchemaField(
+                    "1002",
+                    "Matter Type",
+                    new[] { new ProfileSchemaValue("3001", "Litigation") })
             });
 
         var options = new NdImportExportOptions
@@ -459,6 +463,55 @@ public class NdImportCsvExporterTests
 
         var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
         Assert.Contains(warningLines, line => line.Contains("UNRESOLVED_VALUE", StringComparison.Ordinal));
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_AppliesEffectiveProfileDefaultsToAllRows()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include");
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\doc.txt",
+            "doc.txt",
+            42,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null));
+
+        var defaults = new EffectiveProfileDefaults();
+        defaults.ValuesByAttributeId["1001"] = new NdProfileValue
+        {
+            AttributeId = "1001",
+            AttributeName = "Client",
+            RawValue = "CL-001",
+            DisplayValue = "Client 001"
+        };
+
+        var result = await new NdImportCsvExporter(store).ExportAsync(
+            jobId,
+            reportsDir,
+            new NdImportExportOptions
+            {
+                IncludeAuditStamps = false,
+                EffectiveProfileDefaults = defaults
+            });
+
+        var lines = await File.ReadAllLinesAsync(result.OutputPath);
+        Assert.Contains("Client", lines[0]);
+        Assert.Contains("CL-001", lines[1]);
         CleanupTempRoot(tempRoot);
     }
 

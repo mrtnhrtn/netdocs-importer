@@ -48,6 +48,10 @@ public sealed partial class MainViewModel
             {
                 OnPropertyChanged(nameof(CanSyncNetDocumentsCabinets));
                 OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
+                OnPropertyChanged(nameof(CanSelectSourceFolder));
+                OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanContinueToReviewScope));
             }
         }
     }
@@ -68,10 +72,13 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            _targetProfileCache.Clear();
             FilterCabinetsByRepository();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
+            OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
+            _ = LoadNetDocumentsTargetContainersAsync();
         }
     }
 
@@ -85,6 +92,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            _targetProfileCache.Clear();
             var cabinet = _netDocumentsCabinets.FirstOrDefault(c => c.CabinetId == value);
             _selectedNetDocumentsCabinetName = cabinet?.CabinetName ?? string.Empty;
             OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
@@ -93,9 +101,11 @@ public sealed partial class MainViewModel
                 NdImportCabinet = cabinet.CabinetName;
             }
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
+            OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
             _ = RefreshReviewScopeNetDocumentsAsync();
+            _ = LoadNetDocumentsTargetContainersAsync();
         }
     }
 
@@ -201,6 +211,7 @@ public sealed partial class MainViewModel
             {
                 await SyncNetDocumentsAttributesAsync();
             }
+            await LoadNetDocumentsTargetContainersAsync();
 
             await RefreshReviewScopeNetDocumentsAsync();
 
@@ -247,6 +258,7 @@ public sealed partial class MainViewModel
             var region = SelectedNetDocumentsRegion.ToString();
             await sync.SyncCabinetsAsync(region);
             await LoadNetDocumentsMetadataAsync();
+            await LoadNetDocumentsTargetContainersAsync();
             StatusText = "NetDocuments cabinets synced.";
             await RefreshReviewScopeNetDocumentsAsync();
         }
@@ -278,6 +290,7 @@ public sealed partial class MainViewModel
             await LoadSyncedAttributesForSelectedCabinetAsync();
             await LoadSchemaFromSyncedMetadataAsync();
             await EnsureCurrentJobRepositoryAsync(SelectedNetDocumentsRepositoryId);
+            await LoadNetDocumentsTargetContainersAsync();
             await RefreshReviewScopeNetDocumentsAsync();
 
             StatusText = $"Synced {attributes.Count} profile attributes for cabinet {SelectedNetDocumentsCabinetName}.";
@@ -328,6 +341,7 @@ public sealed partial class MainViewModel
 
         FilterCabinetsByRepository();
         await LoadSyncedAttributesForSelectedCabinetAsync();
+        await LoadNetDocumentsTargetContainersAsync();
         await RefreshReviewScopeNetDocumentsAsync();
     }
 

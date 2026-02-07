@@ -147,6 +147,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (SetField(ref _currentJobId, value))
             {
                 OnPropertyChanged(nameof(CanStartImport));
+                OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanContinueToReviewScope));
             }
         }
     }
@@ -583,6 +586,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
     public async Task SelectFolderAndScanAsync()
     {
+        if (!CanSelectSourceFolder)
+        {
+            StatusText = "Connect to NetDocuments before selecting a source folder.";
+            return;
+        }
+
         if (IsScanning)
         {
             return;
@@ -638,7 +647,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 SelectedNetDocumentsRepositoryId);
             StatusText = "Scan complete.";
             CurrentJobState = "Ready";
-            SetCurrentStep(StepKey.ReviewScope);
+            OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanContinueToReviewScope));
         }
         catch (OperationCanceledException)
         {
@@ -659,7 +670,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             await LoadJobHeaderAsync();
             await RefreshImportDataAsync();
             await LoadFolderTreeAsync();
+            if (IsNetDocumentsConnected)
+            {
+                await LoadNetDocumentsTargetContainersAsync();
+            }
             await RefreshReviewScopeNetDocumentsAsync();
+            SetCurrentStep(StepKey.ReviewScope);
         }
     }
 
@@ -924,6 +940,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         await LoadSettingsAsync();
         await LoadNetDocumentsMetadataAsync();
         await TryRestoreNetDocumentsSessionAsync();
+        if (IsNetDocumentsConnected)
+        {
+            await LoadNetDocumentsTargetContainersAsync();
+        }
         await RefreshReviewScopeNetDocumentsAsync();
         if (string.IsNullOrWhiteSpace(NdImportPath))
         {
@@ -947,13 +967,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             IncludeAuditStamps = true,
             MappingMode = NdImportMappingMode.Mirror,
             AnchorFolderPath = string.Empty,
-            ImportedBy = string.IsNullOrWhiteSpace(NdImportUsername) ? "Imported Content" : NdImportUsername
+            ImportedBy = string.IsNullOrWhiteSpace(NdImportUsername) ? "Imported Content" : NdImportUsername,
+            EffectiveProfileDefaults = EffectiveProfileDefaults
         };
 
         if (string.Equals(NdImportExportPreset, "Rich metadata (schema-backed)", StringComparison.OrdinalIgnoreCase))
         {
             options.IncludeProfileMetadata = true;
             options.ProfileSchema = _schema;
+        }
+
+        if (EffectiveProfileDefaults.HasValues)
+        {
+            options.IncludeProfileMetadata = true;
+            System.Diagnostics.Trace.WriteLine($"Applying {EffectiveProfileDefaults.ValuesByAttributeId.Count} effective profile defaults to CSV export.");
         }
 
         var result = await ExportNdImportAsync(options);
@@ -1092,6 +1119,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _selectedNetDocumentsRepositoryId = netDocuments.SelectedRepositoryId ?? string.Empty;
         _selectedNetDocumentsCabinetId = netDocuments.SelectedCabinetId ?? string.Empty;
         _selectedNetDocumentsCabinetName = netDocuments.SelectedCabinetName ?? string.Empty;
+        RestoreTargetSelectionFromSettings(netDocuments);
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
@@ -1149,6 +1177,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         netDocuments.SelectedRepositoryId = SelectedNetDocumentsRepositoryId;
         netDocuments.SelectedCabinetId = SelectedNetDocumentsCabinetId;
         netDocuments.SelectedCabinetName = SelectedNetDocumentsCabinetName;
+        SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
         netDocuments.ClientSecretRef = string.IsNullOrWhiteSpace(NetDocumentsClientSecret)
             ? string.Empty

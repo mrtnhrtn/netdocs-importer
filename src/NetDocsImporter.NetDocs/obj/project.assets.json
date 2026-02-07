@@ -401,11 +401,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj",
+      "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj",
       "projectName": "NetDocsImporter.NetDocs",
-      "projectPath": "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj",
+      "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj",
       "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-      "outputPath": "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\obj\\",
+      "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -420,11 +420,11 @@
         "net10.0": {
           "targetAlias": "net10.0",
           "projectReferences": {
-            "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
-              "projectPath": "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
+            "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
+              "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
             },
-            "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-              "projectPath": "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+            "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+              "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
             }
           }
         }

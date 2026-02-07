@@ -3,19 +3,222 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:NetDocsImporter.App"
              mc:Ignorable="d"
-             d:DesignHeight="400" d:DesignWidth="700">
+             d:DesignHeight="720" d:DesignWidth="900">
     <StackPanel>
-        <TextBlock Text="Select folder" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Choose a source folder and begin scan" Foreground="#555555" Margin="0,0,0,8" />
-        <StackPanel Orientation="Horizontal">
-            <Button Content="Select Folder" Width="120" Margin="0,0,6,0" Click="OnSelectFolder"
-                    IsEnabled="{Binding IsScanning, Converter={StaticResource InverseBooleanConverter}}"
-                    Style="{StaticResource SecondaryButton}" />
-            <Button Content="Cancel Scan" Width="110" Click="OnCancelScan"
-                    IsEnabled="{Binding IsScanning}"
-                    Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
-                    Style="{StaticResource SecondaryButton}" />
-        </StackPanel>
+        <TextBlock Text="Connect, Select Folder, Target Container" Style="{StaticResource SectionTitle}" />
+        <TextBlock Text="Connect first, then scan a local folder, then choose a Workspace, Workspace Filter, or Folder destination."
+                   Foreground="#555555" Margin="0,0,0,8" TextWrapping="Wrap" />
+
+        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="1) NetDocuments Connection" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <TextBlock Text="Region" Foreground="#555555" />
+                <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
+                          SelectedItem="{Binding SelectedNetDocumentsRegion}"
+                          Margin="0,2,0,6" />
+                <TextBlock Text="Client Id" Foreground="#555555" />
+                <TextBox Text="{Binding NetDocumentsClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                <TextBlock Text="Client Secret" Foreground="#555555" />
+                <PasswordBox Margin="0,2,0,6"
+                             Loaded="OnNetDocumentsClientSecretLoaded"
+                             PasswordChanged="OnNetDocumentsClientSecretPasswordChanged" />
+                <TextBlock Text="Redirect URI" Foreground="#555555" />
+                <TextBox Text="{Binding NetDocumentsRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Connect"
+                            Width="110"
+                            Margin="0,0,6,0"
+                            Click="OnConnectToNetDocuments"
+                            IsEnabled="{Binding CanConnectToNetDocuments}"
+                            Style="{StaticResource PrimaryButton}" />
+                    <Button Content="Sync Cabinets"
+                            Width="120"
+                            Margin="0,0,6,0"
+                            Click="OnSyncNetDocumentsCabinets"
+                            IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
+                            Style="{StaticResource SecondaryButton}" />
+                </StackPanel>
+                <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" />
+            </StackPanel>
+        </Border>
+
+        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="2) Select Source Folder" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Select Folder" Width="120" Margin="0,0,6,0" Click="OnSelectFolder"
+                            IsEnabled="{Binding CanSelectSourceFolder}"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button Content="Cancel Scan" Width="110" Click="OnCancelScan"
+                            IsEnabled="{Binding IsScanning}"
+                            Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Style="{StaticResource SecondaryButton}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
+            <StackPanel>
+                <TextBlock Text="3) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <TextBlock Text="Repository" Foreground="#555555" />
+                <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
+                          SelectedValuePath="RepositoryId"
+                          DisplayMemberPath="RepositoryName"
+                          SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                          Margin="0,2,0,6"
+                          IsEnabled="{Binding CanPickNetDocumentsTarget}" />
+                <TextBlock Text="Cabinet" Foreground="#555555" />
+                <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
+                          SelectedValuePath="CabinetId"
+                          DisplayMemberPath="CabinetName"
+                          SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                          Margin="0,2,0,6"
+                          IsEnabled="{Binding CanPickNetDocumentsTarget}" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Refresh Browser"
+                            Width="120"
+                            Margin="0,0,6,0"
+                            Click="OnLoadTargetContainers"
+                            IsEnabled="{Binding CanPickNetDocumentsTarget}"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button Content="Confirm Target"
+                            Width="120"
+                            Click="OnConfirmTargetContainer"
+                            IsEnabled="{Binding CanConfirmNetDocumentsTarget}"
+                            Style="{StaticResource PrimaryButton}" />
+                </StackPanel>
+
+                <TabControl Margin="0,4,0,8">
+                    <TabItem Header="Recent">
+                        <StackPanel Margin="4">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshRecentTargets" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Use Selected" Width="110" Click="OnSelectTargetFromRecent" Style="{StaticResource SecondaryButton}" />
+                            </StackPanel>
+                            <ListView ItemsSource="{Binding RecentTargets}"
+                                      SelectedItem="{Binding SelectedRecentTarget}"
+                                      Height="150">
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Name" Width="170" DisplayMemberBinding="{Binding Name}" />
+                                        <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding TypeDisplay}" />
+                                        <GridViewColumn Header="When" Width="130" DisplayMemberBinding="{Binding TimestampDisplay}" />
+                                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceDisplay}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </StackPanel>
+                    </TabItem>
+
+                    <TabItem Header="Favorites">
+                        <StackPanel Margin="4">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshFavoriteTargets" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Use Selected" Width="110" Margin="0,0,6,0" Click="OnSelectTargetFromFavorite" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Toggle Favorite" Width="120" Click="OnToggleFavoriteForSelectedTarget" Style="{StaticResource SecondaryButton}" />
+                            </StackPanel>
+                            <ListView ItemsSource="{Binding FavoriteTargets}"
+                                      SelectedItem="{Binding SelectedFavoriteTarget}"
+                                      Height="150">
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Name" Width="170" DisplayMemberBinding="{Binding Name}" />
+                                        <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding TypeDisplay}" />
+                                        <GridViewColumn Header="When" Width="130" DisplayMemberBinding="{Binding TimestampDisplay}" />
+                                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceDisplay}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </StackPanel>
+                    </TabItem>
+
+                    <TabItem Header="Go to Workspace">
+                        <StackPanel Margin="4">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <TextBox Width="260" Margin="0,0,6,0" Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Content="Search" Width="100" Margin="0,0,6,0" Click="OnSearchWorkspaces" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Load Tree" Width="100" Margin="0,0,6,0" Click="OnLoadSelectedWorkspace" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Use Workspace" Width="120" Click="OnSelectWorkspaceAsTarget" Style="{StaticResource SecondaryButton}" />
+                            </StackPanel>
+                            <ListView ItemsSource="{Binding WorkspaceSearchResults}"
+                                      SelectedItem="{Binding SelectedWorkspaceSearchResult}"
+                                      Height="150">
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Workspace" Width="200" DisplayMemberBinding="{Binding WorkspaceName}" />
+                                        <GridViewColumn Header="Repository" Width="110" DisplayMemberBinding="{Binding RepositoryId}" />
+                                        <GridViewColumn Header="Cabinet" Width="110" DisplayMemberBinding="{Binding CabinetId}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </StackPanel>
+                    </TabItem>
+
+                    <TabItem Header="Browse Tree">
+                        <StackPanel Margin="4">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshBrowseTree" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Use Selected" Width="110" Click="OnSelectTargetFromBrowseNode" Style="{StaticResource SecondaryButton}" />
+                            </StackPanel>
+                            <Border BorderThickness="1" BorderBrush="#D9E2EC" CornerRadius="4" Padding="4">
+                                <TreeView ItemsSource="{Binding BrowseRootNodes}"
+                                          SelectedItemChanged="OnBrowseTreeSelectedItemChanged">
+                                    <TreeView.Resources>
+                                        <HierarchicalDataTemplate DataType="{x:Type local:NetDocumentsBrowseNodeView}" ItemsSource="{Binding Children}">
+                                            <TextBlock Text="{Binding DisplayName}">
+                                                <TextBlock.ToolTip>
+                                                    <TextBlock Text="{Binding UnsupportedReason}" TextWrapping="Wrap" MaxWidth="260" />
+                                                </TextBlock.ToolTip>
+                                            </TextBlock>
+                                        </HierarchicalDataTemplate>
+                                    </TreeView.Resources>
+                                    <TreeView.ItemContainerStyle>
+                                        <Style TargetType="TreeViewItem">
+                                            <EventSetter Event="Expanded" Handler="OnBrowseTreeExpanded" />
+                                        </Style>
+                                    </TreeView.ItemContainerStyle>
+                                </TreeView>
+                            </Border>
+                        </StackPanel>
+                    </TabItem>
+                </TabControl>
+
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Selected Target" FontWeight="SemiBold" Margin="0,0,0,4" />
+                        <TextBlock Text="{Binding SelectedNetDocumentsTargetName, StringFormat=Name: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding SelectedNetDocumentsTargetTypeDisplay, StringFormat=Type: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding SelectedNetDocumentsTargetId, StringFormat=Id: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding SelectedNetDocumentsTargetPath, StringFormat=Path: {0}}" Foreground="#555555" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding TargetBrowserMessage}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
+
+                <TextBlock Text="Synced Metadata / Profile Attributes" FontWeight="SemiBold" Margin="0,0,0,6" />
+                <ListView ItemsSource="{Binding TargetProfileAttributes}" Height="140">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Name" Width="150" DisplayMemberBinding="{Binding Name}" />
+                            <GridViewColumn Header="Type" Width="85" DisplayMemberBinding="{Binding DataType}" />
+                            <GridViewColumn Header="Required" Width="70" DisplayMemberBinding="{Binding RequiredDisplay}" />
+                            <GridViewColumn Header="Inherited (display)" Width="140" DisplayMemberBinding="{Binding ValueDisplay}" />
+                            <GridViewColumn Header="Inherited (raw)" Width="120" DisplayMemberBinding="{Binding ValueRaw}" />
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button Content="Continue to Review &amp; Scope"
+                            Width="200"
+                            Click="OnContinueToReviewScope"
+                            IsEnabled="{Binding CanContinueToReviewScope}"
+                            Style="{StaticResource PrimaryButton}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

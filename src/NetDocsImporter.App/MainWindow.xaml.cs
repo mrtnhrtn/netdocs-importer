@@ -213,6 +213,14 @@ public partial class MainWindow : Window
         }
     }
 
+    public void OnNetDocumentsClientSecretLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox && passwordBox.Password != _viewModel.NetDocumentsClientSecret)
+        {
+            passwordBox.Password = _viewModel.NetDocumentsClientSecret;
+        }
+    }
+
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();
@@ -231,6 +239,92 @@ public partial class MainWindow : Window
     public async void OnViewLookupValues(object sender, RoutedEventArgs e)
     {
         await _viewModel.ViewSelectedLookupValuesAsync();
+    }
+
+    public async void OnLoadTargetContainers(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadNetDocumentsTargetContainersAsync();
+    }
+
+    public async void OnRefreshRecentTargets(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshRecentTargetsAsync();
+    }
+
+    public async void OnRefreshFavoriteTargets(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshFavoriteTargetsAsync();
+    }
+
+    public async void OnSearchWorkspaces(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SearchWorkspacesAsync();
+    }
+
+    public async void OnLoadSelectedWorkspace(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadSelectedWorkspaceAsync();
+    }
+
+    public async void OnSelectWorkspaceAsTarget(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SelectWorkspaceAsTargetAsync();
+    }
+
+    public async void OnSelectTargetFromRecent(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SelectTargetFromRecentAsync();
+    }
+
+    public async void OnSelectTargetFromFavorite(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SelectTargetFromFavoriteAsync();
+    }
+
+    public async void OnToggleFavoriteForSelectedTarget(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ToggleFavoriteForSelectedTargetAsync();
+    }
+
+    public async void OnRefreshBrowseTree(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadBrowseRootsAsync();
+    }
+
+    public async void OnBrowseTreeExpanded(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not TreeViewItem item)
+        {
+            return;
+        }
+
+        if (item.DataContext is NetDocumentsBrowseNodeView node)
+        {
+            await _viewModel.ExpandBrowseNodeAsync(node);
+        }
+    }
+
+    public void OnBrowseTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is NetDocumentsBrowseNodeView node)
+        {
+            _viewModel.SelectedBrowseNode = node;
+        }
+    }
+
+    public async void OnSelectTargetFromBrowseNode(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SelectTargetFromBrowseNodeAsync();
+    }
+
+    public async void OnConfirmTargetContainer(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ConfirmNetDocumentsTargetAsync();
+    }
+
+    public async void OnContinueToReviewScope(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ContinueToReviewScopeAsync();
     }
 
     public async void OnResyncAttributesForReviewScope(object sender, RoutedEventArgs e)
