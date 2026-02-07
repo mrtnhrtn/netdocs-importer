@@ -71,6 +71,7 @@ public sealed partial class MainViewModel
             FilterCabinetsByRepository();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             QueueSettingsSave();
+            _ = RefreshReviewScopeNetDocumentsAsync();
         }
     }
 
@@ -94,6 +95,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
+            _ = RefreshReviewScopeNetDocumentsAsync();
         }
     }
 
@@ -200,6 +202,8 @@ public sealed partial class MainViewModel
                 await SyncNetDocumentsAttributesAsync();
             }
 
+            await RefreshReviewScopeNetDocumentsAsync();
+
             StatusText = string.IsNullOrWhiteSpace(user.DisplayName)
                 ? "Connected to NetDocuments."
                 : $"Connected to NetDocuments as {user.DisplayName}.";
@@ -244,6 +248,7 @@ public sealed partial class MainViewModel
             await sync.SyncCabinetsAsync(region);
             await LoadNetDocumentsMetadataAsync();
             StatusText = "NetDocuments cabinets synced.";
+            await RefreshReviewScopeNetDocumentsAsync();
         }
         catch (Exception ex)
         {
@@ -273,6 +278,7 @@ public sealed partial class MainViewModel
             await LoadSyncedAttributesForSelectedCabinetAsync();
             await LoadSchemaFromSyncedMetadataAsync();
             await EnsureCurrentJobRepositoryAsync(SelectedNetDocumentsRepositoryId);
+            await RefreshReviewScopeNetDocumentsAsync();
 
             StatusText = $"Synced {attributes.Count} profile attributes for cabinet {SelectedNetDocumentsCabinetName}.";
         }
@@ -322,6 +328,7 @@ public sealed partial class MainViewModel
 
         FilterCabinetsByRepository();
         await LoadSyncedAttributesForSelectedCabinetAsync();
+        await RefreshReviewScopeNetDocumentsAsync();
     }
 
     private void FilterCabinetsByRepository()

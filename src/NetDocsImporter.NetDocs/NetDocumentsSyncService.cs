@@ -16,13 +16,38 @@ public sealed class NetDocumentsSyncService
 
     public async Task<NetDocumentsUserInfo> GetCurrentUserAsync(CancellationToken cancellationToken = default)
     {
-        using var document = await _apiClient.GetJsonAsync("/v1/User/info", cancellationToken);
-        var root = UnwrapSingle(document.RootElement);
+        var candidates = new[]
+        {
+            "/v1/User/info",
+            "/v1/User/current/info",
+            "/v1/User/me/info"
+        };
 
-        var userId = ReadString(root, "id", "userId", "userid");
-        var displayName = ReadString(root, "displayName", "name", "fullName");
-        var email = ReadString(root, "email", "mail");
-        return new NetDocumentsUserInfo(userId, displayName, email);
+        Exception? last = null;
+        foreach (var path in candidates)
+        {
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var root = UnwrapSingle(document.RootElement);
+
+                var userId = ReadString(root, "id", "userId", "userid");
+                var displayName = ReadString(root, "displayName", "name", "fullName");
+                var email = ReadString(root, "email", "mail");
+                if (!string.IsNullOrWhiteSpace(userId) || !string.IsNullOrWhiteSpace(displayName))
+                {
+                    return new NetDocumentsUserInfo(userId, displayName, email);
+                }
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Unable to resolve NetDocuments current user info from known endpoints.",
+            last);
     }
 
     public async Task<IReadOnlyList<NetDocumentsCabinetRecord>> SyncCabinetsAsync(

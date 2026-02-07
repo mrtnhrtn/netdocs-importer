@@ -93,6 +93,69 @@
 
         <ScrollViewer Grid.Column="3" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{Binding ReviewTargetRepository, StringFormat=Repository: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewTargetCabinet, StringFormat=Cabinet: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewTargetContainerName, StringFormat=Container: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewProfileLastSyncDisplay, StringFormat=Last sync: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewProfileAttributeCountDisplay, StringFormat=Attributes: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewProfileRequiredCountDisplay, StringFormat=Required: {0}}" Foreground="#555555" />
+                        <TextBlock Text="{Binding ReviewProfileLookupCountDisplay, StringFormat=Lookup values: {0}}" Foreground="#555555" Margin="0,0,0,6" />
+                        <TextBlock Text="Lookup cache unavailable" Foreground="#B45309" Margin="0,0,0,6">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ReviewProfileLookupCacheReady}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <Button Content="Resync Attributes"
+                                Width="140"
+                                Click="OnResyncAttributes"
+                                IsEnabled="{Binding CanSyncNetDocumentsAttributes}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                </Border>
+
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Profiling Validation" Style="{StaticResource SectionTitle}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="{Binding ValidationErrorCountDisplay, StringFormat=Errors: {0}}" Foreground="#B42318" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding ValidationWarningCountDisplay, StringFormat=Warnings: {0}}" Foreground="#B45309" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding ValidationInfoCountDisplay, StringFormat=Info: {0}}" Foreground="#555555" />
+                        </StackPanel>
+                        <TextBlock Text="Validating..." Foreground="#555555" Margin="0,0,0,6">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsReviewScopeValidationBusy}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ListView ItemsSource="{Binding ProfilingValidationIssues}" Height="170">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Severity" Width="70" DisplayMemberBinding="{Binding SeverityDisplay}" />
+                                    <GridViewColumn Header="Scope" Width="55" DisplayMemberBinding="{Binding ScopeDisplay}" />
+                                    <GridViewColumn Header="Target" Width="95" DisplayMemberBinding="{Binding Target}" />
+                                    <GridViewColumn Header="Message" Width="250" DisplayMemberBinding="{Binding Message}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </StackPanel>
+                </Border>
+
                 <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
                 <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />

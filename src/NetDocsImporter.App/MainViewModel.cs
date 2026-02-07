@@ -579,6 +579,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();
+        InitializeReviewScopeNetDocuments();
     }
     public async Task SelectFolderAndScanAsync()
     {
@@ -637,6 +638,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 SelectedNetDocumentsRepositoryId);
             StatusText = "Scan complete.";
             CurrentJobState = "Ready";
+            SetCurrentStep(StepKey.ReviewScope);
         }
         catch (OperationCanceledException)
         {
@@ -657,6 +659,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             await LoadJobHeaderAsync();
             await RefreshImportDataAsync();
             await LoadFolderTreeAsync();
+            await RefreshReviewScopeNetDocumentsAsync();
         }
     }
 
@@ -706,6 +709,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             SelectedNetDocumentsRepositoryId = _currentJobRepositoryId;
         }
+
+        _ = RefreshReviewScopeNetDocumentsAsync();
         CurrentJobState = IsImportPaused ? "Paused" : IsImportRunning ? "Importing" : IsScanning ? "Scanning" : "Ready";
     }
 
@@ -919,6 +924,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         await LoadSettingsAsync();
         await LoadNetDocumentsMetadataAsync();
         await TryRestoreNetDocumentsSessionAsync();
+        await RefreshReviewScopeNetDocumentsAsync();
         if (string.IsNullOrWhiteSpace(NdImportPath))
         {
             var localCandidate = Path.Combine(AppContext.BaseDirectory, "ndimport.exe");
@@ -1581,6 +1587,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         SelectedProfileSource = mode == "override" ? "Override" : "Inherited";
         await RefreshSelectedFolderSummaryAsync();
         QueueProfileSave();
+        await RefreshReviewScopeNetDocumentsAsync();
     }
 
     public void AddProfileField()
@@ -1607,6 +1614,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         var payload = SerializeProfileFields();
         await _jobStore.ApplyProfileToDescendantsAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, payload);
+        await RefreshReviewScopeNetDocumentsAsync();
     }
 
     private void LoadProfileFields(string? payloadJson)
@@ -1762,6 +1770,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         var payload = SerializeProfileFields();
         await _jobStore.UpsertFolderProfileAsync(_selectedFolderNode.JobId, _selectedFolderNode.FolderId, payload);
+        await RefreshReviewScopeNetDocumentsAsync();
+    }
+
+    private void SetCurrentStep(StepKey key)
+    {
+        var step = Steps.FirstOrDefault(item => item.Key == key);
+        if (step is not null)
+        {
+            CurrentStep = step;
+        }
     }
 
     private void ApplyTreeFilter()

@@ -1631,6 +1631,83 @@ public sealed class JobStore
         return results;
     }
 
+    public async Task<NetDocumentsProfileContextSnapshotRecord?> GetNetDocumentsProfileContextSnapshotAsync(
+        string cabinetId,
+        string repositoryId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        int attributeCount;
+        int requiredCount;
+        int lookupAttributeCount;
+        DateTime? lastSyncedUtc;
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT
+                    COUNT(*) AS AttributeCount,
+                    COALESCE(SUM(CASE WHEN IsRequired = 1 THEN 1 ELSE 0 END), 0) AS RequiredCount,
+                    COALESCE(SUM(CASE WHEN IsLookup = 1 THEN 1 ELSE 0 END), 0) AS LookupAttributeCount,
+                    MAX(SyncedUtc) AS LastSyncedUtc
+                FROM NetDocumentsAttributes
+                WHERE CabinetId = $cabinetId
+                  AND RepositoryId = $repositoryId;
+                """;
+            command.Parameters.AddWithValue("$cabinetId", cabinetId);
+            command.Parameters.AddWithValue("$repositoryId", repositoryId);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return null;
+            }
+
+            attributeCount = reader.GetInt32(0);
+            requiredCount = reader.GetInt32(1);
+            lookupAttributeCount = reader.GetInt32(2);
+            lastSyncedUtc = reader.IsDBNull(3) ? null : ParseUtc(reader.GetString(3));
+        }
+
+        if (attributeCount == 0)
+        {
+            return null;
+        }
+
+        var lookupValueCount = 0;
+        if (lookupAttributeCount > 0)
+        {
+            await using var lookupCommand = connection.CreateCommand();
+            lookupCommand.CommandText = """
+                SELECT COUNT(*)
+                FROM NetDocumentsLookupValues v
+                WHERE v.CabinetId = $cabinetId
+                  AND v.AttributeNum IN (
+                    SELECT a.AttributeNum
+                    FROM NetDocumentsAttributes a
+                    WHERE a.CabinetId = $cabinetId
+                      AND a.RepositoryId = $repositoryId
+                      AND a.IsLookup = 1
+                  );
+                """;
+            lookupCommand.Parameters.AddWithValue("$cabinetId", cabinetId);
+            lookupCommand.Parameters.AddWithValue("$repositoryId", repositoryId);
+            var raw = await lookupCommand.ExecuteScalarAsync(cancellationToken);
+            lookupValueCount = raw is null || raw is DBNull ? 0 : Convert.ToInt32(raw, CultureInfo.InvariantCulture);
+        }
+
+        return new NetDocumentsProfileContextSnapshotRecord(
+            cabinetId,
+            repositoryId,
+            attributeCount,
+            requiredCount,
+            lookupAttributeCount,
+            lookupValueCount,
+            lastSyncedUtc);
+    }
+
     private static void BindFileParameters(SqliteCommand command, FileRecord file)
     {
         command.Parameters.AddWithValue("$fileId", file.FileId);

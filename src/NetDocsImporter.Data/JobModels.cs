@@ -112,3 +112,12 @@ public sealed record NetDocumentsLookupValueRecord(
     string ValueKey,
     string Description,
     DateTime SyncedUtc);
+
+public sealed record NetDocumentsProfileContextSnapshotRecord(
+    string CabinetId,
+    string RepositoryId,
+    int AttributeCount,
+    int RequiredAttributeCount,
+    int LookupAttributeCount,
+    int LookupValueCount,
+    DateTime? LastSyncedUtc);

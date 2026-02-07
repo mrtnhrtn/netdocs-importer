@@ -232,4 +232,9 @@ public partial class MainWindow : Window
     {
         await _viewModel.ViewSelectedLookupValuesAsync();
     }
+
+    public async void OnResyncAttributesForReviewScope(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ResyncAttributesForReviewScopeAsync();
+    }
 }

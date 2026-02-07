@@ -117,13 +117,22 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
 
     private static string BuildAuthorizeUrl(NetDocumentsAuthContext context, string state)
     {
-        var baseUrl = context.OAuthAuthorizeBaseUrl.TrimEnd('/');
+        var authorizeUrl = context.OAuthAuthorizeBaseUrl.Trim();
+        if (!authorizeUrl.Contains("?", StringComparison.Ordinal) &&
+            !authorizeUrl.EndsWith("OAuth.aspx", StringComparison.OrdinalIgnoreCase) &&
+            !authorizeUrl.EndsWith("/oauth/authorize", StringComparison.OrdinalIgnoreCase))
+        {
+            authorizeUrl = $"{authorizeUrl.TrimEnd('/')}/oauth/authorize";
+        }
+
         var query = new StringBuilder();
         query.Append("response_type=code");
         query.Append("&client_id=").Append(Uri.EscapeDataString(context.ClientId));
         query.Append("&redirect_uri=").Append(Uri.EscapeDataString(context.RedirectUri));
         query.Append("&state=").Append(Uri.EscapeDataString(state));
-        return $"{baseUrl}/oauth/authorize?{query}";
+
+        var separator = authorizeUrl.Contains("?", StringComparison.Ordinal) ? "&" : "?";
+        return $"{authorizeUrl}{separator}{query}";
     }
 
     private static HttpListener CreateListener(string redirectUri)
@@ -133,10 +142,14 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
             throw new InvalidOperationException("Redirect URI is invalid.");
         }
 
-        if (!string.Equals(redirect.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(redirect.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        var isHttp = string.Equals(redirect.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
+        var isLoopbackHost =
+            string.Equals(redirect.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(redirect.Host, "localhost", StringComparison.OrdinalIgnoreCase);
+
+        if (!isHttp || !isLoopbackHost)
         {
-            throw new InvalidOperationException("Redirect URI must be an HTTP loopback URL on 127.0.0.1.");
+            throw new InvalidOperationException("Redirect URI must be an HTTP loopback URL on 127.0.0.1 or localhost.");
         }
 
         var path = redirect.AbsolutePath.Trim('/');

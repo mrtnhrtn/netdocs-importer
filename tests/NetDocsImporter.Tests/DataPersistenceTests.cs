@@ -29,6 +29,9 @@ public class DataPersistenceTests
             Assert.Contains("Folders", tables);
             Assert.Contains("FolderRules", tables);
             Assert.Contains("FolderProfiles", tables);
+            Assert.Contains("NetDocumentsCabinets", tables);
+            Assert.Contains("NetDocumentsAttributes", tables);
+            Assert.Contains("NetDocumentsLookupValues", tables);
             Assert.Contains("IX_Files_JobId", indexes);
             Assert.Contains("IX_Files_RelativePath", indexes);
             Assert.Contains("IX_Files_FolderId", indexes);
@@ -38,6 +41,57 @@ public class DataPersistenceTests
             Assert.Contains("IX_Folders_ParentFolderId", indexes);
             Assert.Contains("IX_Folders_RelativePath", indexes);
             Assert.Contains("IX_FolderProfiles_FolderId", indexes);
+            Assert.Contains("IX_NetDocumentsCabinets_Region", indexes);
+            Assert.Contains("IX_NetDocumentsAttributes_CabinetId", indexes);
+            Assert.Contains("IX_NetDocumentsLookupValues_CabinetAttr", indexes);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task BuildsNetDocumentsProfileContextSnapshot()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-importer-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+
+        try
+        {
+            var store = new JobStore(dbPath);
+            await store.InitializeAsync();
+
+            var now = DateTime.UtcNow;
+            await store.ReplaceNetDocumentsAttributesAsync(
+                "cab1",
+                new[]
+                {
+                    new NetDocumentsAttributeRecord("cab1", "repo1", 1001, "1001", "Matter Type", "lookup", true, false, true, null, false, now),
+                    new NetDocumentsAttributeRecord("cab1", "repo1", 1002, "1002", "Author", "text", false, false, false, null, false, now)
+                });
+
+            await store.ReplaceNetDocumentsLookupValuesAsync(
+                "cab1",
+                1001,
+                new[]
+                {
+                    new NetDocumentsLookupValueRecord("cab1", 1001, null, "A", "Alpha", now),
+                    new NetDocumentsLookupValueRecord("cab1", 1001, null, "B", "Beta", now)
+                });
+
+            var snapshot = await store.GetNetDocumentsProfileContextSnapshotAsync("cab1", "repo1");
+            Assert.NotNull(snapshot);
+            Assert.Equal(2, snapshot!.AttributeCount);
+            Assert.Equal(1, snapshot.RequiredAttributeCount);
+            Assert.Equal(1, snapshot.LookupAttributeCount);
+            Assert.Equal(2, snapshot.LookupValueCount);
+            Assert.True(snapshot.LastSyncedUtc.HasValue);
         }
         finally
         {

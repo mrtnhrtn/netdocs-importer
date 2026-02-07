@@ -131,6 +131,14 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         _ = SetFileImportModeAsync("inherit");
     }
 
+    public void OnResyncAttributes(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnResyncAttributesForReviewScope(sender, e);
+        }
+    }
+
     private async Task SetFileImportModeAsync(string importMode)
     {
         if (DataContext is not MainViewModel viewModel)

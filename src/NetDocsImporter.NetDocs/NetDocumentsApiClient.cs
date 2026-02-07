@@ -31,13 +31,23 @@ public sealed class NetDocumentsApiClient
         using var response = await SendWithRetryAsync(() =>
         {
             var request = new HttpRequestMessage(HttpMethod.Get, BuildUri(relativeOrAbsolutePath));
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
             return request;
         }, cancellationToken);
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"NetDocuments API request failed ({(int)response.StatusCode}).");
+            throw new InvalidOperationException(
+                $"NetDocuments API request failed ({(int)response.StatusCode}) for '{relativeOrAbsolutePath}'.");
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+        if (!mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            var snippet = content.Length > 180 ? content[..180] : content;
+            throw new InvalidOperationException(
+                $"NetDocuments API returned non-JSON content ('{mediaType}') for '{relativeOrAbsolutePath}'. Snippet: {snippet}");
         }
 
         return JsonDocument.Parse(content);
