@@ -675,7 +675,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 await LoadNetDocumentsTargetContainersAsync();
             }
             await RefreshReviewScopeNetDocumentsAsync();
-            SetCurrentStep(StepKey.ReviewScope);
         }
     }
 

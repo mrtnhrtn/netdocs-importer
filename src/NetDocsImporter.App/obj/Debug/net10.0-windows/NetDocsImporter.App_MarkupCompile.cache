@@ -1,5 +1,5 @@
 ﻿NetDocsImporter.App
-
+1.0.0.0
 
 winexe
 C#
@@ -12,9 +12,9 @@ TRACE;DEBUG;NET;NET10_0;NETCOREAPP;WINDOWS;WINDOWS7_0;NET5_0_OR_GREATER;NET6_0_O
 C:\Dev\netdocs-importer\src\NetDocsImporter.App\App.xaml
 8280177498
 
-16-441740274
+18-1008300621
 223-335122003
 MainWindow.xaml;Styles.xaml;Views\Steps\NdImportConfigStepView.xaml;Views\Steps\ProfilingStepView.xaml;Views\Steps\RecentJobsStepView.xaml;Views\Steps\ReviewScopeStepView.xaml;Views\Steps\RunImportStepView.xaml;Views\Steps\SelectFolderStepView.xaml;
 
-False
+True
 
