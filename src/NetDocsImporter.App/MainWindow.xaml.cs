@@ -218,4 +218,18 @@ public partial class MainWindow : Window
         await _viewModel.ConnectToNetDocumentsAsync();
     }
 
+    public async void OnSyncNetDocumentsCabinets(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SyncNetDocumentsCabinetsAsync();
+    }
+
+    public async void OnSyncNetDocumentsAttributes(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SyncNetDocumentsAttributesAsync();
+    }
+
+    public async void OnViewLookupValues(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ViewSelectedLookupValuesAsync();
+    }
 }

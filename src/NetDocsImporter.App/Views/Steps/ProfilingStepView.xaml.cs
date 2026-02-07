@@ -84,4 +84,28 @@ public partial class ProfilingStepView : System.Windows.Controls.UserControl
             main.OnConnectToNetDocuments(sender, e);
         }
     }
+
+    public void OnSyncNetDocumentsCabinets(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSyncNetDocumentsCabinets(sender, e);
+        }
+    }
+
+    public void OnSyncNetDocumentsAttributes(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSyncNetDocumentsAttributes(sender, e);
+        }
+    }
+
+    public void OnViewLookupValues(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnViewLookupValues(sender, e);
+        }
+    }
 }

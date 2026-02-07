@@ -32,6 +32,8 @@ public sealed class NdImportExportOptions
     public bool IncludeProfileMetadata { get; set; }
 
     public ProfileSchemaDictionary? ProfileSchema { get; set; }
+
+    public bool ValidateLookupKeys { get; set; } = true;
 }
 
 public sealed class NdImportExportResult
@@ -200,7 +202,7 @@ public sealed class NdImportCsvExporter
                     profileEntries = Array.Empty<ProfileFieldEntry>();
                 }
 
-                var profileValues = BuildProfileValues(profileColumns, profileEntries, options.ProfileSchema, file, warnings);
+                var profileValues = BuildProfileValues(profileColumns, profileEntries, options, file, warnings);
                 row.AddRange(profileValues);
             }
 
@@ -404,10 +406,11 @@ public sealed class NdImportCsvExporter
     private static List<string> BuildProfileValues(
         IReadOnlyList<string> columns,
         IReadOnlyList<ProfileFieldEntry> entries,
-        ProfileSchemaDictionary? schema,
+        NdImportExportOptions options,
         FileRecord file,
         List<ExportWarning> warnings)
     {
+        var schema = options.ProfileSchema;
         var valuesByColumn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
@@ -417,7 +420,7 @@ public sealed class NdImportCsvExporter
                 continue;
             }
 
-            var value = ResolveFieldValue(entry, schema, file, warnings);
+            var value = ResolveFieldValue(entry, options, file, warnings);
             if (!valuesByColumn.ContainsKey(column))
             {
                 valuesByColumn[column] = value;
@@ -435,61 +438,34 @@ public sealed class NdImportCsvExporter
 
     private static string ResolveFieldName(ProfileFieldEntry entry, ProfileSchemaDictionary? schema)
     {
-        if (entry.Mode == ProfileFieldMode.Code)
+        if (schema is null)
         {
-            if (schema is not null && schema.TryResolveFieldName(entry.Field, out var name))
-            {
-                return name;
-            }
-
             return entry.Field;
         }
 
-        return entry.Field;
+        if (entry.Mode == ProfileFieldMode.Code)
+        {
+            return schema.TryResolveFieldName(entry.Field, out var name) ? name : entry.Field;
+        }
+
+        return schema.TryResolveCanonicalFieldName(entry.Field, out var canonicalName)
+            ? canonicalName
+            : entry.Field;
     }
 
     private static string ResolveFieldValue(
         ProfileFieldEntry entry,
-        ProfileSchemaDictionary? schema,
+        NdImportExportOptions options,
         FileRecord file,
         List<ExportWarning> warnings)
     {
+        var schema = options.ProfileSchema;
         if (schema is null)
         {
-            return entry.Value;
+            return EscapeInlineSemicolons(entry.Value);
         }
 
-        if (entry.Mode == ProfileFieldMode.Code)
-        {
-            if (!schema.TryResolveFieldName(entry.Field, out _))
-            {
-                warnings.Add(new ExportWarning(
-                    "UNRESOLVED_FIELD",
-                    entry.Field,
-                    entry.Value,
-                    file.RelativePath,
-                    file.FullPath,
-                    string.Empty,
-                    "Field code not found in schema"));
-            }
-
-            if (schema.TryResolveValueLabel(entry.Field, entry.Value, out var label))
-            {
-                return label;
-            }
-
-            warnings.Add(new ExportWarning(
-                "UNRESOLVED_VALUE",
-                entry.Field,
-                entry.Value,
-                file.RelativePath,
-                file.FullPath,
-                string.Empty,
-                "Value code not found in schema"));
-            return entry.Value;
-        }
-
-        if (!schema.TryResolveFieldCode(entry.Field, out _))
+        if (!schema.TryGetField(entry.Field, out var field))
         {
             warnings.Add(new ExportWarning(
                 "UNRESOLVED_FIELD",
@@ -498,23 +474,124 @@ public sealed class NdImportCsvExporter
                 file.RelativePath,
                 file.FullPath,
                 string.Empty,
-                "Field name not found in schema"));
-            return entry.Value;
+                "Field not found in schema"));
+            return EscapeInlineSemicolons(entry.Value);
         }
 
-        if (!schema.TryResolveValueCode(entry.Field, entry.Value, out _))
+        var tokens = field.IsMultiValue
+            ? SplitMultiValueTokens(entry.Value)
+            : new List<string> { entry.Value.Trim() };
+
+        var transformed = new List<string>(tokens.Count);
+        foreach (var token in tokens)
+        {
+            var resolved = ResolveSingleValue(entry, field, token, options.ValidateLookupKeys, file, warnings);
+            transformed.Add(EscapeInlineSemicolons(resolved));
+        }
+
+        if (!field.IsMultiValue)
+        {
+            return transformed.Count == 0 ? string.Empty : transformed[0];
+        }
+
+        return string.Join("; ", transformed.Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private static string ResolveSingleValue(
+        ProfileFieldEntry entry,
+        ProfileSchemaField field,
+        string token,
+        bool validateLookupKeys,
+        FileRecord file,
+        List<ExportWarning> warnings)
+    {
+        if (field.IsLookup)
+        {
+            if (entry.Mode == ProfileFieldMode.Label)
+            {
+                if (field.ValuesByLabel.ContainsKey(token))
+                {
+                    return token;
+                }
+
+                if (field.ValuesByCode.TryGetValue(token, out var labelFromCode))
+                {
+                    return labelFromCode;
+                }
+            }
+            else
+            {
+                if (!validateLookupKeys && field.ValuesByCode.TryGetValue(token, out var laxLabel))
+                {
+                    return laxLabel;
+                }
+
+                if (!validateLookupKeys)
+                {
+                    return token;
+                }
+
+                if (field.ValuesByCode.TryGetValue(token, out var strictLabel))
+                {
+                    return strictLabel;
+                }
+            }
+
+            warnings.Add(new ExportWarning(
+                "UNRESOLVED_VALUE",
+                field.Name,
+                token,
+                file.RelativePath,
+                file.FullPath,
+                string.Empty,
+                "Lookup key not found in synced metadata"));
+            return token;
+        }
+
+        if (entry.Mode == ProfileFieldMode.Code)
+        {
+            if (field.ValuesByCode.TryGetValue(token, out var label))
+            {
+                return label;
+            }
+
+            warnings.Add(new ExportWarning(
+                "UNRESOLVED_VALUE",
+                field.Name,
+                token,
+                file.RelativePath,
+                file.FullPath,
+                string.Empty,
+                "Value code not found in schema"));
+            return token;
+        }
+
+        if (!string.IsNullOrWhiteSpace(token) && field.ValuesByLabel.Count > 0 && !field.ValuesByLabel.ContainsKey(token))
         {
             warnings.Add(new ExportWarning(
                 "UNRESOLVED_VALUE",
-                entry.Field,
-                entry.Value,
+                field.Name,
+                token,
                 file.RelativePath,
                 file.FullPath,
                 string.Empty,
                 "Value label not found in schema"));
         }
 
-        return entry.Value;
+        return token;
+    }
+
+    private static List<string> SplitMultiValueTokens(string value)
+    {
+        return value
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .ToList();
+    }
+
+    private static string EscapeInlineSemicolons(string value)
+    {
+        return value.Replace(";", "{;}", StringComparison.Ordinal);
     }
 
     private sealed record ExportWarning(

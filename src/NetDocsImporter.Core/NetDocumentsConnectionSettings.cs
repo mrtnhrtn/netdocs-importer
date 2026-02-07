@@ -28,6 +28,11 @@ public sealed class NetDocumentsConnectionSettings
 
     public string RedirectUri { get; set; } = NetDocumentsRegionDefaults.DefaultRedirectUri;
 
+    public string SelectedRepositoryId { get; set; } = string.Empty;
+
+    public string SelectedCabinetId { get; set; } = string.Empty;
+
+    public string SelectedCabinetName { get; set; } = string.Empty;
+
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
 }
-

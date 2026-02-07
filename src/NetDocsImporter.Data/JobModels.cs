@@ -1,6 +1,11 @@
 namespace NetDocsImporter.Data;
 
-public sealed record JobRecord(string JobId, DateTime CreatedUtc, string SourceRoot, string Status);
+public sealed record JobRecord(
+    string JobId,
+    DateTime CreatedUtc,
+    string SourceRoot,
+    string Status,
+    string? RepositoryId = null);
 
 public sealed record FileRecord(
     string FileId,
@@ -40,7 +45,8 @@ public sealed record JobSummary(
     string Status,
     long FileCount,
     long TotalBytes,
-    long LargeWarnings);
+    long LargeWarnings,
+    string? RepositoryId = null);
 
 public sealed record TransferRecord(
     string TransferId,
@@ -75,3 +81,34 @@ public sealed record TransferStatusCounts(
     long Succeeded,
     long Failed,
     long Canceled);
+
+public sealed record NetDocumentsCabinetRecord(
+    string CabinetId,
+    string RepositoryId,
+    string RepositoryName,
+    string CabinetName,
+    string Description,
+    string Region,
+    DateTime SyncedUtc);
+
+public sealed record NetDocumentsAttributeRecord(
+    string CabinetId,
+    string RepositoryId,
+    int AttributeNum,
+    string AttributeId,
+    string Name,
+    string DataType,
+    bool IsRequired,
+    bool IsMultiValue,
+    bool IsLookup,
+    int? ParentAttributeNum,
+    bool IsChildAttribute,
+    DateTime SyncedUtc);
+
+public sealed record NetDocumentsLookupValueRecord(
+    string CabinetId,
+    int AttributeNum,
+    string? ParentKey,
+    string ValueKey,
+    string Description,
+    DateTime SyncedUtc);

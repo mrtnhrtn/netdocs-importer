@@ -31,16 +31,64 @@
                              PasswordChanged="OnNetDocumentsClientSecretPasswordChanged" />
                 <TextBlock Text="Redirect URI" Foreground="#555555" />
                 <TextBox Text="{Binding NetDocumentsRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
-                <Button Content="Connect to NetDocuments"
-                        Width="190"
-                        Click="OnConnectToNetDocuments"
-                        IsEnabled="{Binding CanConnectToNetDocuments}"
-                        Style="{StaticResource PrimaryButton}" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Connect"
+                            Width="110"
+                            Margin="0,0,6,0"
+                            Click="OnConnectToNetDocuments"
+                            IsEnabled="{Binding CanConnectToNetDocuments}"
+                            Style="{StaticResource PrimaryButton}" />
+                    <Button Content="Sync Cabinets"
+                            Width="120"
+                            Margin="0,0,6,0"
+                            Click="OnSyncNetDocumentsCabinets"
+                            IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button Content="Sync Attributes"
+                            Width="125"
+                            Click="OnSyncNetDocumentsAttributes"
+                            IsEnabled="{Binding CanSyncNetDocumentsAttributes}"
+                            Style="{StaticResource SecondaryButton}" />
+                </StackPanel>
+                <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" Margin="0,0,0,6" />
+                <TextBlock Text="Repository" Foreground="#555555" />
+                <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
+                          SelectedValuePath="RepositoryId"
+                          DisplayMemberPath="RepositoryName"
+                          SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                          Margin="0,2,0,6" />
+                <TextBlock Text="Cabinet" Foreground="#555555" />
+                <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
+                          SelectedValuePath="CabinetId"
+                          DisplayMemberPath="CabinetName"
+                          SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                          Margin="0,2,0,0" />
+            </StackPanel>
+        </Border>
+        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <TextBlock Text="Synced Metadata" FontWeight="SemiBold" Margin="0,0,8,0" />
+                    <Button Content="View values"
+                            Width="100"
+                            Click="OnViewLookupValues"
+                            IsEnabled="{Binding CanViewLookupValues}"
+                            Style="{StaticResource SecondaryButton}" />
+                </StackPanel>
+                <ListView ItemsSource="{Binding SyncedAttributes}" SelectedItem="{Binding SelectedSyncedAttribute, Mode=TwoWay}" Height="160">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Name" Width="180" DisplayMemberBinding="{Binding Name}" />
+                            <GridViewColumn Header="Attr #" Width="60" DisplayMemberBinding="{Binding AttributeNum}" />
+                            <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding TypeDisplay}" />
+                        </GridView>
+                    </ListView.View>
+                </ListView>
             </StackPanel>
         </Border>
         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
             <TextBlock Text="Cabinet:" Foreground="#555555" Margin="0,0,6,0" />
-            <TextBlock Text="{Binding NdImportCabinet}" Foreground="#333333" />
+            <TextBlock Text="{Binding SelectedNetDocumentsCabinetName}" Foreground="#333333" />
             <TextBlock Text="(schema match)" Foreground="#2E7D32" Margin="8,0,0,0">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">

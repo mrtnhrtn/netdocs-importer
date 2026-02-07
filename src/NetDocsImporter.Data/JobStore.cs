@@ -37,7 +37,8 @@ public sealed class JobStore
                 JobId TEXT PRIMARY KEY,
                 CreatedUtc TEXT,
                 SourceRoot TEXT,
-                Status TEXT
+                Status TEXT,
+                RepositoryId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS Files (
@@ -101,6 +102,42 @@ public sealed class JobStore
                 UpdatedUtc TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS NetDocumentsCabinets (
+                CabinetId TEXT PRIMARY KEY,
+                RepositoryId TEXT NOT NULL,
+                RepositoryName TEXT NOT NULL,
+                CabinetName TEXT NOT NULL,
+                Description TEXT NULL,
+                Region TEXT NOT NULL,
+                SyncedUtc TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS NetDocumentsAttributes (
+                CabinetId TEXT NOT NULL,
+                RepositoryId TEXT NOT NULL,
+                AttributeNum INTEGER NOT NULL,
+                AttributeId TEXT NULL,
+                Name TEXT NOT NULL,
+                DataType TEXT NULL,
+                IsRequired INTEGER NOT NULL DEFAULT 0,
+                IsMultiValue INTEGER NOT NULL DEFAULT 0,
+                IsLookup INTEGER NOT NULL DEFAULT 0,
+                ParentAttributeNum INTEGER NULL,
+                IsChildAttribute INTEGER NOT NULL DEFAULT 0,
+                SyncedUtc TEXT NOT NULL,
+                PRIMARY KEY (CabinetId, AttributeNum)
+            );
+
+            CREATE TABLE IF NOT EXISTS NetDocumentsLookupValues (
+                CabinetId TEXT NOT NULL,
+                AttributeNum INTEGER NOT NULL,
+                ParentKey TEXT NOT NULL DEFAULT '',
+                ValueKey TEXT NOT NULL,
+                Description TEXT NULL,
+                SyncedUtc TEXT NOT NULL,
+                PRIMARY KEY (CabinetId, AttributeNum, ParentKey, ValueKey)
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Files_JobId ON Files(JobId);
             CREATE INDEX IF NOT EXISTS IX_Files_RelativePath ON Files(RelativePath);
             CREATE INDEX IF NOT EXISTS IX_Transfers_JobId ON Transfers(JobId);
@@ -108,6 +145,10 @@ public sealed class JobStore
             CREATE INDEX IF NOT EXISTS IX_Folders_JobId ON Folders(JobId);
             CREATE INDEX IF NOT EXISTS IX_Folders_ParentFolderId ON Folders(ParentFolderId);
             CREATE INDEX IF NOT EXISTS IX_Folders_RelativePath ON Folders(RelativePath);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsCabinets_Region ON NetDocumentsCabinets(Region);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsCabinets_RepositoryId ON NetDocumentsCabinets(RepositoryId);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsAttributes_CabinetId ON NetDocumentsAttributes(CabinetId);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsLookupValues_CabinetAttr ON NetDocumentsLookupValues(CabinetId, AttributeNum);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -118,6 +159,7 @@ public sealed class JobStore
         await EnsureColumnExistsAsync(connection, "Folders", "ImportMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
         await EnsureColumnExistsAsync(connection, "Folders", "ProfileMode", "TEXT NOT NULL DEFAULT 'inherit'", cancellationToken);
         await EnsureColumnExistsAsync(connection, "FolderProfiles", "FolderId", "TEXT NOT NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "Jobs", "RepositoryId", "TEXT NULL", cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText = """
@@ -146,14 +188,15 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT OR REPLACE INTO Jobs (JobId, CreatedUtc, SourceRoot, Status)
-            VALUES ($jobId, $createdUtc, $sourceRoot, $status);
+            INSERT OR REPLACE INTO Jobs (JobId, CreatedUtc, SourceRoot, Status, RepositoryId)
+            VALUES ($jobId, $createdUtc, $sourceRoot, $status, $repositoryId);
             """;
 
         command.Parameters.AddWithValue("$jobId", job.JobId);
         command.Parameters.AddWithValue("$createdUtc", ToUtcString(job.CreatedUtc));
         command.Parameters.AddWithValue("$sourceRoot", job.SourceRoot);
         command.Parameters.AddWithValue("$status", job.Status);
+        command.Parameters.AddWithValue("$repositoryId", (object?)job.RepositoryId ?? DBNull.Value);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -173,6 +216,23 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$status", status);
         command.Parameters.AddWithValue("$jobId", jobId);
 
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateJobRepositoryAsync(string jobId, string repositoryId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Jobs
+            SET RepositoryId = $repositoryId
+            WHERE JobId = $jobId;
+            """;
+
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$repositoryId", (object?)repositoryId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -199,7 +259,7 @@ public sealed class JobStore
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT JobId, CreatedUtc, SourceRoot, Status
+            SELECT JobId, CreatedUtc, SourceRoot, Status, RepositoryId
             FROM Jobs
             WHERE JobId = $jobId;
             """;
@@ -216,7 +276,8 @@ public sealed class JobStore
             reader.GetString(0),
             ParseUtc(reader.GetString(1)),
             reader.GetString(2),
-            reader.GetString(3));
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4));
     }
 
     public async Task<IReadOnlyList<FileRecord>> GetFilesForJobAsync(string jobId, CancellationToken cancellationToken = default)
@@ -304,12 +365,13 @@ public sealed class JobStore
                    j.CreatedUtc,
                    j.SourceRoot,
                    j.Status,
+                   j.RepositoryId,
                    COUNT(f.FileId) AS FileCount,
                    COALESCE(SUM(f.SizeBytes), 0) AS TotalBytes,
                    COALESCE(SUM(f.IsLargeWarning), 0) AS LargeWarnings
             FROM Jobs j
             LEFT JOIN Files f ON f.JobId = j.JobId
-            GROUP BY j.JobId, j.CreatedUtc, j.SourceRoot, j.Status
+            GROUP BY j.JobId, j.CreatedUtc, j.SourceRoot, j.Status, j.RepositoryId
             ORDER BY j.CreatedUtc DESC
             LIMIT $limit;
             """;
@@ -324,9 +386,10 @@ public sealed class JobStore
                 ParseUtc(reader.GetString(1)),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetInt64(4),
                 reader.GetInt64(5),
-                reader.GetInt64(6)));
+                reader.GetInt64(6),
+                reader.GetInt64(7),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
         }
 
         return results;
@@ -1322,6 +1385,247 @@ public sealed class JobStore
                 reader.IsDBNull(7) ? null : reader.GetString(7),
                 reader.IsDBNull(8) ? "inherit" : reader.GetString(8),
                 reader.IsDBNull(9) ? null : reader.GetString(9)));
+        }
+
+        return results;
+    }
+
+    public async Task ReplaceNetDocumentsCabinetsAsync(
+        string region,
+        IReadOnlyList<NetDocumentsCabinetRecord> cabinets,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = (SqliteTransaction)transaction;
+            delete.CommandText = "DELETE FROM NetDocumentsCabinets WHERE Region = $region;";
+            delete.Parameters.AddWithValue("$region", region);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var cabinet in cabinets)
+        {
+            await using var upsert = connection.CreateCommand();
+            upsert.Transaction = (SqliteTransaction)transaction;
+            upsert.CommandText = """
+                INSERT INTO NetDocumentsCabinets
+                (CabinetId, RepositoryId, RepositoryName, CabinetName, Description, Region, SyncedUtc)
+                VALUES ($cabinetId, $repositoryId, $repositoryName, $cabinetName, $description, $region, $syncedUtc)
+                ON CONFLICT(CabinetId) DO UPDATE SET
+                    RepositoryId = excluded.RepositoryId,
+                    RepositoryName = excluded.RepositoryName,
+                    CabinetName = excluded.CabinetName,
+                    Description = excluded.Description,
+                    Region = excluded.Region,
+                    SyncedUtc = excluded.SyncedUtc;
+                """;
+            upsert.Parameters.AddWithValue("$cabinetId", cabinet.CabinetId);
+            upsert.Parameters.AddWithValue("$repositoryId", cabinet.RepositoryId);
+            upsert.Parameters.AddWithValue("$repositoryName", cabinet.RepositoryName);
+            upsert.Parameters.AddWithValue("$cabinetName", cabinet.CabinetName);
+            upsert.Parameters.AddWithValue("$description", (object?)cabinet.Description ?? DBNull.Value);
+            upsert.Parameters.AddWithValue("$region", cabinet.Region);
+            upsert.Parameters.AddWithValue("$syncedUtc", ToUtcString(cabinet.SyncedUtc));
+            await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<NetDocumentsCabinetRecord>> GetNetDocumentsCabinetsAsync(
+        string? region = null,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<NetDocumentsCabinetRecord>();
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT CabinetId, RepositoryId, RepositoryName, CabinetName, Description, Region, SyncedUtc
+            FROM NetDocumentsCabinets
+            WHERE $region IS NULL OR Region = $region
+            ORDER BY RepositoryName, CabinetName;
+            """;
+        command.Parameters.AddWithValue("$region", (object?)region ?? DBNull.Value);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new NetDocumentsCabinetRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                reader.GetString(5),
+                ParseUtc(reader.GetString(6))));
+        }
+
+        return results;
+    }
+
+    public async Task ReplaceNetDocumentsAttributesAsync(
+        string cabinetId,
+        IReadOnlyList<NetDocumentsAttributeRecord> attributes,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = (SqliteTransaction)transaction;
+            delete.CommandText = "DELETE FROM NetDocumentsAttributes WHERE CabinetId = $cabinetId;";
+            delete.Parameters.AddWithValue("$cabinetId", cabinetId);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var attribute in attributes)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = (SqliteTransaction)transaction;
+            insert.CommandText = """
+                INSERT INTO NetDocumentsAttributes
+                (CabinetId, RepositoryId, AttributeNum, AttributeId, Name, DataType, IsRequired, IsMultiValue, IsLookup, ParentAttributeNum, IsChildAttribute, SyncedUtc)
+                VALUES
+                ($cabinetId, $repositoryId, $attributeNum, $attributeId, $name, $dataType, $isRequired, $isMultiValue, $isLookup, $parentAttributeNum, $isChildAttribute, $syncedUtc);
+                """;
+            insert.Parameters.AddWithValue("$cabinetId", attribute.CabinetId);
+            insert.Parameters.AddWithValue("$repositoryId", attribute.RepositoryId);
+            insert.Parameters.AddWithValue("$attributeNum", attribute.AttributeNum);
+            insert.Parameters.AddWithValue("$attributeId", (object?)attribute.AttributeId ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$name", attribute.Name);
+            insert.Parameters.AddWithValue("$dataType", (object?)attribute.DataType ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$isRequired", attribute.IsRequired ? 1 : 0);
+            insert.Parameters.AddWithValue("$isMultiValue", attribute.IsMultiValue ? 1 : 0);
+            insert.Parameters.AddWithValue("$isLookup", attribute.IsLookup ? 1 : 0);
+            insert.Parameters.AddWithValue("$parentAttributeNum", (object?)attribute.ParentAttributeNum ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$isChildAttribute", attribute.IsChildAttribute ? 1 : 0);
+            insert.Parameters.AddWithValue("$syncedUtc", ToUtcString(attribute.SyncedUtc));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<NetDocumentsAttributeRecord>> GetNetDocumentsAttributesAsync(
+        string cabinetId,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<NetDocumentsAttributeRecord>();
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT CabinetId, RepositoryId, AttributeNum, AttributeId, Name, DataType, IsRequired, IsMultiValue, IsLookup, ParentAttributeNum, IsChildAttribute, SyncedUtc
+            FROM NetDocumentsAttributes
+            WHERE CabinetId = $cabinetId
+            ORDER BY Name;
+            """;
+        command.Parameters.AddWithValue("$cabinetId", cabinetId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new NetDocumentsAttributeRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                reader.GetInt64(6) == 1,
+                reader.GetInt64(7) == 1,
+                reader.GetInt64(8) == 1,
+                reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                reader.GetInt64(10) == 1,
+                ParseUtc(reader.GetString(11))));
+        }
+
+        return results;
+    }
+
+    public async Task ReplaceNetDocumentsLookupValuesAsync(
+        string cabinetId,
+        int attributeNum,
+        IReadOnlyList<NetDocumentsLookupValueRecord> values,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = (SqliteTransaction)transaction;
+            delete.CommandText = """
+                DELETE FROM NetDocumentsLookupValues
+                WHERE CabinetId = $cabinetId AND AttributeNum = $attributeNum;
+                """;
+            delete.Parameters.AddWithValue("$cabinetId", cabinetId);
+            delete.Parameters.AddWithValue("$attributeNum", attributeNum);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var value in values)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = (SqliteTransaction)transaction;
+            insert.CommandText = """
+                INSERT INTO NetDocumentsLookupValues
+                (CabinetId, AttributeNum, ParentKey, ValueKey, Description, SyncedUtc)
+                VALUES
+                ($cabinetId, $attributeNum, $parentKey, $valueKey, $description, $syncedUtc);
+                """;
+            insert.Parameters.AddWithValue("$cabinetId", value.CabinetId);
+            insert.Parameters.AddWithValue("$attributeNum", value.AttributeNum);
+            insert.Parameters.AddWithValue("$parentKey", value.ParentKey ?? string.Empty);
+            insert.Parameters.AddWithValue("$valueKey", value.ValueKey);
+            insert.Parameters.AddWithValue("$description", (object?)value.Description ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$syncedUtc", ToUtcString(value.SyncedUtc));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<NetDocumentsLookupValueRecord>> GetNetDocumentsLookupValuesAsync(
+        string cabinetId,
+        int attributeNum,
+        string? parentKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<NetDocumentsLookupValueRecord>();
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT CabinetId, AttributeNum, ParentKey, ValueKey, Description, SyncedUtc
+            FROM NetDocumentsLookupValues
+            WHERE CabinetId = $cabinetId
+              AND AttributeNum = $attributeNum
+              AND ($parentKey IS NULL OR ParentKey = $parentKey OR ParentKey = '')
+            ORDER BY ValueKey;
+            """;
+        command.Parameters.AddWithValue("$cabinetId", cabinetId);
+        command.Parameters.AddWithValue("$attributeNum", attributeNum);
+        command.Parameters.AddWithValue("$parentKey", (object?)parentKey ?? DBNull.Value);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new NetDocumentsLookupValueRecord(
+                reader.GetString(0),
+                reader.GetInt32(1),
+                reader.IsDBNull(2) || string.IsNullOrWhiteSpace(reader.GetString(2)) ? null : reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                ParseUtc(reader.GetString(5))));
         }
 
         return results;

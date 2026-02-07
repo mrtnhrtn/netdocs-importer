@@ -17,7 +17,8 @@ public sealed class ScanJobRunner
         long largeFileThresholdBytes,
         IProgress<FileScanProgress>? progress,
         CancellationToken cancellationToken,
-        string? jobId = null)
+        string? jobId = null,
+        string? repositoryId = null)
     {
         if (string.IsNullOrWhiteSpace(sourceRoot))
         {
@@ -31,7 +32,8 @@ public sealed class ScanJobRunner
             resolvedJobId,
             DateTime.UtcNow,
             sourceRoot,
-            "Scanning"), cancellationToken);
+            "Scanning",
+            repositoryId), cancellationToken);
 
         JobFileWriter? fileWriter = null;
         JobFolderWriter? folderWriter = null;

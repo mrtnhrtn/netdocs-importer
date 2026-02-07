@@ -342,6 +342,126 @@ public class NdImportCsvExporterTests
         CleanupTempRoot(tempRoot);
     }
 
+    [Fact]
+    public async Task ExportAsync_UsesCanonicalFieldNameAndEscapesSemicolons()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include");
+        await store.UpdateFolderProfileModeAsync(rootFolderId, "override");
+        await store.UpsertFolderProfileAsync(
+            jobId,
+            rootFolderId,
+            ProfilePayloadCodec.Serialize(new[]
+            {
+                new ProfileFieldEntry("matter type", "A;B", ProfileFieldMode.Label)
+            }));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\doc.txt",
+            "doc.txt",
+            42,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null));
+
+        var schema = new ProfileSchemaDictionary(
+            "Cab",
+            "1",
+            new[]
+            {
+                new ProfileSchemaField("1001", "Matter Type", Array.Empty<ProfileSchemaValue>(), isLookup: false, isMultiValue: true)
+            });
+
+        var result = await new NdImportCsvExporter(store).ExportAsync(
+            jobId,
+            reportsDir,
+            new NdImportExportOptions
+            {
+                IncludeAuditStamps = false,
+                IncludeProfileMetadata = true,
+                ProfileSchema = schema
+            });
+
+        var lines = await File.ReadAllLinesAsync(result.OutputPath);
+        Assert.Contains("Matter Type", lines[0]);
+        Assert.Contains("A; B", lines[1]);
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_ValidatesLookupKeysAgainstSchema()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include");
+        await store.UpdateFolderProfileModeAsync(rootFolderId, "override");
+        await store.UpsertFolderProfileAsync(
+            jobId,
+            rootFolderId,
+            ProfilePayloadCodec.Serialize(new[]
+            {
+                new ProfileFieldEntry("Matter Type", "BADKEY", ProfileFieldMode.Code)
+            }));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\doc.txt",
+            "doc.txt",
+            42,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null));
+
+        var schema = new ProfileSchemaDictionary(
+            "Cab",
+            "1",
+            new[]
+            {
+                new ProfileSchemaField(
+                    "1001",
+                    "Matter Type",
+                    new[] { new ProfileSchemaValue("GOOD", "Good Value") },
+                    isLookup: true)
+            });
+
+        var result = await new NdImportCsvExporter(store).ExportAsync(
+            jobId,
+            reportsDir,
+            new NdImportExportOptions
+            {
+                IncludeAuditStamps = false,
+                IncludeProfileMetadata = true,
+                ProfileSchema = schema,
+                ValidateLookupKeys = true
+            });
+
+        var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
+        Assert.Contains(warningLines, line => line.Contains("UNRESOLVED_VALUE", StringComparison.Ordinal));
+        CleanupTempRoot(tempRoot);
+    }
+
     private static async Task<string> InsertFolderAsync(
         JobStore store,
         string jobId,

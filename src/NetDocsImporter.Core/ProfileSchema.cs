@@ -44,10 +44,15 @@ public sealed class ProfileSchemaDictionary
         _fieldsByName = Fields
             .Where(f => !string.IsNullOrWhiteSpace(f.Name))
             .ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
+
+        _fieldsByExactName = Fields
+            .Where(f => !string.IsNullOrWhiteSpace(f.Name))
+            .ToDictionary(f => f.Name, StringComparer.Ordinal);
     }
 
     private readonly IReadOnlyDictionary<string, ProfileSchemaField> _fieldsByCode;
     private readonly IReadOnlyDictionary<string, ProfileSchemaField> _fieldsByName;
+    private readonly IReadOnlyDictionary<string, ProfileSchemaField> _fieldsByExactName;
 
     public string CabinetName { get; }
 
@@ -89,6 +94,51 @@ public sealed class ProfileSchemaDictionary
         return false;
     }
 
+    public bool TryResolveCanonicalFieldName(string fieldKey, out string canonicalName)
+    {
+        canonicalName = string.Empty;
+        if (TryGetField(fieldKey, out var field))
+        {
+            canonicalName = field.Name;
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool IsExactFieldName(string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+        {
+            return false;
+        }
+
+        return _fieldsByExactName.ContainsKey(fieldName.Trim());
+    }
+
+    public bool TryGetField(string fieldKey, out ProfileSchemaField field)
+    {
+        field = null!;
+        if (string.IsNullOrWhiteSpace(fieldKey))
+        {
+            return false;
+        }
+
+        if (_fieldsByCode.TryGetValue(fieldKey.Trim(), out var byCode))
+        {
+            field = byCode;
+            return true;
+        }
+
+        if (_fieldsByName.TryGetValue(fieldKey.Trim(), out var byName))
+        {
+            field = byName;
+            return true;
+        }
+
+        return false;
+    }
+
     public bool TryResolveValueLabel(string fieldKey, string valueCode, out string valueLabel)
     {
         valueLabel = string.Empty;
@@ -97,8 +147,7 @@ public sealed class ProfileSchemaDictionary
             return false;
         }
 
-        var field = ResolveField(fieldKey);
-        if (field is null)
+        if (!TryGetField(fieldKey, out var field))
         {
             return false;
         }
@@ -120,8 +169,7 @@ public sealed class ProfileSchemaDictionary
             return false;
         }
 
-        var field = ResolveField(fieldKey);
-        if (field is null)
+        if (!TryGetField(fieldKey, out var field))
         {
             return false;
         }
@@ -134,30 +182,22 @@ public sealed class ProfileSchemaDictionary
 
         return false;
     }
-
-    private ProfileSchemaField? ResolveField(string fieldKey)
-    {
-        if (_fieldsByCode.TryGetValue(fieldKey.Trim(), out var byCode))
-        {
-            return byCode;
-        }
-
-        if (_fieldsByName.TryGetValue(fieldKey.Trim(), out var byName))
-        {
-            return byName;
-        }
-
-        return null;
-    }
 }
 
 public sealed class ProfileSchemaField
 {
-    public ProfileSchemaField(string code, string name, IReadOnlyList<ProfileSchemaValue> values)
+    public ProfileSchemaField(
+        string code,
+        string name,
+        IReadOnlyList<ProfileSchemaValue> values,
+        bool isLookup = false,
+        bool isMultiValue = false)
     {
         Code = code;
         Name = name;
         Values = values ?? Array.Empty<ProfileSchemaValue>();
+        IsLookup = isLookup || Values.Count > 0;
+        IsMultiValue = isMultiValue;
 
         ValuesByCode = Values
             .Where(v => !string.IsNullOrWhiteSpace(v.Code))
@@ -174,20 +214,32 @@ public sealed class ProfileSchemaField
 
     public IReadOnlyList<ProfileSchemaValue> Values { get; }
 
+    public bool IsLookup { get; }
+
+    public bool IsMultiValue { get; }
+
     public IReadOnlyDictionary<string, string> ValuesByCode { get; }
 
     public IReadOnlyDictionary<string, string> ValuesByLabel { get; }
+
+    public bool ContainsValueCode(string valueCode)
+    {
+        return !string.IsNullOrWhiteSpace(valueCode) && ValuesByCode.ContainsKey(valueCode.Trim());
+    }
 }
 
 public sealed class ProfileSchemaValue
 {
-    public ProfileSchemaValue(string code, string label)
+    public ProfileSchemaValue(string code, string label, string? parentKey = null)
     {
         Code = code;
         Label = label;
+        ParentKey = parentKey;
     }
 
     public string Code { get; }
 
     public string Label { get; }
+
+    public string? ParentKey { get; }
 }

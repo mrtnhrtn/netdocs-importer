@@ -14,10 +14,11 @@ using System.Windows.Forms;
 using NetDocsImporter.Core;
 using NetDocsImporter.Core.Security;
 using NetDocsImporter.Data;
+using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
-public sealed class MainViewModel : INotifyPropertyChanged
+public sealed partial class MainViewModel : INotifyPropertyChanged
 {
     private const long LargeFileThresholdBytes = 1_800_000_000;
     private const int FilePreviewLimit = 2000;
@@ -389,6 +390,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 settings.Region = value;
                 OnPropertyChanged(nameof(CanConnectToNetDocuments));
                 QueueSettingsSave();
+                _ = LoadNetDocumentsMetadataAsync();
             }
         }
     }
@@ -437,7 +439,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get
         {
             if (string.IsNullOrWhiteSpace(NetDocumentsClientId) ||
-                string.IsNullOrWhiteSpace(NetDocumentsClientSecret) ||
                 string.IsNullOrWhiteSpace(NetDocumentsRedirectUri))
             {
                 return false;
@@ -577,6 +578,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Steps.Add(new StepItem(6, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
 
         CurrentStep = Steps[0];
+        InitializeNetDocumentsIntegration();
     }
     public async Task SelectFolderAndScanAsync()
     {
@@ -631,7 +633,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LargeFileThresholdBytes,
                 progress,
                 _cancellation.Token,
-                jobId);
+                jobId,
+                SelectedNetDocumentsRepositoryId);
             StatusText = "Scan complete.";
             CurrentJobState = "Ready";
         }
@@ -696,6 +699,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         CurrentJobSourceRoot = job.SourceRoot;
+        _currentJobRepositoryId = job.RepositoryId ?? string.Empty;
+        OnPropertyChanged(nameof(CurrentJobRepositoryId));
+        if (!string.IsNullOrWhiteSpace(_currentJobRepositoryId) &&
+            !string.Equals(SelectedNetDocumentsRepositoryId, _currentJobRepositoryId, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedNetDocumentsRepositoryId = _currentJobRepositoryId;
+        }
         CurrentJobState = IsImportPaused ? "Paused" : IsImportRunning ? "Importing" : IsScanning ? "Scanning" : "Ready";
     }
 
@@ -907,6 +917,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public async Task LoadNdImportSettingsAsync()
     {
         await LoadSettingsAsync();
+        await LoadNetDocumentsMetadataAsync();
+        await TryRestoreNetDocumentsSessionAsync();
         if (string.IsNullOrWhiteSpace(NdImportPath))
         {
             var localCandidate = Path.Combine(AppContext.BaseDirectory, "ndimport.exe");
@@ -1012,15 +1024,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public Task ConnectToNetDocumentsAsync()
     {
-        if (!CanConnectToNetDocuments)
-        {
-            StatusText = "Enter region, client id, client secret, and redirect URI before connecting.";
-            return Task.CompletedTask;
-        }
-
-        var regionSettings = GetSelectedNetDocumentsRegionSetting();
-        StatusText = $"NetDocuments connection settings are ready for {SelectedNetDocumentsRegion} ({regionSettings.ApiBaseUrl}).";
-        return Task.CompletedTask;
+        return ConnectAndSyncNetDocumentsAsync();
     }
 
     private async Task LoadSettingsAsync()
@@ -1079,6 +1083,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? NetDocumentsRegionDefaults.DefaultRedirectUri
             : netDocuments.RedirectUri;
         OnPropertyChanged(nameof(NetDocumentsRedirectUri));
+        _selectedNetDocumentsRepositoryId = netDocuments.SelectedRepositoryId ?? string.Empty;
+        _selectedNetDocumentsCabinetId = netDocuments.SelectedCabinetId ?? string.Empty;
+        _selectedNetDocumentsCabinetName = netDocuments.SelectedCabinetName ?? string.Empty;
+        OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
+        OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
+        OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
 
         var clientSecretName = GetNetDocumentsClientSecretName();
         var clientSecret = await _secretStore.ReadSecretAsync(clientSecretName);
@@ -1130,6 +1140,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         netDocuments.RedirectUri = string.IsNullOrWhiteSpace(NetDocumentsRedirectUri)
             ? NetDocumentsRegionDefaults.DefaultRedirectUri
             : NetDocumentsRedirectUri;
+        netDocuments.SelectedRepositoryId = SelectedNetDocumentsRepositoryId;
+        netDocuments.SelectedCabinetId = SelectedNetDocumentsCabinetId;
+        netDocuments.SelectedCabinetName = SelectedNetDocumentsCabinetName;
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
         netDocuments.ClientSecretRef = string.IsNullOrWhiteSpace(NetDocumentsClientSecret)
             ? string.Empty
@@ -1206,7 +1219,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(NdImportCabinet))
+        var activeCabinet = string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetName)
+            ? NdImportCabinet
+            : SelectedNetDocumentsCabinetName;
+
+        if (string.IsNullOrWhiteSpace(activeCabinet))
         {
             SchemaCabinetMatches = true;
             return;
@@ -1218,7 +1235,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        SchemaCabinetMatches = string.Equals(_schema.CabinetName, NdImportCabinet, StringComparison.OrdinalIgnoreCase);
+        SchemaCabinetMatches = string.Equals(_schema.CabinetName, activeCabinet, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ResolveProfileFieldHints()
