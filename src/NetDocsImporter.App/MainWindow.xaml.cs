@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using NetDocsImporter.Core;
 
@@ -202,6 +203,19 @@ public partial class MainWindow : Window
     public async void OnLaunchNdImport(object sender, RoutedEventArgs e)
     {
         await _viewModel.LaunchNdImportAsync();
+    }
+
+    public void OnNetDocumentsClientSecretPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox)
+        {
+            _viewModel.NetDocumentsClientSecret = passwordBox.Password;
+        }
+    }
+
+    public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ConnectToNetDocumentsAsync();
     }
 
 }

@@ -57,4 +57,31 @@ public partial class ProfilingStepView : System.Windows.Controls.UserControl
             main.OnLoadSchema(sender, e);
         }
     }
+
+    public void OnNetDocumentsClientSecretLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox && DataContext is MainViewModel viewModel)
+        {
+            if (passwordBox.Password != viewModel.NetDocumentsClientSecret)
+            {
+                passwordBox.Password = viewModel.NetDocumentsClientSecret;
+            }
+        }
+    }
+
+    public void OnNetDocumentsClientSecretPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnNetDocumentsClientSecretPasswordChanged(sender, e);
+        }
+    }
+
+    public void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnConnectToNetDocuments(sender, e);
+        }
+    }
 }

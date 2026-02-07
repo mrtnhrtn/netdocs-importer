@@ -5,6 +5,7 @@ namespace NetDocsImporter.Core;
 public sealed class AppSettings
 {
     public const string DefaultNdImportPasswordRef = "ndimport-password.dat";
+    public const string DefaultNetDocumentsClientSecretRef = "netdocuments-client-secret.dat";
 
     public int Version { get; set; } = 2;
 
@@ -21,6 +22,8 @@ public sealed class AppSettings
     public string NdImportPasswordRef { get; set; } = string.Empty;
 
     public string ProfileSchemaPath { get; set; } = string.Empty;
+
+    public NetDocumentsConnectionSettings NetDocumentsConnection { get; set; } = new();
 
     public static async Task<AppSettings> LoadAsync(string path, CancellationToken cancellationToken = default)
     {

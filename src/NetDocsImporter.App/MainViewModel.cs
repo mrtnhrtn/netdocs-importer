@@ -79,6 +79,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _schemaCabinetMatches;
     private string _schemaCabinetName = string.Empty;
     private bool _hasSchemaLoaded;
+    private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
+    private string _netDocumentsClientId = string.Empty;
+    private string _netDocumentsClientSecret = string.Empty;
+    private string _netDocumentsRedirectUri = NetDocumentsRegionDefaults.DefaultRedirectUri;
     private AppSettings _settings = new();
     private ProfileSchemaCatalog? _schemaCatalog;
     private ProfileSchemaDictionary? _schema;
@@ -116,6 +120,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         "Standard",
         "Rich metadata (schema-backed)"
     };
+    public IReadOnlyList<NetDocumentsRegion> NetDocumentsRegions { get; } = Enum.GetValues<NetDocumentsRegion>();
 
     public bool HasFolderRoots
     {
@@ -370,6 +375,79 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         get => _hasSchemaLoaded;
         private set => SetField(ref _hasSchemaLoaded, value);
+    }
+
+    public NetDocumentsRegion SelectedNetDocumentsRegion
+    {
+        get => _netDocumentsRegion;
+        set
+        {
+            if (SetField(ref _netDocumentsRegion, value))
+            {
+                var settings = GetOrCreateNetDocumentsSettings();
+                NetDocumentsRegionDefaults.EnsureDefaults(settings);
+                settings.Region = value;
+                OnPropertyChanged(nameof(CanConnectToNetDocuments));
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public string NetDocumentsClientId
+    {
+        get => _netDocumentsClientId;
+        set
+        {
+            if (SetField(ref _netDocumentsClientId, value))
+            {
+                OnPropertyChanged(nameof(CanConnectToNetDocuments));
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public string NetDocumentsClientSecret
+    {
+        get => _netDocumentsClientSecret;
+        set
+        {
+            if (SetField(ref _netDocumentsClientSecret, value))
+            {
+                OnPropertyChanged(nameof(CanConnectToNetDocuments));
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public string NetDocumentsRedirectUri
+    {
+        get => _netDocumentsRedirectUri;
+        set
+        {
+            if (SetField(ref _netDocumentsRedirectUri, value))
+            {
+                OnPropertyChanged(nameof(CanConnectToNetDocuments));
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool CanConnectToNetDocuments
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(NetDocumentsClientId) ||
+                string.IsNullOrWhiteSpace(NetDocumentsClientSecret) ||
+                string.IsNullOrWhiteSpace(NetDocumentsRedirectUri))
+            {
+                return false;
+            }
+
+            var region = GetSelectedNetDocumentsRegionSetting();
+            return !string.IsNullOrWhiteSpace(region.ApiBaseUrl)
+                && !string.IsNullOrWhiteSpace(region.OAuthAuthorizeBaseUrl)
+                && !string.IsNullOrWhiteSpace(region.OAuthTokenUrl);
+        }
     }
 
     public string NdImportPath
@@ -932,6 +1010,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public Task ConnectToNetDocumentsAsync()
+    {
+        if (!CanConnectToNetDocuments)
+        {
+            StatusText = "Enter region, client id, client secret, and redirect URI before connecting.";
+            return Task.CompletedTask;
+        }
+
+        var regionSettings = GetSelectedNetDocumentsRegionSetting();
+        StatusText = $"NetDocuments connection settings are ready for {SelectedNetDocumentsRegion} ({regionSettings.ApiBaseUrl}).";
+        return Task.CompletedTask;
+    }
+
     private async Task LoadSettingsAsync()
     {
         _settings = await AppSettings.LoadAsync(_paths.SettingsPath);
@@ -978,6 +1069,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
             SchemaPath = _settings.ProfileSchemaPath;
         }
 
+        var netDocuments = GetOrCreateNetDocumentsSettings();
+        NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
+        _netDocumentsRegion = netDocuments.Region;
+        OnPropertyChanged(nameof(SelectedNetDocumentsRegion));
+        _netDocumentsClientId = netDocuments.ClientId ?? string.Empty;
+        OnPropertyChanged(nameof(NetDocumentsClientId));
+        _netDocumentsRedirectUri = string.IsNullOrWhiteSpace(netDocuments.RedirectUri)
+            ? NetDocumentsRegionDefaults.DefaultRedirectUri
+            : netDocuments.RedirectUri;
+        OnPropertyChanged(nameof(NetDocumentsRedirectUri));
+
+        var clientSecretName = GetNetDocumentsClientSecretName();
+        var clientSecret = await _secretStore.ReadSecretAsync(clientSecretName);
+        _netDocumentsClientSecret = clientSecret ?? string.Empty;
+        OnPropertyChanged(nameof(NetDocumentsClientSecret));
+        OnPropertyChanged(nameof(CanConnectToNetDocuments));
+
         UpdateSchemaMatch();
     }
 
@@ -1007,6 +1115,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task SaveSettingsAsync()
     {
         var previousSecretRef = _settings.NdImportPasswordRef;
+        var netDocuments = GetOrCreateNetDocumentsSettings();
+        var previousNetDocumentsSecretRef = netDocuments.ClientSecretRef;
 
         _settings.NdImportPath = NdImportPath;
         _settings.NdImportHost = NdImportHost;
@@ -1015,6 +1125,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settings.RememberNdImportPassword = RememberNdImportPassword;
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
+        netDocuments.Region = SelectedNetDocumentsRegion;
+        netDocuments.ClientId = NetDocumentsClientId;
+        netDocuments.RedirectUri = string.IsNullOrWhiteSpace(NetDocumentsRedirectUri)
+            ? NetDocumentsRegionDefaults.DefaultRedirectUri
+            : NetDocumentsRedirectUri;
+        NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
+        netDocuments.ClientSecretRef = string.IsNullOrWhiteSpace(NetDocumentsClientSecret)
+            ? string.Empty
+            : AppSettings.DefaultNetDocumentsClientSecretRef;
 
         if (RememberNdImportPassword && !string.IsNullOrWhiteSpace(NdImportPassword))
         {
@@ -1028,6 +1147,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _secretStore.DeleteSecret(secretToDelete);
         }
 
+        if (!string.IsNullOrWhiteSpace(NetDocumentsClientSecret))
+        {
+            await _secretStore.WriteSecretAsync(netDocuments.ClientSecretRef, NetDocumentsClientSecret);
+        }
+        else
+        {
+            var secretToDelete = string.IsNullOrWhiteSpace(previousNetDocumentsSecretRef)
+                ? AppSettings.DefaultNetDocumentsClientSecretRef
+                : previousNetDocumentsSecretRef;
+            _secretStore.DeleteSecret(secretToDelete);
+        }
+
         await AppSettings.SaveAsync(_paths.SettingsPath, _settings);
     }
 
@@ -1036,6 +1167,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return string.IsNullOrWhiteSpace(_settings.NdImportPasswordRef)
             ? AppSettings.DefaultNdImportPasswordRef
             : _settings.NdImportPasswordRef;
+    }
+
+    private string GetNetDocumentsClientSecretName()
+    {
+        var settings = GetOrCreateNetDocumentsSettings();
+        return string.IsNullOrWhiteSpace(settings.ClientSecretRef)
+            ? AppSettings.DefaultNetDocumentsClientSecretRef
+            : settings.ClientSecretRef;
+    }
+
+    private NetDocumentsConnectionSettings GetOrCreateNetDocumentsSettings()
+    {
+        _settings.NetDocumentsConnection ??= new NetDocumentsConnectionSettings();
+        return _settings.NetDocumentsConnection;
+    }
+
+    private NetDocumentsRegionSetting GetSelectedNetDocumentsRegionSetting()
+    {
+        var settings = GetOrCreateNetDocumentsSettings();
+        NetDocumentsRegionDefaults.EnsureDefaults(settings);
+        var key = SelectedNetDocumentsRegion.ToString();
+        if (settings.Regions.TryGetValue(key, out var configured) && configured is not null)
+        {
+            return configured;
+        }
+
+        var fallback = NetDocumentsRegionDefaults.GetDefaults(SelectedNetDocumentsRegion);
+        settings.Regions[key] = fallback;
+        return fallback;
     }
 
     private void UpdateSchemaMatch()
