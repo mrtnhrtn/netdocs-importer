@@ -26,22 +26,6 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
-    public void OnNetDocumentsClientSecretLoaded(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnNetDocumentsClientSecretLoaded(sender, e);
-        }
-    }
-
-    public void OnNetDocumentsClientSecretPasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnNetDocumentsClientSecretPasswordChanged(sender, e);
-        }
-    }
-
     public void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

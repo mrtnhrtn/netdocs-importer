@@ -81,9 +81,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _schemaCabinetName = string.Empty;
     private bool _hasSchemaLoaded;
     private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
-    private string _netDocumentsClientId = string.Empty;
-    private string _netDocumentsClientSecret = string.Empty;
-    private string _netDocumentsRedirectUri = NetDocumentsRegionDefaults.DefaultRedirectUri;
+    private readonly Dictionary<string, NetDocumentsOAuthClientConfig> _netDocumentsOAuthClientProfiles = new(StringComparer.OrdinalIgnoreCase);
+    private NetDocumentsOAuthClientConfig? _selectedNetDocumentsOAuthClientConfig;
     private AppSettings _settings = new();
     private ProfileSchemaCatalog? _schemaCatalog;
     private ProfileSchemaDictionary? _schema;
@@ -94,6 +93,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
     private readonly SecretStore _secretStore;
+    private readonly INetDocumentsOAuthClientConfigProvider _netDocumentsOAuthClientConfigProvider;
     private readonly JobStore _jobStore;
     private readonly ScanJobRunner _jobRunner;
     private readonly SynchronizationContext? _uiContext;
@@ -391,6 +391,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 var settings = GetOrCreateNetDocumentsSettings();
                 NetDocumentsRegionDefaults.EnsureDefaults(settings);
                 settings.Region = value;
+                ResolveNetDocumentsOAuthClientConfig();
+                OnPropertyChanged(nameof(NetDocumentsConnectionProfileStatus));
+                OnPropertyChanged(nameof(NetDocumentsConnectionRedirectUri));
                 OnPropertyChanged(nameof(CanConnectToNetDocuments));
                 QueueSettingsSave();
                 _ = LoadNetDocumentsMetadataAsync();
@@ -398,59 +401,28 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public string NetDocumentsClientId
-    {
-        get => _netDocumentsClientId;
-        set
-        {
-            if (SetField(ref _netDocumentsClientId, value))
-            {
-                OnPropertyChanged(nameof(CanConnectToNetDocuments));
-                QueueSettingsSave();
-            }
-        }
-    }
+    public string NetDocumentsConnectionProfileStatus =>
+        _selectedNetDocumentsOAuthClientConfig is null
+            ? "OAuth client profile not configured for this region."
+            : $"OAuth profile configured for {SelectedNetDocumentsRegion}.";
 
-    public string NetDocumentsClientSecret
-    {
-        get => _netDocumentsClientSecret;
-        set
-        {
-            if (SetField(ref _netDocumentsClientSecret, value))
-            {
-                OnPropertyChanged(nameof(CanConnectToNetDocuments));
-                QueueSettingsSave();
-            }
-        }
-    }
-
-    public string NetDocumentsRedirectUri
-    {
-        get => _netDocumentsRedirectUri;
-        set
-        {
-            if (SetField(ref _netDocumentsRedirectUri, value))
-            {
-                OnPropertyChanged(nameof(CanConnectToNetDocuments));
-                QueueSettingsSave();
-            }
-        }
-    }
+    public string NetDocumentsConnectionRedirectUri =>
+        _selectedNetDocumentsOAuthClientConfig?.RedirectUri ?? NetDocumentsRegionDefaults.DefaultRedirectUri;
 
     public bool CanConnectToNetDocuments
     {
         get
         {
-            if (string.IsNullOrWhiteSpace(NetDocumentsClientId) ||
-                string.IsNullOrWhiteSpace(NetDocumentsRedirectUri))
+            if (_selectedNetDocumentsOAuthClientConfig is null ||
+                string.IsNullOrWhiteSpace(_selectedNetDocumentsOAuthClientConfig.ClientId) ||
+                string.IsNullOrWhiteSpace(_selectedNetDocumentsOAuthClientConfig.RedirectUri))
             {
                 return false;
             }
 
-            var region = GetSelectedNetDocumentsRegionSetting();
-            return !string.IsNullOrWhiteSpace(region.ApiBaseUrl)
-                && !string.IsNullOrWhiteSpace(region.OAuthAuthorizeBaseUrl)
-                && !string.IsNullOrWhiteSpace(region.OAuthTokenUrl);
+            return !string.IsNullOrWhiteSpace(_selectedNetDocumentsOAuthClientConfig.ApiBaseUrl)
+                && !string.IsNullOrWhiteSpace(_selectedNetDocumentsOAuthClientConfig.OAuthAuthorizeBaseUrl)
+                && !string.IsNullOrWhiteSpace(_selectedNetDocumentsOAuthClientConfig.OAuthTokenUrl);
         }
     }
 
@@ -565,6 +537,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _paths = new AppPaths();
         _secretStore = new SecretStore(_paths.SecretsDirectory);
+        _netDocumentsOAuthClientConfigProvider = new DpapiNetDocumentsOAuthClientConfigProvider(_secretStore, AppSettings.DefaultNetDocumentsOAuthClientProfilesRef);
         _jobStore = new JobStore(_paths.DatabasePath);
         _jobRunner = new ScanJobRunner(_jobStore);
         _uiContext = SynchronizationContext.Current;
@@ -1110,14 +1083,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         var netDocuments = GetOrCreateNetDocumentsSettings();
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
+        netDocuments.OAuthClientConfigRef = string.IsNullOrWhiteSpace(netDocuments.OAuthClientConfigRef)
+            ? AppSettings.DefaultNetDocumentsOAuthClientProfilesRef
+            : netDocuments.OAuthClientConfigRef;
+        netDocuments.UseSecureOAuthClientConfig = true;
         _netDocumentsRegion = netDocuments.Region;
         OnPropertyChanged(nameof(SelectedNetDocumentsRegion));
-        _netDocumentsClientId = netDocuments.ClientId ?? string.Empty;
-        OnPropertyChanged(nameof(NetDocumentsClientId));
-        _netDocumentsRedirectUri = string.IsNullOrWhiteSpace(netDocuments.RedirectUri)
-            ? NetDocumentsRegionDefaults.DefaultRedirectUri
-            : netDocuments.RedirectUri;
-        OnPropertyChanged(nameof(NetDocumentsRedirectUri));
+
+        await LoadNetDocumentsOAuthClientProfilesAsync();
+        await MigrateLegacyNetDocumentsOAuthConfigAsync(netDocuments);
+        ResolveNetDocumentsOAuthClientConfig();
+        OnPropertyChanged(nameof(NetDocumentsConnectionProfileStatus));
+        OnPropertyChanged(nameof(NetDocumentsConnectionRedirectUri));
         _selectedNetDocumentsRepositoryId = netDocuments.SelectedRepositoryId ?? string.Empty;
         _selectedNetDocumentsCabinetId = netDocuments.SelectedCabinetId ?? string.Empty;
         _selectedNetDocumentsCabinetName = netDocuments.SelectedCabinetName ?? string.Empty;
@@ -1125,11 +1102,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
-
-        var clientSecretName = GetNetDocumentsClientSecretName();
-        var clientSecret = await _secretStore.ReadSecretAsync(clientSecretName);
-        _netDocumentsClientSecret = clientSecret ?? string.Empty;
-        OnPropertyChanged(nameof(NetDocumentsClientSecret));
         OnPropertyChanged(nameof(CanConnectToNetDocuments));
 
         UpdateSchemaMatch();
@@ -1162,7 +1134,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         var previousSecretRef = _settings.NdImportPasswordRef;
         var netDocuments = GetOrCreateNetDocumentsSettings();
-        var previousNetDocumentsSecretRef = netDocuments.ClientSecretRef;
 
         _settings.NdImportPath = NdImportPath;
         _settings.NdImportHost = NdImportHost;
@@ -1172,18 +1143,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
         netDocuments.Region = SelectedNetDocumentsRegion;
-        netDocuments.ClientId = NetDocumentsClientId;
-        netDocuments.RedirectUri = string.IsNullOrWhiteSpace(NetDocumentsRedirectUri)
-            ? NetDocumentsRegionDefaults.DefaultRedirectUri
-            : NetDocumentsRedirectUri;
+        netDocuments.UseSecureOAuthClientConfig = true;
+        netDocuments.OAuthClientConfigRef = string.IsNullOrWhiteSpace(netDocuments.OAuthClientConfigRef)
+            ? AppSettings.DefaultNetDocumentsOAuthClientProfilesRef
+            : netDocuments.OAuthClientConfigRef;
+        netDocuments.ClientId = string.Empty;
+        netDocuments.RedirectUri = NetDocumentsConnectionRedirectUri;
+        netDocuments.ClientSecretRef = string.Empty;
         netDocuments.SelectedRepositoryId = SelectedNetDocumentsRepositoryId;
         netDocuments.SelectedCabinetId = SelectedNetDocumentsCabinetId;
         netDocuments.SelectedCabinetName = SelectedNetDocumentsCabinetName;
         SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
-        netDocuments.ClientSecretRef = string.IsNullOrWhiteSpace(NetDocumentsClientSecret)
-            ? string.Empty
-            : AppSettings.DefaultNetDocumentsClientSecretRef;
 
         if (RememberNdImportPassword && !string.IsNullOrWhiteSpace(NdImportPassword))
         {
@@ -1197,18 +1168,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _secretStore.DeleteSecret(secretToDelete);
         }
 
-        if (!string.IsNullOrWhiteSpace(NetDocumentsClientSecret))
-        {
-            await _secretStore.WriteSecretAsync(netDocuments.ClientSecretRef, NetDocumentsClientSecret);
-        }
-        else
-        {
-            var secretToDelete = string.IsNullOrWhiteSpace(previousNetDocumentsSecretRef)
-                ? AppSettings.DefaultNetDocumentsClientSecretRef
-                : previousNetDocumentsSecretRef;
-            _secretStore.DeleteSecret(secretToDelete);
-        }
-
         await AppSettings.SaveAsync(_paths.SettingsPath, _settings);
     }
 
@@ -1219,18 +1178,85 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             : _settings.NdImportPasswordRef;
     }
 
-    private string GetNetDocumentsClientSecretName()
-    {
-        var settings = GetOrCreateNetDocumentsSettings();
-        return string.IsNullOrWhiteSpace(settings.ClientSecretRef)
-            ? AppSettings.DefaultNetDocumentsClientSecretRef
-            : settings.ClientSecretRef;
-    }
-
     private NetDocumentsConnectionSettings GetOrCreateNetDocumentsSettings()
     {
         _settings.NetDocumentsConnection ??= new NetDocumentsConnectionSettings();
         return _settings.NetDocumentsConnection;
+    }
+
+    private async Task LoadNetDocumentsOAuthClientProfilesAsync(CancellationToken cancellationToken = default)
+    {
+        _netDocumentsOAuthClientProfiles.Clear();
+        var profiles = await _netDocumentsOAuthClientConfigProvider.LoadAsync(cancellationToken);
+        foreach (var profile in profiles)
+        {
+            _netDocumentsOAuthClientProfiles[profile.Key] = profile.Value;
+        }
+    }
+
+    private async Task SaveNetDocumentsOAuthClientProfilesAsync(CancellationToken cancellationToken = default)
+    {
+        await _netDocumentsOAuthClientConfigProvider.SaveAsync(_netDocumentsOAuthClientProfiles, cancellationToken);
+    }
+
+    private void ResolveNetDocumentsOAuthClientConfig()
+    {
+        var key = SelectedNetDocumentsRegion.ToString();
+        if (!_netDocumentsOAuthClientProfiles.TryGetValue(key, out var configured))
+        {
+            _selectedNetDocumentsOAuthClientConfig = null;
+            return;
+        }
+
+        var regionDefaults = GetSelectedNetDocumentsRegionSetting();
+        configured.Region = SelectedNetDocumentsRegion;
+        configured.ApiBaseUrl = string.IsNullOrWhiteSpace(configured.ApiBaseUrl) ? regionDefaults.ApiBaseUrl : configured.ApiBaseUrl;
+        configured.OAuthAuthorizeBaseUrl = string.IsNullOrWhiteSpace(configured.OAuthAuthorizeBaseUrl) ? regionDefaults.OAuthAuthorizeBaseUrl : configured.OAuthAuthorizeBaseUrl;
+        configured.OAuthTokenUrl = string.IsNullOrWhiteSpace(configured.OAuthTokenUrl) ? regionDefaults.OAuthTokenUrl : configured.OAuthTokenUrl;
+        configured.RedirectUri = string.IsNullOrWhiteSpace(configured.RedirectUri) ? NetDocumentsRegionDefaults.DefaultRedirectUri : configured.RedirectUri;
+        _selectedNetDocumentsOAuthClientConfig = configured;
+    }
+
+    private async Task MigrateLegacyNetDocumentsOAuthConfigAsync(NetDocumentsConnectionSettings settings, CancellationToken cancellationToken = default)
+    {
+        var regionKey = settings.Region.ToString();
+        if (_netDocumentsOAuthClientProfiles.ContainsKey(regionKey))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ClientId))
+        {
+            return;
+        }
+
+        var secretName = string.IsNullOrWhiteSpace(settings.ClientSecretRef)
+            ? AppSettings.DefaultNetDocumentsClientSecretRef
+            : settings.ClientSecretRef;
+        var legacySecret = await _secretStore.ReadSecretAsync(secretName, cancellationToken) ?? string.Empty;
+        var regionDefaults = GetSelectedNetDocumentsRegionSetting();
+        var migrated = new NetDocumentsOAuthClientConfig
+        {
+            Region = settings.Region,
+            ClientId = settings.ClientId.Trim(),
+            ClientSecret = legacySecret,
+            RedirectUri = string.IsNullOrWhiteSpace(settings.RedirectUri)
+                ? NetDocumentsRegionDefaults.DefaultRedirectUri
+                : settings.RedirectUri.Trim(),
+            ApiBaseUrl = regionDefaults.ApiBaseUrl,
+            OAuthAuthorizeBaseUrl = regionDefaults.OAuthAuthorizeBaseUrl,
+            OAuthTokenUrl = regionDefaults.OAuthTokenUrl
+        };
+
+        _netDocumentsOAuthClientProfiles[regionKey] = migrated;
+        await SaveNetDocumentsOAuthClientProfilesAsync(cancellationToken);
+
+        settings.ClientId = string.Empty;
+        settings.ClientSecretRef = string.Empty;
+        settings.UseSecureOAuthClientConfig = true;
+        settings.OAuthClientConfigRef = AppSettings.DefaultNetDocumentsOAuthClientProfilesRef;
+        _secretStore.DeleteSecret(secretName);
+        await AppSettings.SaveAsync(_paths.SettingsPath, _settings, cancellationToken);
     }
 
     private NetDocumentsRegionSetting GetSelectedNetDocumentsRegionSetting()

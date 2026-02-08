@@ -1,6 +1,4 @@
 using System.Windows;
-using System.Windows.Controls;
-
 namespace NetDocsImporter.App.Views.Steps;
 
 public partial class ProfilingStepView : System.Windows.Controls.UserControl
@@ -55,25 +53,6 @@ public partial class ProfilingStepView : System.Windows.Controls.UserControl
         if (Window.GetWindow(this) is MainWindow main)
         {
             main.OnLoadSchema(sender, e);
-        }
-    }
-
-    public void OnNetDocumentsClientSecretLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox passwordBox && DataContext is MainViewModel viewModel)
-        {
-            if (passwordBox.Password != viewModel.NetDocumentsClientSecret)
-            {
-                passwordBox.Password = viewModel.NetDocumentsClientSecret;
-            }
-        }
-    }
-
-    public void OnNetDocumentsClientSecretPasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnNetDocumentsClientSecretPasswordChanged(sender, e);
         }
     }
 

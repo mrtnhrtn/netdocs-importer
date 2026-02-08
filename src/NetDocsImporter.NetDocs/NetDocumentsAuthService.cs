@@ -39,18 +39,6 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
             listener.Start();
             Trace.WriteLine($"ND-AUTH listener bind success redirectUri='{activeContext.RedirectUri}'.");
         }
-        catch (HttpListenerException ex) when (CanFallbackToLocalhost(activeContext.RedirectUri))
-        {
-            listener?.Close();
-            var fallbackContext = CreateLocalhostFallbackContext(activeContext);
-            Trace.WriteLine(
-                $"ND-AUTH listener bind failed redirectUri='{activeContext.RedirectUri}' error={ex.ErrorCode}. " +
-                $"Retrying with localhost redirectUri='{fallbackContext.RedirectUri}'.");
-            listener = CreateListener(fallbackContext.RedirectUri);
-            listener.Start();
-            activeContext = fallbackContext;
-            Trace.WriteLine($"ND-AUTH listener bind success redirectUri='{activeContext.RedirectUri}'.");
-        }
         catch (HttpListenerException ex)
         {
             Trace.WriteLine($"ND-AUTH listener bind failed redirectUri='{activeContext.RedirectUri}' error={ex.ErrorCode} message='{ex.Message}'.");
@@ -105,34 +93,6 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
             ClientId = context.ClientId?.Trim() ?? string.Empty,
             ClientSecret = context.ClientSecret ?? string.Empty,
             RedirectUri = context.RedirectUri?.Trim() ?? string.Empty
-        };
-    }
-
-    private static bool CanFallbackToLocalhost(string redirectUri)
-    {
-        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
-        {
-            return false;
-        }
-
-        return string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static NetDocumentsAuthContext CreateLocalhostFallbackContext(NetDocumentsAuthContext context)
-    {
-        var uri = new Uri(context.RedirectUri, UriKind.Absolute);
-        var builder = new UriBuilder(uri)
-        {
-            Host = "localhost"
-        };
-
-        return new NetDocumentsAuthContext
-        {
-            OAuthAuthorizeBaseUrl = context.OAuthAuthorizeBaseUrl,
-            OAuthTokenUrl = context.OAuthTokenUrl,
-            ClientId = context.ClientId,
-            ClientSecret = context.ClientSecret,
-            RedirectUri = builder.Uri.ToString().Trim()
         };
     }
 

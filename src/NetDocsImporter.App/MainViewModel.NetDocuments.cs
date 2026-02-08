@@ -168,20 +168,23 @@ public sealed partial class MainViewModel
 
     private NetDocumentsAuthContext BuildAuthContext()
     {
-        var region = GetSelectedNetDocumentsRegionSetting();
+        var oauthConfig = _selectedNetDocumentsOAuthClientConfig
+            ?? throw new InvalidOperationException($"No NetDocuments OAuth profile configured for region {SelectedNetDocumentsRegion}.");
+
         return new NetDocumentsAuthContext
         {
-            OAuthAuthorizeBaseUrl = region.OAuthAuthorizeBaseUrl,
-            OAuthTokenUrl = region.OAuthTokenUrl,
-            ClientId = NetDocumentsClientId,
-            ClientSecret = NetDocumentsClientSecret,
-            RedirectUri = (NetDocumentsRedirectUri ?? string.Empty).Trim()
+            OAuthAuthorizeBaseUrl = oauthConfig.OAuthAuthorizeBaseUrl,
+            OAuthTokenUrl = oauthConfig.OAuthTokenUrl,
+            ClientId = oauthConfig.ClientId,
+            ClientSecret = oauthConfig.ClientSecret,
+            RedirectUri = oauthConfig.RedirectUri.Trim()
         };
     }
 
     private string GetApiBaseUrl()
     {
-        return GetSelectedNetDocumentsRegionSetting().ApiBaseUrl;
+        return _selectedNetDocumentsOAuthClientConfig?.ApiBaseUrl
+               ?? GetSelectedNetDocumentsRegionSetting().ApiBaseUrl;
     }
 
     private NetDocumentsSyncService RequireSyncService()
@@ -210,7 +213,7 @@ public sealed partial class MainViewModel
     {
         if (!CanConnectToNetDocuments)
         {
-            StatusText = "Enter region, client id, and redirect URI before connecting.";
+            StatusText = "OAuth client profile is not configured for the selected region.";
             return;
         }
 

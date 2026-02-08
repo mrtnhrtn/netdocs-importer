@@ -2,7 +2,7 @@ namespace NetDocsImporter.Core;
 
 public static class NetDocumentsRegionDefaults
 {
-    public const string DefaultRedirectUri = "http://127.0.0.1:8400/callback";
+    public const string DefaultRedirectUri = "http://localhost:8400/callback";
 
     public static NetDocumentsRegionSetting GetDefaults(NetDocumentsRegion region)
     {
@@ -31,6 +31,12 @@ public static class NetDocumentsRegionDefaults
                 ApiBaseUrl = "https://api.au.netdocuments.com",
                 OAuthAuthorizeBaseUrl = "https://api.au.netdocuments.com/neWeb2/OAuth.aspx",
                 OAuthTokenUrl = "https://api.au.netdocuments.com/v1/OAuth"
+            },
+            NetDocumentsRegion.CAN => new NetDocumentsRegionSetting
+            {
+                ApiBaseUrl = "https://api.can.netdocuments.com",
+                OAuthAuthorizeBaseUrl = "https://api.can.netdocuments.com/neWeb2/OAuth.aspx",
+                OAuthTokenUrl = "https://api.can.netdocuments.com/v1/OAuth"
             },
             NetDocumentsRegion.Ducot => new NetDocumentsRegionSetting
             {

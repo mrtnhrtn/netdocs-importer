@@ -205,22 +205,6 @@ public partial class MainWindow : Window
         await _viewModel.LaunchNdImportAsync();
     }
 
-    public void OnNetDocumentsClientSecretPasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox passwordBox)
-        {
-            _viewModel.NetDocumentsClientSecret = passwordBox.Password;
-        }
-    }
-
-    public void OnNetDocumentsClientSecretLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox passwordBox && passwordBox.Password != _viewModel.NetDocumentsClientSecret)
-        {
-            passwordBox.Password = _viewModel.NetDocumentsClientSecret;
-        }
-    }
-
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();

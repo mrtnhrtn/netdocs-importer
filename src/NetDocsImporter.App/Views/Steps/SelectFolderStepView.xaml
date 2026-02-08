@@ -19,14 +19,15 @@
                 <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
                           SelectedItem="{Binding SelectedNetDocumentsRegion}"
                           Margin="0,2,0,6" />
-                <TextBlock Text="Client Id" Foreground="#555555" />
-                <TextBox Text="{Binding NetDocumentsClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-                <TextBlock Text="Client Secret" Foreground="#555555" />
-                <PasswordBox Margin="0,2,0,6"
-                             Loaded="OnNetDocumentsClientSecretLoaded"
-                             PasswordChanged="OnNetDocumentsClientSecretPasswordChanged" />
-                <TextBlock Text="Redirect URI" Foreground="#555555" />
-                <TextBox Text="{Binding NetDocumentsRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
+                <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" />
+                        <TextBlock Text="{Binding NetDocumentsConnectionRedirectUri, StringFormat=Redirect URI: {0}}"
+                                   Foreground="#555555"
+                                   Margin="0,2,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                     <Button Content="Connect"
                             Width="110"

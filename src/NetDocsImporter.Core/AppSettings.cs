@@ -7,6 +7,7 @@ public sealed class AppSettings
     public const string DefaultNdImportPasswordRef = "ndimport-password.dat";
     public const string DefaultNetDocumentsClientSecretRef = "netdocuments-client-secret.dat";
     public const string DefaultNetDocumentsTokenRef = "netdocuments-token.dat";
+    public const string DefaultNetDocumentsOAuthClientProfilesRef = "netdocuments-oauth-client-profiles.dat";
 
     public int Version { get; set; } = 2;
 

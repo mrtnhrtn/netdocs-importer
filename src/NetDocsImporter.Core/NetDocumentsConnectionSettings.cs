@@ -6,6 +6,7 @@ public enum NetDocumentsRegion
     EU,
     DE,
     AU,
+    CAN,
     Ducot
 }
 
@@ -22,11 +23,16 @@ public sealed class NetDocumentsConnectionSettings
 {
     public NetDocumentsRegion Region { get; set; } = NetDocumentsRegion.AU;
 
+    // Legacy fields retained for migration from older settings versions.
     public string ClientId { get; set; } = string.Empty;
 
     public string ClientSecretRef { get; set; } = string.Empty;
 
     public string RedirectUri { get; set; } = NetDocumentsRegionDefaults.DefaultRedirectUri;
+
+    public bool UseSecureOAuthClientConfig { get; set; } = true;
+
+    public string OAuthClientConfigRef { get; set; } = string.Empty;
 
     public string SelectedRepositoryId { get; set; } = string.Empty;
 
