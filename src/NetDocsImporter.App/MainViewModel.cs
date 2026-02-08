@@ -620,6 +620,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     private async Task StartScanAsync(string path)
     {
+        _currentJobRepositoryId = string.Empty;
+        OnPropertyChanged(nameof(CurrentJobRepositoryId));
+
         LargeFiles.Clear();
         _totalFiles = 0;
         _totalBytes = 0;

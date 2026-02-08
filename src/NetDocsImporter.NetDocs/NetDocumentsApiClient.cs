@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using System.Diagnostics;
+using NetDocsImporter.Core;
 
 namespace NetDocsImporter.NetDocs;
 
@@ -28,9 +30,10 @@ public sealed class NetDocumentsApiClient
 
     public async Task<JsonDocument> GetJsonAsync(string relativeOrAbsolutePath, CancellationToken cancellationToken = default)
     {
+        var requestUri = BuildUri(relativeOrAbsolutePath);
         using var response = await SendWithRetryAsync(() =>
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, BuildUri(relativeOrAbsolutePath));
+            var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
             return request;
         }, cancellationToken);
@@ -38,14 +41,16 @@ public sealed class NetDocumentsApiClient
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
+            LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, content);
             throw new InvalidOperationException(
-                $"NetDocuments API request failed ({(int)response.StatusCode}) for '{relativeOrAbsolutePath}'.");
+                $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(content)}");
         }
 
         var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
         if (!mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
         {
             var snippet = content.Length > 180 ? content[..180] : content;
+            Trace.WriteLine($"NetDocuments API non-JSON response: method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} mediaType='{mediaType}' snippet='{SensitiveDataRedactor.RedactBearerTokens(snippet)}'");
             throw new InvalidOperationException(
                 $"NetDocuments API returned non-JSON content ('{mediaType}') for '{relativeOrAbsolutePath}'. Snippet: {snippet}");
         }
@@ -60,6 +65,29 @@ public sealed class NetDocumentsApiClient
         {
             PropertyNameCaseInsensitive = true
         });
+    }
+
+    public async Task PostAsync(
+        string relativeOrAbsolutePath,
+        HttpContent content,
+        CancellationToken cancellationToken = default)
+    {
+        var requestUri = BuildUri(relativeOrAbsolutePath);
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = content
+        };
+        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+        using var response = await _client.SendAsync(request, cancellationToken);
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            LogHttpFailure("POST", relativeOrAbsolutePath, requestUri, response, responseContent);
+            throw new InvalidOperationException(
+                $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
+        }
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -79,6 +107,7 @@ public sealed class NetDocumentsApiClient
             }
 
             var retryAfter = response.Headers.RetryAfter?.Delta ?? delay;
+            Trace.WriteLine($"NetDocuments API throttled: status=429 attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0}");
             response.Dispose();
             await Task.Delay(retryAfter, cancellationToken);
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
@@ -107,5 +136,24 @@ public sealed class NetDocumentsApiClient
 
         var path = relativeOrAbsolutePath.TrimStart('/');
         return new Uri(new Uri(baseUrl), path);
+    }
+
+    private static void LogHttpFailure(string method, string path, Uri requestUri, HttpResponseMessage response, string body)
+    {
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+        var snippet = BuildSnippet(body);
+        Trace.WriteLine(
+            $"NetDocuments API error: method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' snippet='{snippet}'");
+    }
+
+    private static string BuildSnippet(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var snippet = text.Length > 240 ? text[..240] : text;
+        return SensitiveDataRedactor.RedactBearerTokens(snippet);
     }
 }

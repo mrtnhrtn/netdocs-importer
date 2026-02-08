@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 
 namespace NetDocsImporter.App.Views.Steps;
 
@@ -89,27 +90,27 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
-    public void OnSearchWorkspaces(object sender, RoutedEventArgs e)
+    public void OnSearchWorkspaceTargets(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)
         {
-            main.OnSearchWorkspaces(sender, e);
+            main.OnSearchWorkspaceTargets(sender, e);
         }
     }
 
-    public void OnLoadSelectedWorkspace(object sender, RoutedEventArgs e)
+    public void OnUseSelectedWorkspaceTarget(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)
         {
-            main.OnLoadSelectedWorkspace(sender, e);
+            main.OnUseSelectedWorkspaceTarget(sender, e);
         }
     }
 
-    public void OnSelectWorkspaceAsTarget(object sender, RoutedEventArgs e)
+    public void OnWorkspaceSearchSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)
         {
-            main.OnSelectWorkspaceAsTarget(sender, e);
+            main.OnWorkspaceSearchSelectionChanged(sender, e);
         }
     }
 

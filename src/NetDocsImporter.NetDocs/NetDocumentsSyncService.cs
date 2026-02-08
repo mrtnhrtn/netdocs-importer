@@ -284,7 +284,7 @@ public sealed partial class NetDocumentsSyncService
     {
         foreach (var name in names)
         {
-            if (element.TryGetProperty(name, out var value))
+            if (TryGetPropertyIgnoreCase(element, name, out var value))
             {
                 if (value.ValueKind == JsonValueKind.String)
                 {
@@ -305,7 +305,7 @@ public sealed partial class NetDocumentsSyncService
     {
         foreach (var name in names)
         {
-            if (!element.TryGetProperty(name, out var value))
+            if (!TryGetPropertyIgnoreCase(element, name, out var value))
             {
                 continue;
             }
@@ -334,7 +334,7 @@ public sealed partial class NetDocumentsSyncService
     {
         foreach (var name in names)
         {
-            if (!element.TryGetProperty(name, out var value))
+            if (!TryGetPropertyIgnoreCase(element, name, out var value))
             {
                 continue;
             }
@@ -369,6 +369,29 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
+        return false;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value))
+        {
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
         return false;
     }
 }

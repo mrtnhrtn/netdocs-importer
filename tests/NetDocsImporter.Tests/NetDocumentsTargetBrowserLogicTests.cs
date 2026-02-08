@@ -8,10 +8,20 @@ public class NetDocumentsTargetBrowserLogicTests
     [InlineData("workspace", NdTargetType.Workspace)]
     [InlineData("Workspace Filter", NdTargetType.WorkspaceFilter)]
     [InlineData("folder", NdTargetType.Folder)]
+    [InlineData("ndws", NdTargetType.Workspace)]
+    [InlineData("ndflt", NdTargetType.WorkspaceFilter)]
+    [InlineData("ndfld", NdTargetType.Folder)]
     public void NormalizeSupportedType_RecognizesAllowedTypes(string raw, NdTargetType expected)
     {
         var result = NdTargetBrowserLogic.NormalizeSupportedType(raw, hasWorkspaceIdHint: false);
         Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void NormalizeSupportedType_UnsupportedTypeReturnsNull()
+    {
+        var result = NdTargetBrowserLogic.NormalizeSupportedType("ndsq", hasWorkspaceIdHint: false);
+        Assert.Null(result);
     }
 
     [Fact]

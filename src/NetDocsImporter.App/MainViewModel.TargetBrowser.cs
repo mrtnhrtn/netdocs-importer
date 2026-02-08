@@ -1,7 +1,9 @@
 
 using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -9,23 +11,28 @@ namespace NetDocsImporter.App;
 public sealed partial class MainViewModel
 {
     private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const int WorkspaceSearchMaxResults = 8;
+    private const int WorkspaceSearchMaxParentCandidates = 4;
+    private const int WorkspaceSearchMaxChildCandidatesPerParent = 3;
+    private const int WorkspaceSearchMaxResolveAttempts = 12;
 
     private readonly ObservableCollection<NetDocumentsTargetContainerView> _netDocumentsTargetContainers = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _recentTargets = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _favoriteTargets = new();
-    private readonly ObservableCollection<NetDocumentsWorkspaceSearchResultView> _workspaceSearchResults = new();
+    private readonly ObservableCollection<NetDocumentsWorkspaceTargetResultView> _workspaceSearchTargets = new();
     private readonly ObservableCollection<NetDocumentsBrowseNodeView> _browseRootNodes = new();
     private readonly ObservableCollection<NetDocumentsTargetProfileAttributeView> _targetProfileAttributes = new();
     private readonly ObservableCollection<NetDocumentsEffectiveDefaultView> _effectiveProfileDefaultsRows = new();
     private readonly Dictionary<string, NdTargetProfileSnapshot> _targetProfileCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _locallyUnpinnedFavoriteKeys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, NetDocumentsWorkspaceTargetResultView?> _workspaceLookupPairCache = new(StringComparer.OrdinalIgnoreCase);
 
     private List<NdTargetRecentItem> _localRecentTargets = new();
     private List<NdTargetFavoriteItem> _localFavoriteTargets = new();
     private NdTargetSelection? _selectedNetDocumentsTarget;
     private NetDocumentsTargetItemView? _selectedRecentTarget;
     private NetDocumentsTargetItemView? _selectedFavoriteTarget;
-    private NetDocumentsWorkspaceSearchResultView? _selectedWorkspaceSearchResult;
+    private NetDocumentsWorkspaceTargetResultView? _selectedWorkspaceSearchTarget;
     private NetDocumentsBrowseNodeView? _selectedBrowseNode;
     private string _selectedNetDocumentsTargetId = string.Empty;
     private string _selectedNetDocumentsTargetName = string.Empty;
@@ -37,7 +44,10 @@ public sealed partial class MainViewModel
     private string _targetBrowserMessage = string.Empty;
     private NdTargetBrowserTab _selectedTargetBrowserTab = NdTargetBrowserTab.Recent;
     private string _workspaceSearchText = string.Empty;
+    private string _workspaceLookupStatus = string.Empty;
     private EffectiveProfileDefaults _effectiveProfileDefaults = EffectiveProfileDefaults.Empty;
+    private WorkspaceLookupContext? _workspaceLookupContext;
+    private CancellationTokenSource? _workspaceSearchCts;
 
     public ObservableCollection<NetDocumentsTargetContainerView> NetDocumentsTargetContainers => _netDocumentsTargetContainers;
 
@@ -45,7 +55,7 @@ public sealed partial class MainViewModel
 
     public ObservableCollection<NetDocumentsTargetItemView> FavoriteTargets => _favoriteTargets;
 
-    public ObservableCollection<NetDocumentsWorkspaceSearchResultView> WorkspaceSearchResults => _workspaceSearchResults;
+    public ObservableCollection<NetDocumentsWorkspaceTargetResultView> WorkspaceSearchTargets => _workspaceSearchTargets;
 
     public ObservableCollection<NetDocumentsBrowseNodeView> BrowseRootNodes => _browseRootNodes;
 
@@ -65,10 +75,16 @@ public sealed partial class MainViewModel
         set => SetField(ref _selectedFavoriteTarget, value);
     }
 
-    public NetDocumentsWorkspaceSearchResultView? SelectedWorkspaceSearchResult
+    public NetDocumentsWorkspaceTargetResultView? SelectedWorkspaceSearchTarget
     {
-        get => _selectedWorkspaceSearchResult;
-        set => SetField(ref _selectedWorkspaceSearchResult, value);
+        get => _selectedWorkspaceSearchTarget;
+        set
+        {
+            if (SetField(ref _selectedWorkspaceSearchTarget, value))
+            {
+                OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+            }
+        }
     }
 
     public NetDocumentsBrowseNodeView? SelectedBrowseNode
@@ -161,6 +177,12 @@ public sealed partial class MainViewModel
         set => SetField(ref _workspaceSearchText, value);
     }
 
+    public string WorkspaceLookupStatus
+    {
+        get => _workspaceLookupStatus;
+        private set => SetField(ref _workspaceLookupStatus, value);
+    }
+
     public EffectiveProfileDefaults EffectiveProfileDefaults
     {
         get => _effectiveProfileDefaults;
@@ -191,6 +213,10 @@ public sealed partial class MainViewModel
 
     public bool CanUseSelectedBrowseNode => SelectedBrowseNode is not null;
 
+    public bool CanUseWorkspaceSearchSelection =>
+        CanPickNetDocumentsTarget &&
+        SelectedWorkspaceSearchTarget is not null;
+
     public bool IsSelectedTargetFavorite
     {
         get
@@ -215,7 +241,8 @@ public sealed partial class MainViewModel
                 _netDocumentsTargetContainers.Clear();
                 _recentTargets.Clear();
                 _favoriteTargets.Clear();
-                _workspaceSearchResults.Clear();
+                _workspaceSearchTargets.Clear();
+                SelectedWorkspaceSearchTarget = null;
                 _browseRootNodes.Clear();
             });
             return;
@@ -271,6 +298,10 @@ public sealed partial class MainViewModel
 
         await RefreshRecentTargetsAsync();
         await RefreshFavoriteTargetsAsync();
+        if (_workspaceLookupContext is null)
+        {
+            _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync();
+        }
 
         if (_browseRootNodes.Count == 0)
         {
@@ -341,6 +372,11 @@ public sealed partial class MainViewModel
 
     public async Task SearchWorkspacesAsync()
     {
+        await SearchWorkspaceTargetsAsync();
+    }
+
+    public async Task SearchWorkspaceTargetsAsync()
+    {
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -349,79 +385,95 @@ public sealed partial class MainViewModel
         var query = WorkspaceSearchText?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(query))
         {
-            TargetBrowserMessage = "Enter workspace search text.";
+            WorkspaceLookupStatus = "Enter workspace search text.";
+            TargetBrowserMessage = WorkspaceLookupStatus;
+            UpdateOnUi(() =>
+            {
+                _workspaceSearchTargets.Clear();
+                SelectedWorkspaceSearchTarget = null;
+            });
             return;
         }
 
+        _workspaceSearchCts?.Cancel();
+        _workspaceSearchCts?.Dispose();
+        _workspaceSearchCts = new CancellationTokenSource();
+        var token = _workspaceSearchCts.Token;
+
+        IsTargetBrowserBusy = true;
         try
         {
-            var results = await RequireSyncService().SearchWorkspacesAsync(SelectedNetDocumentsCabinetId, query, 50);
-            var mapped = results
-                .OrderBy(r => r.WorkspaceName, StringComparer.OrdinalIgnoreCase)
-                .Select(r => new NetDocumentsWorkspaceSearchResultView(r))
-                .ToList();
+            var resolved = await SearchWorkspaceTargetsInternalAsync(query, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
 
             UpdateOnUi(() =>
             {
-                _workspaceSearchResults.Clear();
-                foreach (var result in mapped)
+                _workspaceSearchTargets.Clear();
+                foreach (var result in resolved)
                 {
-                    _workspaceSearchResults.Add(result);
+                    _workspaceSearchTargets.Add(result);
                 }
+
+                SelectedWorkspaceSearchTarget = null;
             });
 
-            TargetBrowserMessage = mapped.Count == 0 ? "No workspaces found." : $"Workspace matches: {mapped.Count}.";
-            Trace.WriteLine($"NetDocuments target browser: workspace search query='{query}' count={mapped.Count}");
+            WorkspaceLookupStatus = resolved.Count == 0
+                ? "No workspaces matched your search."
+                : $"Workspace matches: {resolved.Count}.";
+            TargetBrowserMessage = WorkspaceLookupStatus;
+            Trace.WriteLine($"NetDocuments target browser: workspace unified search query='{query}' count={resolved.Count}");
             QueueSettingsSave();
         }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search.
+        }
         catch (Exception ex)
         {
-            TargetBrowserMessage = $"Workspace search failed: {ex.Message}";
+            WorkspaceLookupStatus = $"Workspace search failed: {ex.Message}";
+            TargetBrowserMessage = WorkspaceLookupStatus;
             StatusText = TargetBrowserMessage;
         }
+        finally
+        {
+            IsTargetBrowserBusy = false;
+        }
     }
 
-    public async Task LoadSelectedWorkspaceAsync()
+    public async Task UseSelectedWorkspaceSearchTargetAsync()
     {
-        if (SelectedWorkspaceSearchResult is null)
+        if (SelectedWorkspaceSearchTarget is null)
         {
-            TargetBrowserMessage = "Select a workspace result first.";
+            WorkspaceLookupStatus = "Select a workspace result first.";
+            TargetBrowserMessage = WorkspaceLookupStatus;
             return;
         }
 
-        await LoadWorkspaceRootAsync(SelectedWorkspaceSearchResult.WorkspaceId);
-    }
+        await SetSelectedTargetAsync(SelectedWorkspaceSearchTarget.Selection, SelectedWorkspaceSearchTarget.PathDisplay);
+        await SyncSelectedTargetProfileSnapshotAsync();
+        await RefreshReviewScopeNetDocumentsAsync();
+        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
 
-    public async Task LoadWorkspaceRootAsync(string workspaceId)
-    {
-        if (!CanPickNetDocumentsTarget || string.IsNullOrWhiteSpace(workspaceId))
+        if (_workspaceLookupContext is not null &&
+            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey) &&
+            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ChildKey))
         {
-            return;
-        }
-
-        try
-        {
-            var children = await RequireSyncService().GetContainerChildrenAsync(SelectedNetDocumentsCabinetId, workspaceId: workspaceId);
-            var mapped = children.Select(child => new NetDocumentsBrowseNodeView(child)).ToList();
-            UpdateOnUi(() =>
+            try
             {
-                _browseRootNodes.Clear();
-                foreach (var node in mapped)
-                {
-                    _browseRootNodes.Add(node);
-                }
-                SelectedTargetBrowserTab = NdTargetBrowserTab.Browse;
-            });
-
-            Trace.WriteLine($"NetDocuments target browser: loaded workspace root id={workspaceId} children={mapped.Count}");
-            TargetBrowserMessage = mapped.Count == 0
-                ? "No children found for selected workspace."
-                : $"Loaded {mapped.Count} children for workspace.";
-        }
-        catch (Exception ex)
-        {
-            TargetBrowserMessage = $"Failed loading workspace tree: {ex.Message}";
-            StatusText = TargetBrowserMessage;
+                await RequireSyncService().UpdateRecentLookupSelectionAsync(
+                    _workspaceLookupContext.RepositoryId,
+                    _workspaceLookupContext.ChildAttrNum,
+                    _workspaceLookupContext.ChildKey,
+                    _workspaceLookupContext.ParentAttrNum,
+                    _workspaceLookupContext.ParentKey);
+            }
+            catch
+            {
+                // Ignore optional recent-update failures.
+            }
         }
     }
 
@@ -491,7 +543,9 @@ public sealed partial class MainViewModel
             return;
         }
 
-        await SetSelectedTargetAsync(SelectedRecentTarget.Selection, SelectedRecentTarget.PathDisplay);
+        var selection = CloneSelection(SelectedRecentTarget.Selection);
+        selection.SourceFlow = NdTargetSourceFlow.Recent;
+        await SetSelectedTargetAsync(selection, SelectedRecentTarget.PathDisplay);
     }
 
     public async Task SelectTargetFromFavoriteAsync()
@@ -502,26 +556,246 @@ public sealed partial class MainViewModel
             return;
         }
 
-        await SetSelectedTargetAsync(SelectedFavoriteTarget.Selection, SelectedFavoriteTarget.PathDisplay);
+        var selection = CloneSelection(SelectedFavoriteTarget.Selection);
+        selection.SourceFlow = NdTargetSourceFlow.Favorite;
+        await SetSelectedTargetAsync(selection, SelectedFavoriteTarget.PathDisplay);
     }
 
-    public async Task SelectWorkspaceAsTargetAsync()
+    public Task SearchWorkspaceParentsAsync() => SearchWorkspaceTargetsAsync();
+    public Task LoadWorkspaceChildrenAsync() => SearchWorkspaceTargetsAsync();
+    public Task ResolveWorkspaceAsync() => SearchWorkspaceTargetsAsync();
+    public Task ConfirmResolvedWorkspaceAsync() => UseSelectedWorkspaceSearchTargetAsync();
+    public Task SelectWorkspaceAsTargetAsync() => UseSelectedWorkspaceSearchTargetAsync();
+    public Task LoadSelectedWorkspaceAsync() => UseSelectedWorkspaceSearchTargetAsync();
+
+    private async Task<List<NetDocumentsWorkspaceTargetResultView>> SearchWorkspaceTargetsInternalAsync(string query, CancellationToken cancellationToken)
     {
-        if (SelectedWorkspaceSearchResult is null)
+        cancellationToken.ThrowIfCancellationRequested();
+        var results = new List<NetDocumentsWorkspaceTargetResultView>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sync = RequireSyncService();
+        Trace.WriteLine($"NetDocuments workspace unified search: start repo='{SelectedNetDocumentsRepositoryId}', cabinet='{SelectedNetDocumentsCabinetId}', query='{query}'.");
+        var fallbackWorkspaces = await sync.SearchWorkspacesAsync(SelectedNetDocumentsCabinetId, query, 50, cancellationToken);
+        Trace.WriteLine($"NetDocuments workspace unified search: API fallback candidates={fallbackWorkspaces.Count}.");
+        foreach (var item in fallbackWorkspaces)
         {
-            TargetBrowserMessage = "Select a workspace result first.";
-            return;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(item.WorkspaceId) || !seen.Add(item.WorkspaceId))
+            {
+                continue;
+            }
+
+            var selection = new NdTargetSelection
+            {
+                Type = NdTargetType.Workspace,
+                Id = item.WorkspaceId,
+                Name = string.IsNullOrWhiteSpace(item.WorkspaceName) ? item.WorkspaceId : item.WorkspaceName,
+                ParentWorkspaceId = item.WorkspaceId,
+                Extension = "ndws",
+                SourceFlow = NdTargetSourceFlow.LookupWs
+            };
+
+            results.Add(new NetDocumentsWorkspaceTargetResultView(selection, string.Empty, "API"));
+            if (results.Count >= WorkspaceSearchMaxResults)
+            {
+                break;
+            }
         }
+        Trace.WriteLine($"NetDocuments workspace unified search: API objects kept={results.Count}.");
+
+        _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(cancellationToken);
+        if (_workspaceLookupContext is not null)
+        {
+            Trace.WriteLine($"NetDocuments workspace unified search: lookup context parentAttr={_workspaceLookupContext.ParentAttrNum}, childAttr={_workspaceLookupContext.ChildAttrNum}.");
+            var parentCandidates = await sync.SearchLookupValuesAsync(
+                _workspaceLookupContext.RepositoryId,
+                _workspaceLookupContext.ParentAttrNum,
+                query,
+                top: 20,
+                extendedFiltering: true,
+                cancellationToken: cancellationToken);
+            if (parentCandidates.Count == 0)
+            {
+                // Fallback to recent parents when text doesn't match parent lookup directly.
+                parentCandidates = await sync.SearchLookupValuesAsync(
+                    _workspaceLookupContext.RepositoryId,
+                    _workspaceLookupContext.ParentAttrNum,
+                    string.Empty,
+                    top: 8,
+                    extendedFiltering: true,
+                    cancellationToken: cancellationToken);
+            }
+            Trace.WriteLine($"NetDocuments workspace unified search: parent lookup candidates={parentCandidates.Count}.");
+
+            var resolveAttempts = 0;
+            foreach (var parent in parentCandidates.Take(WorkspaceSearchMaxParentCandidates))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var children = await sync.GetChildLookupValuesAsync(
+                    _workspaceLookupContext.RepositoryId,
+                    _workspaceLookupContext.ChildAttrNum,
+                    parent.Key,
+                    query,
+                    top: 25,
+                    includeUnfilteredFallback: false,
+                    cancellationToken: cancellationToken);
+                var filteredChildren = FilterLookupCandidatesByTerm(children, query);
+                Trace.WriteLine($"NetDocuments workspace unified search: parent='{parent.Key}' child candidates={children.Count} filtered={filteredChildren.Count}.");
+
+                var childBatch = filteredChildren.Take(WorkspaceSearchMaxChildCandidatesPerParent).ToList();
+                resolveAttempts += childBatch.Count;
+                if (resolveAttempts > WorkspaceSearchMaxResolveAttempts)
+                {
+                    break;
+                }
+
+                var resolveTasks = childBatch
+                    .Select(child => ResolveWorkspaceCandidateAsync(parent, child, cancellationToken))
+                    .ToList();
+                var batchResolved = await Task.WhenAll(resolveTasks);
+                foreach (var resolved in batchResolved)
+                {
+                    if (resolved is null)
+                    {
+                        continue;
+                    }
+
+                    if (seen.Add(resolved.Selection.Id))
+                    {
+                        results.Add(resolved);
+                        Trace.WriteLine($"NetDocuments workspace unified search: resolved workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
+                    }
+                }
+
+                if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                {
+                    break;
+                }
+            }
+        }
+        else
+        {
+            Trace.WriteLine("NetDocuments workspace unified search: lookup context unavailable, skipping lookup enrichment.");
+        }
+
+        Trace.WriteLine($"NetDocuments workspace unified search: final result count={results.Count}.");
+
+        return results
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(WorkspaceSearchMaxResults)
+            .ToList();
+    }
+
+    private async Task<NetDocumentsWorkspaceTargetResultView?> ResolveWorkspaceFromLookupAsync(string parentKey, string childKey, CancellationToken cancellationToken)
+    {
+        if (_workspaceLookupContext is null)
+        {
+            return null;
+        }
+
+        var sync = RequireSyncService();
+        var envId = await sync.ResolveWorkspaceEnvIdAsync(_workspaceLookupContext.CabinetId, parentKey, childKey, cancellationToken);
+        if (string.IsNullOrWhiteSpace(envId))
+        {
+            return null;
+        }
+
+        var container = await sync.GetContainerInfoAsync(envId, cancellationToken);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var extension = string.IsNullOrWhiteSpace(container.Extension) ? container.TypeRaw : container.Extension;
+        var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(extension, hasWorkspaceIdHint: true);
+        if (resolvedType != NdTargetType.Workspace)
+        {
+            return null;
+        }
+
+        var path = $"{parentKey}/{childKey}";
+
+        _workspaceLookupContext.ParentKey = parentKey;
+        _workspaceLookupContext.ChildKey = childKey;
 
         var selection = new NdTargetSelection
         {
             Type = NdTargetType.Workspace,
-            Id = SelectedWorkspaceSearchResult.WorkspaceId,
-            Name = SelectedWorkspaceSearchResult.WorkspaceName,
-            ParentWorkspaceId = SelectedWorkspaceSearchResult.WorkspaceId
+            Id = envId,
+            Name = container.Name,
+            ParentWorkspaceId = container.ParentWorkspaceId,
+            Extension = extension,
+            SourceFlow = NdTargetSourceFlow.LookupWs
         };
 
-        await SetSelectedTargetAsync(selection, SelectedWorkspaceSearchResult.DisplayPath);
+        return new NetDocumentsWorkspaceTargetResultView(selection, path, "Lookup", parentKey, string.Empty, childKey, string.Empty);
+    }
+
+    private async Task<NetDocumentsWorkspaceTargetResultView?> ResolveWorkspaceCandidateAsync(
+        NdLookupValueItem parent,
+        NdLookupValueItem child,
+        CancellationToken cancellationToken)
+    {
+        var pairKey = $"{parent.Key}|{child.Key}";
+        if (_workspaceLookupPairCache.TryGetValue(pairKey, out var cached))
+        {
+            Trace.WriteLine($"NetDocuments workspace unified search: lookup cache hit parent='{parent.Key}' child='{child.Key}' hasResult={(cached is not null)}.");
+            return cached;
+        }
+
+        try
+        {
+            var resolved = await ResolveWorkspaceFromLookupAsync(parent.Key, child.Key, cancellationToken);
+            if (resolved is not null)
+            {
+                resolved = new NetDocumentsWorkspaceTargetResultView(
+                    resolved.Selection,
+                    $"{DisplayLookup(parent.Key, parent.Description)} / {DisplayLookup(child.Key, child.Description)}",
+                    resolved.Source,
+                    parent.Key,
+                    parent.Description,
+                    child.Key,
+                    child.Description);
+            }
+
+            _workspaceLookupPairCache[pairKey] = resolved;
+            return resolved;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"NetDocuments workspace unified search: lookup resolve failed parent='{parent.Key}' child='{child.Key}' error='{ex.Message}'.");
+            _workspaceLookupPairCache[pairKey] = null;
+            return null;
+        }
+    }
+
+    private static string DisplayLookup(string key, string description)
+    {
+        return string.IsNullOrWhiteSpace(description)
+            ? key
+            : $"{description} ({key})";
+    }
+
+    private static List<NdLookupValueItem> FilterLookupCandidatesByTerm(
+        IReadOnlyList<NdLookupValueItem> values,
+        string term)
+    {
+        if (values.Count == 0)
+        {
+            return new List<NdLookupValueItem>();
+        }
+
+        var normalized = (term ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return values.ToList();
+        }
+
+        return values
+            .Where(v =>
+                (!string.IsNullOrWhiteSpace(v.Key) && v.Key.Contains(normalized, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(v.Description) && v.Description.Contains(normalized, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
     }
 
     public async Task SelectTargetFromBrowseNodeAsync()
@@ -547,7 +821,9 @@ public sealed partial class MainViewModel
             Type = SelectedBrowseNode.SupportedType.Value,
             Id = SelectedBrowseNode.Id,
             Name = SelectedBrowseNode.Name,
-            ParentWorkspaceId = SelectedBrowseNode.ParentWorkspaceId
+            ParentWorkspaceId = SelectedBrowseNode.ParentWorkspaceId,
+            Extension = SelectedBrowseNode.Extension,
+            SourceFlow = NdTargetSourceFlow.Browse
         };
 
         await SetSelectedTargetAsync(selection, SelectedBrowseNode.PathDisplay);
@@ -666,6 +942,7 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(knownPath) ? selection.Name : knownPath;
         TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}.";
+        Trace.WriteLine($"NetDocuments target browser: selected target type={selection.Type}, id={selection.Id}, name={selection.Name}, flow={selection.SourceFlow}");
         OnPropertyChanged(nameof(IsSelectedTargetFavorite));
         OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
         OnPropertyChanged(nameof(CanContinueToReviewScope));
@@ -766,6 +1043,84 @@ public sealed partial class MainViewModel
         }
     }
 
+    private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) || string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId))
+        {
+            return null;
+        }
+
+        await _jobStore.InitializeAsync(cancellationToken);
+        var attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+        var lookups = attributes.Where(a => a.IsLookup).ToList();
+        if (lookups.Count == 0)
+        {
+            return new WorkspaceLookupContext
+            {
+                RepositoryId = SelectedNetDocumentsRepositoryId,
+                CabinetId = SelectedNetDocumentsCabinetId,
+                ParentAttrNum = 2,
+                ChildAttrNum = 3,
+                ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
+                ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
+            };
+        }
+
+        var parentCandidate = lookups
+            .Where(a => !a.ParentAttributeNum.HasValue)
+            .OrderByDescending(a => NameContains(a.Name, "client"))
+            .ThenBy(a => a.AttributeNum)
+            .FirstOrDefault();
+        if (parentCandidate is null)
+        {
+            return new WorkspaceLookupContext
+            {
+                RepositoryId = SelectedNetDocumentsRepositoryId,
+                CabinetId = SelectedNetDocumentsCabinetId,
+                ParentAttrNum = 2,
+                ChildAttrNum = 3,
+                ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
+                ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
+            };
+        }
+
+        var childCandidate = lookups
+            .Where(a => a.ParentAttributeNum == parentCandidate.AttributeNum)
+            .OrderByDescending(a => NameContains(a.Name, "matter"))
+            .ThenBy(a => a.AttributeNum)
+            .FirstOrDefault();
+        if (childCandidate is null)
+        {
+            return new WorkspaceLookupContext
+            {
+                RepositoryId = SelectedNetDocumentsRepositoryId,
+                CabinetId = SelectedNetDocumentsCabinetId,
+                ParentAttrNum = 2,
+                ChildAttrNum = 3,
+                ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
+                ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
+            };
+        }
+
+        return new WorkspaceLookupContext
+        {
+            RepositoryId = SelectedNetDocumentsRepositoryId,
+            CabinetId = SelectedNetDocumentsCabinetId,
+            ParentAttrNum = parentCandidate.AttributeNum,
+            ChildAttrNum = childCandidate.AttributeNum,
+            ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
+            ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
+        };
+    }
+
+    private static int NameContains(string? name, string term)
+    {
+        return !string.IsNullOrWhiteSpace(name) &&
+               name.Contains(term, StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
+    }
+
     private string BuildTargetSnapshotCacheKey(NdTargetSelection target)
     {
         return $"{SelectedNetDocumentsRepositoryId}:{SelectedNetDocumentsCabinetId}:{NdTargetBrowserLogic.BuildTargetKey(target)}";
@@ -776,6 +1131,8 @@ public sealed partial class MainViewModel
         _localRecentTargets = NdTargetBrowserLogic.DeserializeRecentTargets(settings.RecentTargetsJson).ToList();
         _localFavoriteTargets = NdTargetBrowserLogic.DeserializeFavoriteTargets(settings.FavoriteTargetsJson).ToList();
         WorkspaceSearchText = settings.LastWorkspaceQuery ?? string.Empty;
+        _workspaceLookupContext = WorkspaceLookupContext.FromJson(settings.WorkspaceLookupContextJson);
+        WorkspaceLookupStatus = string.Empty;
 
         EffectiveProfileDefaults = EffectiveProfileDefaults.FromJson(settings.EffectiveProfileDefaultsJson);
         var defaultRows = EffectiveProfileDefaults.ValuesByAttributeId.Values
@@ -801,7 +1158,9 @@ public sealed partial class MainViewModel
             Type = targetType,
             Id = settings.SelectedTargetId,
             Name = settings.SelectedTargetName ?? settings.SelectedTargetId,
-            ParentWorkspaceId = settings.SelectedTargetParentWorkspaceId
+            ParentWorkspaceId = settings.SelectedTargetParentWorkspaceId,
+            Extension = settings.SelectedTargetExtension ?? string.Empty,
+            SourceFlow = NdTargetSourceFlow.Browse
         };
 
         SelectedNetDocumentsTargetId = _selectedNetDocumentsTarget.Id;
@@ -813,7 +1172,9 @@ public sealed partial class MainViewModel
             NdTargetType.Folder => "Folder",
             _ => _selectedNetDocumentsTarget.Type.ToString()
         };
-        SelectedNetDocumentsTargetPath = _selectedNetDocumentsTarget.Name;
+        SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(settings.SelectedTargetPath)
+            ? _selectedNetDocumentsTarget.Name
+            : settings.SelectedTargetPath;
         _selectedNetDocumentsTargetSupported = true;
         OnPropertyChanged(nameof(IsSelectedTargetFavorite));
     }
@@ -823,6 +1184,7 @@ public sealed partial class MainViewModel
         settings.RecentTargetsJson = NdTargetBrowserLogic.SerializeRecentTargets(_localRecentTargets);
         settings.FavoriteTargetsJson = NdTargetBrowserLogic.SerializeFavoriteTargets(_localFavoriteTargets);
         settings.LastWorkspaceQuery = WorkspaceSearchText ?? string.Empty;
+        settings.WorkspaceLookupContextJson = _workspaceLookupContext?.ToJson() ?? string.Empty;
 
         if (_selectedNetDocumentsTarget is null)
         {
@@ -830,6 +1192,8 @@ public sealed partial class MainViewModel
             settings.SelectedTargetId = string.Empty;
             settings.SelectedTargetName = string.Empty;
             settings.SelectedTargetParentWorkspaceId = string.Empty;
+            settings.SelectedTargetExtension = string.Empty;
+            settings.SelectedTargetPath = string.Empty;
             settings.EffectiveProfileDefaultsJson = string.Empty;
             return;
         }
@@ -838,6 +1202,8 @@ public sealed partial class MainViewModel
         settings.SelectedTargetId = _selectedNetDocumentsTarget.Id;
         settings.SelectedTargetName = _selectedNetDocumentsTarget.Name;
         settings.SelectedTargetParentWorkspaceId = _selectedNetDocumentsTarget.ParentWorkspaceId ?? string.Empty;
+        settings.SelectedTargetExtension = _selectedNetDocumentsTarget.Extension ?? string.Empty;
+        settings.SelectedTargetPath = SelectedNetDocumentsTargetPath ?? string.Empty;
         settings.EffectiveProfileDefaultsJson = EffectiveProfileDefaults.ToJson();
     }
 
@@ -848,7 +1214,9 @@ public sealed partial class MainViewModel
             Type = selection.Type,
             Id = selection.Id,
             Name = selection.Name,
-            ParentWorkspaceId = selection.ParentWorkspaceId
+            ParentWorkspaceId = selection.ParentWorkspaceId,
+            Extension = selection.Extension,
+            SourceFlow = selection.SourceFlow
         };
     }
 }
@@ -914,27 +1282,49 @@ public sealed class NetDocumentsTargetItemView
     }
 }
 
-public sealed class NetDocumentsWorkspaceSearchResultView
+public sealed class NetDocumentsWorkspaceTargetResultView
 {
-    public NetDocumentsWorkspaceSearchResultView(NdWorkspaceSearchResult result)
+    public NetDocumentsWorkspaceTargetResultView(
+        NdTargetSelection selection,
+        string pathDisplay,
+        string source,
+        string parentKey = "",
+        string parentDescription = "",
+        string childKey = "",
+        string childDescription = "")
     {
-        WorkspaceId = result.WorkspaceId;
-        WorkspaceName = string.IsNullOrWhiteSpace(result.WorkspaceName) ? result.WorkspaceId : result.WorkspaceName;
-        RepositoryId = result.RepositoryId;
-        CabinetId = result.CabinetId ?? string.Empty;
+        Selection = selection;
+        PathDisplay = pathDisplay;
+        Source = source;
+        ParentKey = parentKey;
+        ParentDescription = parentDescription;
+        ChildKey = childKey;
+        ChildDescription = childDescription;
     }
 
-    public string WorkspaceId { get; }
+    public NdTargetSelection Selection { get; }
 
-    public string WorkspaceName { get; }
+    public string Name => Selection.Name;
 
-    public string RepositoryId { get; }
+    public string TypeDisplay => Selection.Type switch
+    {
+        NdTargetType.Workspace => "Workspace",
+        NdTargetType.WorkspaceFilter => "Workspace Filter",
+        NdTargetType.Folder => "Folder",
+        _ => Selection.Type.ToString()
+    };
 
-    public string CabinetId { get; }
+    public string PathDisplay { get; }
 
-    public string DisplayPath => string.IsNullOrWhiteSpace(CabinetId)
-        ? WorkspaceName
-        : $"{CabinetId} / {WorkspaceName}";
+    public string Source { get; }
+
+    public string ParentKey { get; }
+
+    public string ParentDescription { get; }
+
+    public string ChildKey { get; }
+
+    public string ChildDescription { get; }
 }
 
 public sealed class NetDocumentsBrowseNodeView
@@ -944,6 +1334,7 @@ public sealed class NetDocumentsBrowseNodeView
         Id = node.Id;
         Name = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name;
         TypeRaw = node.TypeRaw;
+        Extension = node.Extension;
         ParentId = node.ParentId;
         ParentWorkspaceId = node.ParentWorkspaceId;
         PathDisplay = node.PathDisplay;
@@ -965,6 +1356,7 @@ public sealed class NetDocumentsBrowseNodeView
         Name = "Loading...";
         Id = "__placeholder";
         TypeRaw = string.Empty;
+        Extension = string.Empty;
         ParentId = string.Empty;
         PathDisplay = string.Empty;
         UnsupportedReason = string.Empty;
@@ -975,6 +1367,8 @@ public sealed class NetDocumentsBrowseNodeView
     public string Name { get; }
 
     public string TypeRaw { get; }
+
+    public string Extension { get; }
 
     public string ParentId { get; }
 

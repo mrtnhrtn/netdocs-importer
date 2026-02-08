@@ -256,19 +256,24 @@ public partial class MainWindow : Window
         await _viewModel.RefreshFavoriteTargetsAsync();
     }
 
-    public async void OnSearchWorkspaces(object sender, RoutedEventArgs e)
+    public async void OnSearchWorkspaceTargets(object sender, RoutedEventArgs e)
     {
-        await _viewModel.SearchWorkspacesAsync();
+        await _viewModel.SearchWorkspaceTargetsAsync();
     }
 
-    public async void OnLoadSelectedWorkspace(object sender, RoutedEventArgs e)
+    public async void OnUseSelectedWorkspaceTarget(object sender, RoutedEventArgs e)
     {
-        await _viewModel.LoadSelectedWorkspaceAsync();
+        await _viewModel.UseSelectedWorkspaceSearchTargetAsync();
     }
 
-    public async void OnSelectWorkspaceAsTarget(object sender, RoutedEventArgs e)
+    public async void OnWorkspaceSearchSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        await _viewModel.SelectWorkspaceAsTargetAsync();
+        if (sender is not System.Windows.Controls.ListView listView || listView.SelectedItem is null)
+        {
+            return;
+        }
+
+        await _viewModel.UseSelectedWorkspaceSearchTargetAsync();
     }
 
     public async void OnSelectTargetFromRecent(object sender, RoutedEventArgs e)

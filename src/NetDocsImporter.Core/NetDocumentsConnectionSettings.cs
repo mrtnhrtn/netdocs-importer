@@ -42,6 +42,12 @@ public sealed class NetDocumentsConnectionSettings
 
     public string SelectedTargetParentWorkspaceId { get; set; } = string.Empty;
 
+    public string SelectedTargetExtension { get; set; } = string.Empty;
+
+    public string SelectedTargetPath { get; set; } = string.Empty;
+
+    public string WorkspaceLookupContextJson { get; set; } = string.Empty;
+
     public string EffectiveProfileDefaultsJson { get; set; } = string.Empty;
 
     public string FavoriteTargetsJson { get; set; } = string.Empty;

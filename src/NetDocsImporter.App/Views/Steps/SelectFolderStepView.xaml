@@ -6,6 +6,7 @@
              xmlns:local="clr-namespace:NetDocsImporter.App"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="900">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel>
         <TextBlock Text="Connect, Select Folder, Target Container" Style="{StaticResource SectionTitle}" />
         <TextBlock Text="Connect first, then scan a local folder, then choose a Workspace, Workspace Filter, or Folder destination."
@@ -68,14 +69,14 @@
                           DisplayMemberPath="RepositoryName"
                           SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
                           Margin="0,2,0,6"
-                          IsEnabled="{Binding CanPickNetDocumentsTarget}" />
+                          IsEnabled="{Binding IsNetDocumentsConnected}" />
                 <TextBlock Text="Cabinet" Foreground="#555555" />
                 <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
                           SelectedValuePath="CabinetId"
                           DisplayMemberPath="CabinetName"
                           SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
                           Margin="0,2,0,6"
-                          IsEnabled="{Binding CanPickNetDocumentsTarget}" />
+                          IsEnabled="{Binding IsNetDocumentsConnected}" />
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                     <Button Content="Refresh Browser"
                             Width="120"
@@ -138,21 +139,27 @@
                         <StackPanel Margin="4">
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                 <TextBox Width="260" Margin="0,0,6,0" Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Content="Search" Width="100" Margin="0,0,6,0" Click="OnSearchWorkspaces" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="Load Tree" Width="100" Margin="0,0,6,0" Click="OnLoadSelectedWorkspace" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="Use Workspace" Width="120" Click="OnSelectWorkspaceAsTarget" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Search" Width="100" Margin="0,0,6,0" Click="OnSearchWorkspaceTargets" Style="{StaticResource SecondaryButton}" />
                             </StackPanel>
-                            <ListView ItemsSource="{Binding WorkspaceSearchResults}"
-                                      SelectedItem="{Binding SelectedWorkspaceSearchResult}"
-                                      Height="150">
+                            <ListView ItemsSource="{Binding WorkspaceSearchTargets}"
+                                      SelectedItem="{Binding SelectedWorkspaceSearchTarget}"
+                                      SelectionChanged="OnWorkspaceSearchSelectionChanged"
+                                      Height="235"
+                                      Margin="0,0,0,6">
                                 <ListView.View>
                                     <GridView>
-                                        <GridViewColumn Header="Workspace" Width="200" DisplayMemberBinding="{Binding WorkspaceName}" />
-                                        <GridViewColumn Header="Repository" Width="110" DisplayMemberBinding="{Binding RepositoryId}" />
-                                        <GridViewColumn Header="Cabinet" Width="110" DisplayMemberBinding="{Binding CabinetId}" />
+                                        <GridViewColumn Header="Workspace" Width="170" DisplayMemberBinding="{Binding Name}" />
+                                        <GridViewColumn Header="Type" Width="90" DisplayMemberBinding="{Binding TypeDisplay}" />
+                                        <GridViewColumn Header="Parent Key" Width="90" DisplayMemberBinding="{Binding ParentKey}" />
+                                        <GridViewColumn Header="Parent Name" Width="160" DisplayMemberBinding="{Binding ParentDescription}" />
+                                        <GridViewColumn Header="Child Key" Width="90" DisplayMemberBinding="{Binding ChildKey}" />
+                                        <GridViewColumn Header="Child Name" Width="160" DisplayMemberBinding="{Binding ChildDescription}" />
+                                        <GridViewColumn Header="Path" Width="240" DisplayMemberBinding="{Binding PathDisplay}" />
+                                        <GridViewColumn Header="Source" Width="70" DisplayMemberBinding="{Binding Source}" />
                                     </GridView>
                                 </ListView.View>
                             </ListView>
+                            <TextBlock Text="{Binding WorkspaceLookupStatus}" Foreground="#555555" Margin="0,0,0,4" TextWrapping="Wrap" />
                         </StackPanel>
                     </TabItem>
 
@@ -221,4 +228,5 @@
             </StackPanel>
         </Border>
     </StackPanel>
+    </ScrollViewer>
 </UserControl>

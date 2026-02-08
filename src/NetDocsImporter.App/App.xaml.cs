@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 using NetDocsImporter.Core;
@@ -25,11 +26,16 @@ public partial class App : System.Windows.Application
     {
         var logsDirectory = LogPathHelper.GetLogsDirectory();
         _logFilePath = Path.Combine(logsDirectory, "app.log");
+        var tracePath = Path.Combine(logsDirectory, "trace.log");
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(_logFilePath, rollingInterval: RollingInterval.Day, shared: true)
             .CreateLogger();
+
+        Trace.Listeners.Clear();
+        Trace.Listeners.Add(new TimestampedTextWriterTraceListener(tracePath));
+        Trace.AutoFlush = true;
     }
 
     private void HookGlobalExceptionHandlers()

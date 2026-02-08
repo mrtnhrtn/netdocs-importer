@@ -52,6 +52,7 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
+                OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             }
         }
     }
@@ -73,9 +74,15 @@ public sealed partial class MainViewModel
             }
 
             _targetProfileCache.Clear();
+            _workspaceLookupContext = null;
+            _workspaceLookupPairCache.Clear();
+            _workspaceSearchTargets.Clear();
+            SelectedWorkspaceSearchTarget = null;
+            WorkspaceLookupStatus = string.Empty;
             FilterCabinetsByRepository();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
             _ = LoadNetDocumentsTargetContainersAsync();
@@ -93,6 +100,11 @@ public sealed partial class MainViewModel
             }
 
             _targetProfileCache.Clear();
+            _workspaceLookupContext = null;
+            _workspaceLookupPairCache.Clear();
+            _workspaceSearchTargets.Clear();
+            SelectedWorkspaceSearchTarget = null;
+            WorkspaceLookupStatus = string.Empty;
             var cabinet = _netDocumentsCabinets.FirstOrDefault(c => c.CabinetId == value);
             _selectedNetDocumentsCabinetName = cabinet?.CabinetName ?? string.Empty;
             OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
@@ -102,6 +114,7 @@ public sealed partial class MainViewModel
             }
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
             _ = RefreshReviewScopeNetDocumentsAsync();

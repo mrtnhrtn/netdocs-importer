@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text.Json;
 using NetDocsImporter.Core;
 
@@ -186,6 +187,7 @@ public sealed partial class NetDocumentsSyncService
                 query.Trim(),
                 cancellationToken,
                 Math.Max(10, top));
+            Trace.WriteLine($"NetDocuments workspace search: v2 extension search returned {items.Count} item(s) for query='{query}'.");
             results.AddRange(items.Select(item => new NdWorkspaceSearchResult
             {
                 WorkspaceId = item.Id,
@@ -202,6 +204,7 @@ public sealed partial class NetDocumentsSyncService
         }
         catch
         {
+            Trace.WriteLine($"NetDocuments workspace search: v2 extension search failed for query='{query}'.");
             // Continue to v1 fallback candidates.
         }
 
@@ -225,6 +228,7 @@ public sealed partial class NetDocumentsSyncService
                     })
                     .Where(item => !string.IsNullOrWhiteSpace(item.WorkspaceId))
                     .ToList();
+                Trace.WriteLine($"NetDocuments workspace search: endpoint='{path}' returned {items.Count} item(s).");
                 if (items.Count > 0)
                 {
                     results.AddRange(items);
@@ -233,6 +237,7 @@ public sealed partial class NetDocumentsSyncService
             }
             catch
             {
+                Trace.WriteLine($"NetDocuments workspace search: endpoint='{path}' failed.");
                 // Continue to endpoint fallback.
             }
         }
@@ -240,6 +245,301 @@ public sealed partial class NetDocumentsSyncService
         return results
             .OrderBy(item => item.WorkspaceName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<NdLookupValueItem>> SearchLookupValuesAsync(
+        string repositoryId,
+        int attrNum,
+        string term,
+        int top = 50,
+        bool extendedFiltering = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || attrNum <= 0)
+        {
+            return Array.Empty<NdLookupValueItem>();
+        }
+
+        var escapedRepository = Uri.EscapeDataString(repositoryId);
+        var safeTerm = NormalizeLookupTerm(term);
+        var basePath =
+            $"/v1/attributes/{escapedRepository}/{attrNum}?$select=key,description,closed,parent,parentDesc,defaulting,dynamicAttrs&$top={Math.Max(1, top)}";
+
+        if (!string.IsNullOrWhiteSpace(safeTerm))
+        {
+            var escapedQuotedFilter = Uri.EscapeDataString($"substringof('{safeTerm.Replace("'", "''", StringComparison.Ordinal)}',keyfirst)");
+            var escapedUnquotedFilter = Uri.EscapeDataString($"substringof({safeTerm},keyfirst)");
+            var preferredPath = $"{basePath}&$filter={escapedUnquotedFilter}" +
+                                (extendedFiltering ? "&useLongName=true&useExtendedFiltering=true" : string.Empty);
+            var fallbackPath = $"{basePath}&$filter={escapedQuotedFilter}" +
+                               (extendedFiltering ? "&useLongName=true&useExtendedFiltering=true" : string.Empty);
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(preferredPath, cancellationToken);
+                var parsed = ParseLookupRows(document.RootElement);
+                Trace.WriteLine($"NetDocuments lookup search: endpoint='{preferredPath}' count={parsed.Count}.");
+                return parsed;
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments lookup search: endpoint='{preferredPath}' failed.");
+            }
+
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(fallbackPath, cancellationToken);
+                var parsed = ParseLookupRows(document.RootElement);
+                Trace.WriteLine($"NetDocuments lookup search: endpoint='{fallbackPath}' count={parsed.Count}.");
+                return parsed;
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments lookup search: endpoint='{fallbackPath}' failed.");
+            }
+
+            return Array.Empty<NdLookupValueItem>();
+        }
+
+        var recentPath = basePath + "&$filter=recent";
+        try
+        {
+            using var document = await _apiClient.GetJsonAsync(recentPath, cancellationToken);
+            var parsed = ParseLookupRows(document.RootElement);
+            Trace.WriteLine($"NetDocuments lookup search: endpoint='{recentPath}' count={parsed.Count}.");
+            return parsed;
+        }
+        catch
+        {
+            Trace.WriteLine($"NetDocuments lookup search: endpoint='{recentPath}' failed.");
+        }
+
+        return Array.Empty<NdLookupValueItem>();
+    }
+
+    public async Task<IReadOnlyList<NdLookupValueItem>> GetChildLookupValuesAsync(
+        string repositoryId,
+        int childAttrNum,
+        string parentKey,
+        string? term = null,
+        int top = 50,
+        bool includeUnfilteredFallback = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || childAttrNum <= 0 || string.IsNullOrWhiteSpace(parentKey))
+        {
+            return Array.Empty<NdLookupValueItem>();
+        }
+
+        var escapedRepository = Uri.EscapeDataString(repositoryId);
+        var escapedParent = Uri.EscapeDataString(parentKey);
+        var basePath =
+            $"/v1/attributes/{escapedRepository}/{childAttrNum}/{escapedParent}?$select=key,description,closed,parent,parentDesc,defaulting,dynamicAttrs&$top={Math.Max(1, top)}";
+        if (!string.IsNullOrWhiteSpace(term))
+        {
+            var safeTerm = NormalizeLookupTerm(term);
+            var escapedQuotedFilter = Uri.EscapeDataString($"substringof('{safeTerm.Replace("'", "''", StringComparison.Ordinal)}',keyfirst)");
+            var escapedUnquotedFilter = Uri.EscapeDataString($"substringof({safeTerm},keyfirst)");
+            var preferredPath = $"{basePath}&$filter={escapedUnquotedFilter}&useLongName=true&useExtendedFiltering=true";
+            var fallbackPath = $"{basePath}&$filter={escapedQuotedFilter}&useLongName=true&useExtendedFiltering=true";
+            try
+            {
+                using var lookupDocument = await _apiClient.GetJsonAsync(preferredPath, cancellationToken);
+                var parsed = ParseLookupRows(lookupDocument.RootElement);
+                Trace.WriteLine($"NetDocuments child lookup: endpoint='{preferredPath}' count={parsed.Count}.");
+                if (parsed.Count > 0)
+                {
+                    return parsed;
+                }
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments child lookup: endpoint='{preferredPath}' failed.");
+            }
+
+            try
+            {
+                using var lookupDocument = await _apiClient.GetJsonAsync(fallbackPath, cancellationToken);
+                var parsed = ParseLookupRows(lookupDocument.RootElement);
+                Trace.WriteLine($"NetDocuments child lookup: endpoint='{fallbackPath}' count={parsed.Count}.");
+                if (parsed.Count > 0)
+                {
+                    return parsed;
+                }
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments child lookup: endpoint='{fallbackPath}' failed.");
+            }
+
+            if (includeUnfilteredFallback)
+            {
+                try
+                {
+                    using var baseLookupDocument = await _apiClient.GetJsonAsync(basePath, cancellationToken);
+                    var baseParsed = ParseLookupRows(baseLookupDocument.RootElement);
+                    Trace.WriteLine($"NetDocuments child lookup: endpoint='{basePath}' count={baseParsed.Count}.");
+                    if (baseParsed.Count > 0)
+                    {
+                        return baseParsed;
+                    }
+                }
+                catch
+                {
+                    Trace.WriteLine($"NetDocuments child lookup: endpoint='{basePath}' failed.");
+                }
+            }
+
+            return Array.Empty<NdLookupValueItem>();
+        }
+
+        using var baseDocument = await _apiClient.GetJsonAsync(basePath, cancellationToken);
+        return ParseLookupRows(baseDocument.RootElement);
+    }
+
+    public async Task<IReadOnlyList<NdLookupValueItem>> GetRecentChildLookupValuesAsync(
+        string repositoryId,
+        int childAttrNum,
+        string parentKey,
+        int top = 25,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || childAttrNum <= 0 || string.IsNullOrWhiteSpace(parentKey))
+        {
+            return Array.Empty<NdLookupValueItem>();
+        }
+
+        var escapedRepository = Uri.EscapeDataString(repositoryId);
+        var escapedParent = Uri.EscapeDataString(parentKey);
+        var path =
+            $"/v1/attributes/{escapedRepository}/{childAttrNum}/{escapedParent}?$select=key,description,closed,parent,parentDesc,defaulting,dynamicAttrs&$filter=recent&$top={Math.Max(1, top)}";
+        using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+        return ParseLookupRows(document.RootElement);
+    }
+
+    public async Task UpdateRecentLookupSelectionAsync(
+        string repositoryId,
+        int attrNum,
+        string key,
+        int? parentAttrNum = null,
+        string? parentKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || attrNum <= 0 || string.IsNullOrWhiteSpace(key))
+        {
+            return;
+        }
+
+        var escapedRepository = Uri.EscapeDataString(repositoryId);
+        using var content = new MultipartFormDataContent
+        {
+            { new StringContent("recent"), "updateMode" },
+            { new StringContent(attrNum.ToString()), "attrNum" },
+            { new StringContent(key), "key" }
+        };
+
+        if (parentAttrNum.HasValue && !string.IsNullOrWhiteSpace(parentKey))
+        {
+            content.Add(new StringContent(parentAttrNum.Value.ToString()), "parentAttrNum");
+            content.Add(new StringContent(parentKey), "parentKey");
+        }
+
+        await _apiClient.PostAsync($"/v1/attributes/{escapedRepository}", content, cancellationToken);
+    }
+
+    public async Task<string?> ResolveWorkspaceEnvIdAsync(
+        string cabinetId,
+        string parentKey,
+        string childKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(cabinetId) ||
+            string.IsNullOrWhiteSpace(parentKey) ||
+            string.IsNullOrWhiteSpace(childKey))
+        {
+            return null;
+        }
+
+        var escapedCabinet = Uri.EscapeDataString(cabinetId);
+        var escapedParent = Uri.EscapeDataString(parentKey);
+        var escapedChild = Uri.EscapeDataString(childKey);
+        var path = $"/v1/workspace/{escapedCabinet}/{escapedParent}/{escapedChild}/wsurl";
+
+        using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("data", out var dataNode) &&
+            dataNode.ValueKind is JsonValueKind.Object or JsonValueKind.String)
+        {
+            root = dataNode;
+        }
+        var raw = ReadString(root, "wsurl", "url", "value", "path", "id");
+        if (string.IsNullOrWhiteSpace(raw) && root.ValueKind == JsonValueKind.String)
+        {
+            raw = root.GetString() ?? string.Empty;
+        }
+        var normalized = NormalizeWorkspaceEnvId(raw);
+        var candidates = BuildContainerIdCandidates(raw, normalized).ToList();
+        Trace.WriteLine(
+            $"NetDocuments wsurl resolve: cabinet='{cabinetId}' parent='{parentKey}' child='{childKey}' raw='{raw}' normalized='{normalized}' candidates='{string.Join(",", candidates)}'.");
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var encoded = EncodeContainerIdForPath(candidate);
+                using var _ = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info", cancellationToken);
+                Trace.WriteLine($"NetDocuments wsurl resolve: accepted container id='{candidate}'.");
+                return candidate;
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments wsurl resolve: container id probe failed id='{candidate}'.");
+            }
+        }
+
+        return normalized;
+    }
+
+    public async Task<NdContainerNode?> GetContainerInfoAsync(
+        string envId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(envId))
+        {
+            return null;
+        }
+
+        var encoded = EncodeContainerIdForPath(envId);
+        var select = Uri.EscapeDataString("StandardAttributes,CustomAttributes,StatusAttributes,ContainerInfo,DeletedStatus,Descriptions,IncludeAcls,Ancestors,DispNames,Locations,Sync,Hold,UseLongName");
+        using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info?select={select}&options=AddToRecents", cancellationToken);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("data", out var dataNode) &&
+            dataNode.ValueKind == JsonValueKind.Object)
+        {
+            root = dataNode;
+        }
+
+        return ParseContainerNode(root);
+    }
+
+    public async Task<string> GetContainerAncestryAsync(
+        string envId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(envId))
+        {
+            return string.Empty;
+        }
+
+        var encoded = EncodeContainerIdForPath(envId);
+        using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/ancestry", cancellationToken);
+        var labels = EnumerateArray(document.RootElement)
+            .Select(item => ReadString(item, "name", "description", "title"))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
+
+        return labels.Count == 0 ? string.Empty : string.Join(" / ", labels);
     }
 
     public async Task<IReadOnlyList<NdContainerNode>> GetContainerChildrenAsync(
@@ -337,13 +637,13 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var escapedCabinet = Uri.EscapeDataString(cabinetId);
-        var escapedTarget = Uri.EscapeDataString(targetId);
+        var encodedTarget = EncodeContainerIdForPath(targetId);
         foreach (var path in new[]
                  {
-                     $"/v2/container/{escapedTarget}/ancestry",
-                     $"/v2/container/{escapedTarget}/info",
-                     $"/v1/Cabinet/{escapedCabinet}/containers/{escapedTarget}",
-                     $"/v1/Container/{escapedTarget}/info"
+                     $"/v2/container/{encodedTarget}/ancestry",
+                     $"/v2/container/{encodedTarget}/info",
+                     $"/v1/Cabinet/{escapedCabinet}/containers/{Uri.EscapeDataString(targetId)}",
+                     $"/v1/Container/{Uri.EscapeDataString(targetId)}/info"
                  })
         {
             try
@@ -435,7 +735,10 @@ public sealed partial class NetDocumentsSyncService
             return null;
         }
 
-        var rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
+        var extension = ReadExtensionValue(element);
+        var rawType = string.IsNullOrWhiteSpace(extension)
+            ? ReadString(element, "type", "containerType", "kind", "extension", "ext")
+            : extension;
         var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, element.TryGetProperty("workspaceId", out _));
         if (resolvedType is null)
         {
@@ -447,7 +750,9 @@ public sealed partial class NetDocumentsSyncService
             Id = id,
             Name = ReadString(element, "name", "description", "label", "title"),
             Type = resolvedType.Value,
-            ParentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "parentId", "workspace")
+            ParentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "parentId", "workspace"),
+            Extension = extension,
+            SourceFlow = NdTargetSourceFlow.Browse
         };
     }
 
@@ -622,7 +927,10 @@ public sealed partial class NetDocumentsSyncService
             return null;
         }
 
-        var rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
+        var extension = ReadExtensionValue(element);
+        var rawType = string.IsNullOrWhiteSpace(extension)
+            ? ReadString(element, "type", "containerType", "kind", "extension", "ext")
+            : extension;
         var supportedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, element.TryGetProperty("workspaceId", out _));
         var name = ReadString(element, "name", "description", "label", "title");
 
@@ -631,6 +939,7 @@ public sealed partial class NetDocumentsSyncService
             Id = id,
             Name = string.IsNullOrWhiteSpace(name) ? id : name,
             TypeRaw = rawType,
+            Extension = extension,
             ParentId = ReadString(element, "parentId"),
             ParentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "workspace"),
             PathDisplay = ReadString(element, "path", "fullPath", "breadcrumb"),
@@ -653,21 +962,14 @@ public sealed partial class NetDocumentsSyncService
         var escapedCabinet = Uri.EscapeDataString(cabinetId);
         var escapedQuery = Uri.EscapeDataString(query ?? string.Empty);
         var escapedContainer = Uri.EscapeDataString(containerId ?? string.Empty);
-        var filter = Uri.EscapeDataString($"extension eq {extension}");
+        var filter = Uri.EscapeDataString($"extension eq '{extension}'");
 
-        var candidates = new List<string>
-        {
-            $"/v2/search/{escapedCabinet}?top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces"
-        };
+        var candidates = new List<string>();
 
         if (!string.IsNullOrWhiteSpace(query))
         {
             candidates.Add($"/v2/search/{escapedCabinet}?q={escapedQuery}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
             candidates.Add($"/v2/search?cabinets={escapedCabinet}&q={escapedQuery}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
-        }
-        else
-        {
-            candidates.Add($"/v2/search?cabinets={escapedCabinet}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
         }
 
         if (!string.IsNullOrWhiteSpace(containerId))
@@ -683,6 +985,7 @@ public sealed partial class NetDocumentsSyncService
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var beforeCount = results.Count;
                 foreach (var item in EnumerateSearchItems(document.RootElement))
                 {
                     var parsed = ParseTargetSelection(item);
@@ -701,6 +1004,8 @@ public sealed partial class NetDocumentsSyncService
                         results.Add(parsed);
                     }
                 }
+                var added = results.Count - beforeCount;
+                Trace.WriteLine($"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' added={added} total={results.Count}.");
 
                 if (results.Count > 0)
                 {
@@ -709,6 +1014,7 @@ public sealed partial class NetDocumentsSyncService
             }
             catch
             {
+                Trace.WriteLine($"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' failed.");
                 // Try next candidate.
             }
         }
@@ -746,6 +1052,256 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return string.Equals(ext.Trim(), extension, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<NdLookupValueItem> ParseLookupRows(JsonElement root)
+    {
+        var rows = EnumerateLookupRows(root);
+        return rows
+            .Select(item => new NdLookupValueItem
+            {
+                Key = ReadString(item, "key", "id", "value"),
+                Description = ReadString(item, "description", "label", "name", "longName"),
+                Closed = ReadBool(item, "closed"),
+                ParentKey = ReadString(item, "parent", "parentKey"),
+                ParentDescription = ReadString(item, "parentDesc", "parentDescription")
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.Key))
+            .ToList();
+    }
+
+    private static IEnumerable<JsonElement> EnumerateLookupRows(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return root.EnumerateArray();
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var name in new[] { "rows", "data", "items", "results", "value" })
+            {
+                if (root.TryGetProperty(name, out var child) && child.ValueKind == JsonValueKind.Array)
+                {
+                    return child.EnumerateArray();
+                }
+            }
+        }
+
+        return Array.Empty<JsonElement>();
+    }
+
+    private static string? NormalizeWorkspaceEnvId(string? rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return null;
+        }
+
+        var trimmed = rawValue.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absolute))
+        {
+            var queryToken = TryReadContainerIdFromQuery(absolute.Query);
+            if (!string.IsNullOrWhiteSpace(queryToken))
+            {
+                return NormalizeContainerIdToken(queryToken);
+            }
+
+            var segments = absolute.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length > 0)
+            {
+                return NormalizeContainerIdToken(segments[^1]);
+            }
+        }
+
+        var parts = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var candidate = parts.Length == 0 ? trimmed : parts[^1];
+        return NormalizeContainerIdToken(candidate);
+    }
+
+    private static IEnumerable<string> BuildContainerIdCandidates(string? rawWsUrl, string? token)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var colonId = ConvertWsUrlPathToColonContainerId(rawWsUrl);
+        if (!string.IsNullOrWhiteSpace(colonId) && seen.Add(colonId))
+        {
+            yield return colonId;
+        }
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            yield break;
+        }
+
+        var normalized = NormalizeContainerIdToken(token);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            yield break;
+        }
+
+        foreach (var candidate in new[]
+                 {
+                     normalized,
+                     $"^{normalized}",
+                     $"{normalized}.nev",
+                     $"^{normalized}.nev"
+                 })
+        {
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static string? ConvertWsUrlPathToColonContainerId(string? rawWsUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawWsUrl))
+        {
+            return null;
+        }
+
+        var value = rawWsUrl.Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out var absolute))
+        {
+            value = absolute.AbsolutePath;
+        }
+
+        if (!value.StartsWith("/", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0)
+        {
+            return null;
+        }
+
+        return ":" + string.Join(":", segments);
+    }
+
+    private static string EncodeContainerIdForPath(string containerId)
+    {
+        var trimmed = containerId.Trim();
+        if (trimmed.StartsWith(":", StringComparison.Ordinal))
+        {
+            var segments = trimmed.Split(':');
+            var encodedSegments = new List<string>(segments.Length);
+            foreach (var segment in segments)
+            {
+                if (segment.Length == 0)
+                {
+                    encodedSegments.Add(string.Empty);
+                    continue;
+                }
+
+                var decoded = Uri.UnescapeDataString(segment);
+                encodedSegments.Add(Uri.EscapeDataString(decoded));
+            }
+
+            return string.Join(":", encodedSegments);
+        }
+
+        return Uri.EscapeDataString(trimmed);
+    }
+
+    private static string? TryReadContainerIdFromQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        var queryText = query.TrimStart('?');
+        var parts = queryText.Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var part in parts)
+        {
+            var pair = part.Split('=', 2, StringSplitOptions.TrimEntries);
+            if (pair.Length != 2)
+            {
+                continue;
+            }
+
+            var key = pair[0];
+            if (!key.Equals("id", StringComparison.OrdinalIgnoreCase) &&
+                !key.Equals("container", StringComparison.OrdinalIgnoreCase) &&
+                !key.Equals("containerid", StringComparison.OrdinalIgnoreCase) &&
+                !key.Equals("workspace", StringComparison.OrdinalIgnoreCase) &&
+                !key.Equals("workspaceid", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = Uri.UnescapeDataString(pair[1]);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeContainerIdToken(string token)
+    {
+        var normalized = token.Trim();
+        var queryIndex = normalized.IndexOfAny(new[] { '?', '#' });
+        if (queryIndex >= 0)
+        {
+            normalized = normalized[..queryIndex];
+        }
+
+        if (normalized.StartsWith("^", StringComparison.Ordinal))
+        {
+            normalized = normalized[1..];
+        }
+
+        if (normalized.EndsWith(".nev", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^4];
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeLookupTerm(string? term)
+    {
+        if (string.IsNullOrWhiteSpace(term))
+        {
+            return string.Empty;
+        }
+
+        return term
+            .Trim()
+            .Replace("*", string.Empty, StringComparison.Ordinal)
+            .Trim();
+    }
+
+    private static string ReadExtensionValue(JsonElement element)
+    {
+        var extension = ReadString(element, "extension", "ext", "Ext");
+        if (!string.IsNullOrWhiteSpace(extension))
+        {
+            return extension;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "attributes", "Attributes", "profile", "Profile" })
+            {
+                if (element.TryGetProperty(propertyName, out var node) && node.ValueKind == JsonValueKind.Object)
+                {
+                    extension = ReadString(node, "extension", "ext", "Ext", "type", "Type");
+                    if (!string.IsNullOrWhiteSpace(extension))
+                    {
+                        return extension;
+                    }
+                }
+            }
+        }
+
+        return string.Empty;
     }
 
     private async Task<EffectiveProfileDefaults> TryFetchTargetDefaultsAsync(

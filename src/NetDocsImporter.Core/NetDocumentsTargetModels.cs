@@ -23,6 +23,14 @@ public enum NdTargetSource
     Local
 }
 
+public enum NdTargetSourceFlow
+{
+    LookupWs,
+    Recent,
+    Favorite,
+    Browse
+}
+
 public enum NdChildrenLoadState
 {
     NotLoaded,
@@ -40,6 +48,10 @@ public sealed class NdTargetSelection
     public string Name { get; set; } = string.Empty;
 
     public string? ParentWorkspaceId { get; set; }
+
+    public string Extension { get; set; } = string.Empty;
+
+    public NdTargetSourceFlow SourceFlow { get; set; } = NdTargetSourceFlow.Browse;
 }
 
 public sealed class NdTargetRecentItem
@@ -79,6 +91,8 @@ public sealed class NdContainerNode
 
     public string TypeRaw { get; set; } = string.Empty;
 
+    public string Extension { get; set; } = string.Empty;
+
     public string ParentId { get; set; } = string.Empty;
 
     public string? ParentWorkspaceId { get; set; }
@@ -96,6 +110,56 @@ public sealed class NdContainerNode
     public NdChildrenLoadState ChildrenLoadState { get; set; }
 
     public List<NdContainerNode> Children { get; set; } = new();
+}
+
+public sealed class NdLookupValueItem
+{
+    public string Key { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public bool Closed { get; set; }
+
+    public string ParentKey { get; set; } = string.Empty;
+
+    public string ParentDescription { get; set; } = string.Empty;
+}
+
+public sealed class WorkspaceLookupContext
+{
+    public string RepositoryId { get; set; } = string.Empty;
+
+    public string CabinetId { get; set; } = string.Empty;
+
+    public int ParentAttrNum { get; set; }
+
+    public int ChildAttrNum { get; set; }
+
+    public string ParentKey { get; set; } = string.Empty;
+
+    public string ChildKey { get; set; } = string.Empty;
+
+    public string ToJson()
+    {
+        return JsonSerializer.Serialize(this);
+    }
+
+    public static WorkspaceLookupContext? FromJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<WorkspaceLookupContext>(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 public sealed class NdProfileAttribute
