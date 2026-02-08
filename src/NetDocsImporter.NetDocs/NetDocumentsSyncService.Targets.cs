@@ -65,103 +65,27 @@ public sealed partial class NetDocumentsSyncService
     }
 
     public async Task<IReadOnlyList<NdTargetRecentItem>> GetRecentTargetsAsync(
-        string cabinetId,
+        string? cabinetId = null,
+        bool bypassCache = false,
         CancellationToken cancellationToken = default)
     {
-        var results = new List<NdTargetRecentItem>();
-        foreach (var path in BuildRecentEndpointCandidatesV2(cabinetId))
-        {
-            try
-            {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                results.AddRange(EnumerateArray(document.RootElement)
-                    .Select(ParseRecentItem)
-                    .Where(item => item is not null)
-                    .Select(item => item!));
-                if (results.Count > 0)
-                {
-                    Trace.WriteLine($"NetDocuments target browser: recent targets loaded from server ({results.Count}).");
-                    return results;
-                }
-            }
-            catch
-            {
-                // Continue to v1 fallback candidates.
-            }
-        }
-
-        foreach (var path in BuildRecentEndpointCandidates(cabinetId))
-        {
-            try
-            {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                results.AddRange(EnumerateArray(document.RootElement)
-                    .Select(ParseRecentItem)
-                    .Where(item => item is not null)
-                    .Select(item => item!));
-                if (results.Count > 0)
-                {
-                    Trace.WriteLine($"NetDocuments target browser: recent targets loaded from server ({results.Count}).");
-                    break;
-                }
-            }
-            catch
-            {
-                // Continue to fallback candidates.
-            }
-        }
-
-        return results;
+        return await GetWorkspaceListAsync("/v1/User/wsRecent", cabinetId, bypassCache, parseFavoriteShape: false, cancellationToken);
     }
 
     public async Task<IReadOnlyList<NdTargetFavoriteItem>> GetFavoriteTargetsAsync(
-        string cabinetId,
+        string? cabinetId = null,
+        bool bypassCache = false,
         CancellationToken cancellationToken = default)
     {
-        var results = new List<NdTargetFavoriteItem>();
-        foreach (var path in BuildFavoriteEndpointCandidatesV2(cabinetId))
-        {
-            try
+        var recentShape = await GetWorkspaceListAsync("/v1/User/wsFav", cabinetId, bypassCache, parseFavoriteShape: true, cancellationToken);
+        return recentShape
+            .Select(item => new NdTargetFavoriteItem
             {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                results.AddRange(EnumerateArray(document.RootElement)
-                    .Select(ParseFavoriteItem)
-                    .Where(item => item is not null)
-                    .Select(item => item!));
-                if (results.Count > 0)
-                {
-                    Trace.WriteLine($"NetDocuments target browser: favorites loaded from server ({results.Count}).");
-                    return results;
-                }
-            }
-            catch
-            {
-                // Continue to v1 fallback candidates.
-            }
-        }
-
-        foreach (var path in BuildFavoriteEndpointCandidates(cabinetId))
-        {
-            try
-            {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                results.AddRange(EnumerateArray(document.RootElement)
-                    .Select(ParseFavoriteItem)
-                    .Where(item => item is not null)
-                    .Select(item => item!));
-                if (results.Count > 0)
-                {
-                    Trace.WriteLine($"NetDocuments target browser: favorites loaded from server ({results.Count}).");
-                    break;
-                }
-            }
-            catch
-            {
-                // Continue to fallback candidates.
-            }
-        }
-
-        return results;
+                Selection = item.Selection,
+                PinnedUtc = item.LastUsedUtc,
+                Source = item.Source
+            })
+            .ToList();
     }
 
     public async Task<IReadOnlyList<NdWorkspaceSearchResult>> SearchWorkspacesAsync(
@@ -756,6 +680,64 @@ public sealed partial class NetDocumentsSyncService
         };
     }
 
+    private static NdTargetSelection? ParseWorkspaceSelection(JsonElement element)
+    {
+        var source = element;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "standardAttributes", "StandardAttributes", "attributes", "Attributes" })
+            {
+                if (element.TryGetProperty(propertyName, out var node) && node.ValueKind == JsonValueKind.Object)
+                {
+                    source = node;
+                    break;
+                }
+            }
+        }
+
+        var id = ReadString(source, "id", "containerId", "workspaceId", "folderId");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = ReadString(element, "id", "containerId", "workspaceId", "folderId");
+        }
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        var extension = ReadString(source, "extension", "ext", "Ext");
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ReadString(element, "extension", "ext", "Ext");
+        }
+
+        var rawType = string.IsNullOrWhiteSpace(extension)
+            ? ReadString(source, "type", "containerType", "kind")
+            : extension;
+        if (string.IsNullOrWhiteSpace(rawType))
+        {
+            rawType = ReadString(element, "type", "containerType", "kind");
+        }
+
+        var normalizedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint: true) ?? NdTargetType.Workspace;
+        var name = ReadString(source, "name", "description", "label", "title");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = ReadString(element, "name", "description", "label", "title");
+        }
+
+        return new NdTargetSelection
+        {
+            Id = id,
+            Name = string.IsNullOrWhiteSpace(name) ? id : name,
+            Type = normalizedType,
+            ParentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "workspace", "parentId"),
+            Extension = extension,
+            SourceFlow = NdTargetSourceFlow.Browse
+        };
+    }
+
     private async Task<List<NdProfileAttribute>> TryFetchTargetProfileAttributesAsync(
         NdTargetSelection target,
         CancellationToken cancellationToken)
@@ -830,13 +812,6 @@ public sealed partial class NetDocumentsSyncService
         yield return $"/v1/Cabinet/{escaped}/recentLocations";
     }
 
-    private static IEnumerable<string> BuildRecentEndpointCandidatesV2(string cabinetId)
-    {
-        var escaped = Uri.EscapeDataString(cabinetId);
-        yield return $"/v2/user/recent/locations/{escaped}";
-        yield return $"/v2/user/recent/workspaces/{escaped}";
-        yield return "/v2/user/recent/locations";
-    }
 
     private static IEnumerable<string> BuildFavoriteEndpointCandidates(string cabinetId)
     {
@@ -846,11 +821,292 @@ public sealed partial class NetDocumentsSyncService
         yield return $"/v1/Cabinet/{escaped}/favoriteLocations";
     }
 
-    private static IEnumerable<string> BuildFavoriteEndpointCandidatesV2(string cabinetId)
+    private async Task<IReadOnlyList<NdTargetRecentItem>> GetWorkspaceListAsync(
+        string endpointPath,
+        string? cabinetId,
+        bool bypassCache,
+        bool parseFavoriteShape,
+        CancellationToken cancellationToken)
     {
-        var escaped = Uri.EscapeDataString(cabinetId);
-        yield return $"/v2/user/favorites/{escaped}";
+        var primaryPath = BuildWorkspaceListPath(endpointPath, cabinetId, bypassCache, useQuotedCabinetFilter: true);
+        try
+        {
+            using var document = await _apiClient.GetJsonAsync(primaryPath, cancellationToken);
+            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            Trace.WriteLine($"NetDocuments target browser: endpoint='{primaryPath}' count={parsed.Count}.");
+            if (parsed.Count == 0)
+            {
+                Trace.WriteLine($"NetDocuments target browser: endpoint='{primaryPath}' shape={DescribeJsonShape(document.RootElement)}");
+            }
+            if (parsed.Count > 0 || string.IsNullOrWhiteSpace(cabinetId))
+            {
+                return parsed;
+            }
+        }
+        catch
+        {
+            // Try fallback filter formatting only if cabinet filtering was requested.
+            if (string.IsNullOrWhiteSpace(cabinetId))
+            {
+                throw;
+            }
+        }
+
+        var fallbackPath = BuildWorkspaceListPath(endpointPath, cabinetId, bypassCache, useQuotedCabinetFilter: false);
+        using (var document = await _apiClient.GetJsonAsync(fallbackPath, cancellationToken))
+        {
+            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            Trace.WriteLine($"NetDocuments target browser: endpoint='{fallbackPath}' count={parsed.Count}.");
+            if (parsed.Count == 0)
+            {
+                Trace.WriteLine($"NetDocuments target browser: endpoint='{fallbackPath}' shape={DescribeJsonShape(document.RootElement)}");
+            }
+            if (parsed.Count > 0 || string.IsNullOrWhiteSpace(cabinetId))
+            {
+                return parsed;
+            }
+        }
+
+        // Cabinet scoping can legitimately return no rows depending on tenant API behavior.
+        // Fall back to unfiltered user list so tabs remain useful.
+        var unfilteredPath = BuildWorkspaceListPath(endpointPath, null, bypassCache, useQuotedCabinetFilter: false);
+        using (var document = await _apiClient.GetJsonAsync(unfilteredPath, cancellationToken))
+        {
+            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            Trace.WriteLine($"NetDocuments target browser: endpoint='{unfilteredPath}' count={parsed.Count}.");
+            if (parsed.Count > 0)
+            {
+                return parsed;
+            }
+
+            Trace.WriteLine($"NetDocuments target browser: endpoint='{unfilteredPath}' shape={DescribeJsonShape(document.RootElement)}");
+        }
+
+        var v2Fallback = await GetWorkspaceListFromV2Async(cabinetId, parseFavoriteShape, cancellationToken);
+        if (v2Fallback.Count > 0)
+        {
+            return v2Fallback;
+        }
+
+        return Array.Empty<NdTargetRecentItem>();
+    }
+
+    private static string BuildWorkspaceListPath(
+        string endpointPath,
+        string? cabinetId,
+        bool bypassCache,
+        bool useQuotedCabinetFilter)
+    {
+        var queryParts = new List<string>
+        {
+            "$select=standardAttributes"
+        };
+
+        if (!string.IsNullOrWhiteSpace(cabinetId))
+        {
+            var filterText = useQuotedCabinetFilter
+                ? $"cabinet eq '{cabinetId.Trim().Replace("'", "''", StringComparison.Ordinal)}'"
+                : $"cabinet eq {cabinetId.Trim()}";
+            queryParts.Add($"$filter={Uri.EscapeDataString(filterText)}");
+        }
+
+        if (bypassCache)
+        {
+            queryParts.Add("bypasscache=true");
+        }
+
+        return $"{endpointPath}?{string.Join("&", queryParts)}";
+    }
+
+    private static IReadOnlyList<NdTargetRecentItem> ParseWorkspaceListItems(JsonElement root, bool parseFavoriteShape)
+    {
+        var results = new List<NdTargetRecentItem>();
+        foreach (var item in EnumerateWorkspaceListItems(root))
+        {
+            var parsed = parseFavoriteShape
+                ? ParseFavoriteWorkspaceAsRecent(item)
+                : ParseRecentWorkspaceItem(item);
+            if (parsed is not null)
+            {
+                results.Add(parsed);
+            }
+        }
+
+        return results;
+    }
+
+    private static IEnumerable<JsonElement> EnumerateWorkspaceListItems(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return root.EnumerateArray();
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var name in new[]
+                     {
+                         "wsRecent", "wsFav", "recent", "favorites", "locations",
+                         "standardList",
+                         "rows", "data", "items", "results", "value", "documents"
+                     })
+            {
+                if (!TryGetPropertyIgnoreCase(root, name, out var child))
+                {
+                    continue;
+                }
+
+                if (child.ValueKind == JsonValueKind.Array)
+                {
+                    return child.EnumerateArray();
+                }
+
+                if (child.ValueKind == JsonValueKind.Object)
+                {
+                    var nested = EnumerateWorkspaceListItems(child);
+                    if (nested.Any())
+                    {
+                        return nested;
+                    }
+                }
+            }
+        }
+
+        return Array.Empty<JsonElement>();
+    }
+
+    private async Task<IReadOnlyList<NdTargetRecentItem>> GetWorkspaceListFromV2Async(
+        string? cabinetId,
+        bool parseFavoriteShape,
+        CancellationToken cancellationToken)
+    {
+        var candidates = parseFavoriteShape
+            ? BuildFavoriteEndpointCandidatesV2(cabinetId)
+            : BuildRecentEndpointCandidatesV2(cabinetId);
+
+        foreach (var path in candidates)
+        {
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var parsed = ParseWorkspaceListItemsFromV2(document.RootElement);
+                Trace.WriteLine($"NetDocuments target browser: v2 endpoint='{path}' count={parsed.Count}.");
+                if (parsed.Count > 0)
+                {
+                    return parsed;
+                }
+
+                Trace.WriteLine($"NetDocuments target browser: v2 endpoint='{path}' shape={DescribeJsonShape(document.RootElement)}");
+            }
+            catch
+            {
+                Trace.WriteLine($"NetDocuments target browser: v2 endpoint='{path}' failed.");
+            }
+        }
+
+        return Array.Empty<NdTargetRecentItem>();
+    }
+
+    private static IEnumerable<string> BuildRecentEndpointCandidatesV2(string? cabinetId)
+    {
+        if (!string.IsNullOrWhiteSpace(cabinetId))
+        {
+            var escaped = Uri.EscapeDataString(cabinetId);
+            yield return $"/v2/user/recent/locations/{escaped}";
+        }
+
+        yield return "/v2/user/recent/locations";
+    }
+
+    private static IEnumerable<string> BuildFavoriteEndpointCandidatesV2(string? cabinetId)
+    {
+        if (!string.IsNullOrWhiteSpace(cabinetId))
+        {
+            var escaped = Uri.EscapeDataString(cabinetId);
+            yield return $"/v2/user/favorites/{escaped}";
+        }
+
         yield return "/v2/user/favorites";
+    }
+
+    private static IReadOnlyList<NdTargetRecentItem> ParseWorkspaceListItemsFromV2(JsonElement root)
+    {
+        var items = new List<NdTargetRecentItem>();
+        foreach (var element in EnumerateSearchItems(root))
+        {
+            var selection = ParseTargetSelection(element) ?? ParseWorkspaceSelection(element);
+            if (selection is null)
+            {
+                continue;
+            }
+
+            items.Add(new NdTargetRecentItem
+            {
+                Selection = selection,
+                LastUsedUtc = DateTime.UtcNow,
+                Source = NdTargetSource.Server
+            });
+        }
+
+        return items;
+    }
+
+    private static string DescribeJsonShape(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return $"array(len={root.GetArrayLength()})";
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return root.ValueKind.ToString();
+        }
+
+        var names = root.EnumerateObject().Select(p => p.Name).Take(20).ToArray();
+        return $"object(keys=[{string.Join(",", names)}])";
+    }
+
+    private static NdTargetRecentItem? ParseRecentWorkspaceItem(JsonElement element)
+    {
+        var selection = ParseWorkspaceSelection(element);
+        if (selection is null)
+        {
+            return null;
+        }
+
+        var timestampRaw = ReadString(element, "lastUsedUtc", "lastAccessedUtc", "timestamp", "updatedUtc");
+        var timestamp = DateTime.TryParse(timestampRaw, out var parsedUtc)
+            ? parsedUtc.ToUniversalTime()
+            : DateTime.UtcNow;
+
+        return new NdTargetRecentItem
+        {
+            Selection = selection,
+            LastUsedUtc = timestamp,
+            Source = NdTargetSource.Server
+        };
+    }
+
+    private static NdTargetRecentItem? ParseFavoriteWorkspaceAsRecent(JsonElement element)
+    {
+        var selection = ParseWorkspaceSelection(element);
+        if (selection is null)
+        {
+            return null;
+        }
+
+        var timestampRaw = ReadString(element, "pinnedUtc", "createdUtc", "timestamp", "updatedUtc");
+        var timestamp = DateTime.TryParse(timestampRaw, out var parsedUtc)
+            ? parsedUtc.ToUniversalTime()
+            : DateTime.UtcNow;
+
+        return new NdTargetRecentItem
+        {
+            Selection = selection,
+            LastUsedUtc = timestamp,
+            Source = NdTargetSource.Server
+        };
     }
 
     private static IEnumerable<string> BuildChildrenEndpointCandidates(string cabinetId, string? parentContainerId, string? workspaceId)
@@ -1033,7 +1289,7 @@ public sealed partial class NetDocumentsSyncService
         {
             foreach (var name in new[] { "items", "results", "data", "documents", "records", "value", "list" })
             {
-                if (root.TryGetProperty(name, out var child) && child.ValueKind == JsonValueKind.Array)
+                if (TryGetPropertyIgnoreCase(root, name, out var child) && child.ValueKind == JsonValueKind.Array)
                 {
                     return child.EnumerateArray();
                 }

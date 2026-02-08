@@ -26,8 +26,8 @@
           "net10.0": {
             "targetAlias": "net10.0",
             "projectReferences": {
-              "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-                "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+              "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+                "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
               }
             }
           }
@@ -347,14 +347,14 @@
         }
       }
     },
-    "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+    "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
+        "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
         "projectName": "NetDocsImporter.Data",
-        "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
+        "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj",
         "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-        "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\obj\\",
+        "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -711,8 +711,8 @@
               "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
                 "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
               },
-              "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-                "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+              "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+                "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
               }
             }
           }

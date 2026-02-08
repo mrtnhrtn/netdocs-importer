@@ -138,6 +138,34 @@ public sealed class JobStore
                 PRIMARY KEY (CabinetId, AttributeNum, ParentKey, ValueKey)
             );
 
+            CREATE TABLE IF NOT EXISTS NetDocumentsRecentWorkspacesCache (
+                UserKey TEXT NOT NULL,
+                ServiceKey TEXT NOT NULL,
+                CabinetScope TEXT NOT NULL DEFAULT '',
+                WorkspaceId TEXT NOT NULL,
+                WorkspaceName TEXT NOT NULL,
+                TargetType TEXT NOT NULL,
+                ParentWorkspaceId TEXT NULL,
+                Extension TEXT NULL,
+                PathDisplay TEXT NULL,
+                UpdatedUtc TEXT NOT NULL,
+                PRIMARY KEY (UserKey, ServiceKey, CabinetScope, WorkspaceId)
+            );
+
+            CREATE TABLE IF NOT EXISTS NetDocumentsFavoriteWorkspacesCache (
+                UserKey TEXT NOT NULL,
+                ServiceKey TEXT NOT NULL,
+                CabinetScope TEXT NOT NULL DEFAULT '',
+                WorkspaceId TEXT NOT NULL,
+                WorkspaceName TEXT NOT NULL,
+                TargetType TEXT NOT NULL,
+                ParentWorkspaceId TEXT NULL,
+                Extension TEXT NULL,
+                PathDisplay TEXT NULL,
+                UpdatedUtc TEXT NOT NULL,
+                PRIMARY KEY (UserKey, ServiceKey, CabinetScope, WorkspaceId)
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Files_JobId ON Files(JobId);
             CREATE INDEX IF NOT EXISTS IX_Files_RelativePath ON Files(RelativePath);
             CREATE INDEX IF NOT EXISTS IX_Transfers_JobId ON Transfers(JobId);
@@ -149,6 +177,8 @@ public sealed class JobStore
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsCabinets_RepositoryId ON NetDocumentsCabinets(RepositoryId);
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsAttributes_CabinetId ON NetDocumentsAttributes(CabinetId);
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsLookupValues_CabinetAttr ON NetDocumentsLookupValues(CabinetId, AttributeNum);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsRecentWorkspacesCache_Scope ON NetDocumentsRecentWorkspacesCache(UserKey, ServiceKey, CabinetScope);
+            CREATE INDEX IF NOT EXISTS IX_NetDocumentsFavoriteWorkspacesCache_Scope ON NetDocumentsFavoriteWorkspacesCache(UserKey, ServiceKey, CabinetScope);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -1631,6 +1661,66 @@ public sealed class JobStore
         return results;
     }
 
+    public Task ReplaceNetDocumentsRecentWorkspaceCacheAsync(
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        IReadOnlyList<NetDocumentsWorkspaceCacheRecord> records,
+        CancellationToken cancellationToken = default)
+    {
+        return ReplaceWorkspaceCacheAsync(
+            "NetDocumentsRecentWorkspacesCache",
+            userKey,
+            serviceKey,
+            cabinetScope,
+            records,
+            cancellationToken);
+    }
+
+    public Task ReplaceNetDocumentsFavoriteWorkspaceCacheAsync(
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        IReadOnlyList<NetDocumentsWorkspaceCacheRecord> records,
+        CancellationToken cancellationToken = default)
+    {
+        return ReplaceWorkspaceCacheAsync(
+            "NetDocumentsFavoriteWorkspacesCache",
+            userKey,
+            serviceKey,
+            cabinetScope,
+            records,
+            cancellationToken);
+    }
+
+    public Task<IReadOnlyList<NetDocumentsWorkspaceCacheRecord>> GetNetDocumentsRecentWorkspaceCacheAsync(
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        CancellationToken cancellationToken = default)
+    {
+        return GetWorkspaceCacheAsync(
+            "NetDocumentsRecentWorkspacesCache",
+            userKey,
+            serviceKey,
+            cabinetScope,
+            cancellationToken);
+    }
+
+    public Task<IReadOnlyList<NetDocumentsWorkspaceCacheRecord>> GetNetDocumentsFavoriteWorkspaceCacheAsync(
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        CancellationToken cancellationToken = default)
+    {
+        return GetWorkspaceCacheAsync(
+            "NetDocumentsFavoriteWorkspacesCache",
+            userKey,
+            serviceKey,
+            cabinetScope,
+            cancellationToken);
+    }
+
     public async Task<NetDocumentsProfileContextSnapshotRecord?> GetNetDocumentsProfileContextSnapshotAsync(
         string cabinetId,
         string repositoryId,
@@ -1706,6 +1796,103 @@ public sealed class JobStore
             lookupAttributeCount,
             lookupValueCount,
             lastSyncedUtc);
+    }
+
+    private async Task ReplaceWorkspaceCacheAsync(
+        string tableName,
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        IReadOnlyList<NetDocumentsWorkspaceCacheRecord> records,
+        CancellationToken cancellationToken)
+    {
+        var normalizedCabinet = cabinetScope?.Trim() ?? string.Empty;
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = (SqliteTransaction)transaction;
+            delete.CommandText = $"""
+                DELETE FROM {tableName}
+                WHERE UserKey = $userKey
+                  AND ServiceKey = $serviceKey
+                  AND CabinetScope = $cabinetScope;
+                """;
+            delete.Parameters.AddWithValue("$userKey", userKey);
+            delete.Parameters.AddWithValue("$serviceKey", serviceKey);
+            delete.Parameters.AddWithValue("$cabinetScope", normalizedCabinet);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var record in records)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = (SqliteTransaction)transaction;
+            insert.CommandText = $"""
+                INSERT INTO {tableName}
+                (UserKey, ServiceKey, CabinetScope, WorkspaceId, WorkspaceName, TargetType, ParentWorkspaceId, Extension, PathDisplay, UpdatedUtc)
+                VALUES
+                ($userKey, $serviceKey, $cabinetScope, $workspaceId, $workspaceName, $targetType, $parentWorkspaceId, $extension, $pathDisplay, $updatedUtc);
+                """;
+            insert.Parameters.AddWithValue("$userKey", userKey);
+            insert.Parameters.AddWithValue("$serviceKey", serviceKey);
+            insert.Parameters.AddWithValue("$cabinetScope", normalizedCabinet);
+            insert.Parameters.AddWithValue("$workspaceId", record.WorkspaceId);
+            insert.Parameters.AddWithValue("$workspaceName", record.WorkspaceName);
+            insert.Parameters.AddWithValue("$targetType", record.TargetType);
+            insert.Parameters.AddWithValue("$parentWorkspaceId", (object?)record.ParentWorkspaceId ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$extension", (object?)record.Extension ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$pathDisplay", (object?)record.PathDisplay ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$updatedUtc", ToUtcString(record.UpdatedUtc));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<NetDocumentsWorkspaceCacheRecord>> GetWorkspaceCacheAsync(
+        string tableName,
+        string userKey,
+        string serviceKey,
+        string? cabinetScope,
+        CancellationToken cancellationToken)
+    {
+        var normalizedCabinet = cabinetScope?.Trim() ?? string.Empty;
+        var results = new List<NetDocumentsWorkspaceCacheRecord>();
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT UserKey, ServiceKey, CabinetScope, WorkspaceId, WorkspaceName, TargetType, ParentWorkspaceId, Extension, PathDisplay, UpdatedUtc
+            FROM {tableName}
+            WHERE UserKey = $userKey
+              AND ServiceKey = $serviceKey
+              AND CabinetScope = $cabinetScope
+            ORDER BY WorkspaceName;
+            """;
+        command.Parameters.AddWithValue("$userKey", userKey);
+        command.Parameters.AddWithValue("$serviceKey", serviceKey);
+        command.Parameters.AddWithValue("$cabinetScope", normalizedCabinet);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new NetDocumentsWorkspaceCacheRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? string.Empty : reader.GetString(7),
+                reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                ParseUtc(reader.GetString(9))));
+        }
+
+        return results;
     }
 
     private static void BindFileParameters(SqliteCommand command, FileRecord file)

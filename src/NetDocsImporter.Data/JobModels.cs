@@ -121,3 +121,15 @@ public sealed record NetDocumentsProfileContextSnapshotRecord(
     int LookupAttributeCount,
     int LookupValueCount,
     DateTime? LastSyncedUtc);
+
+public sealed record NetDocumentsWorkspaceCacheRecord(
+    string UserKey,
+    string ServiceKey,
+    string CabinetScope,
+    string WorkspaceId,
+    string WorkspaceName,
+    string TargetType,
+    string? ParentWorkspaceId,
+    string Extension,
+    string PathDisplay,
+    DateTime UpdatedUtc);

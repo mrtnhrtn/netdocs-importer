@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using NetDocsImporter.Core;
+using NetDocsImporter.Data;
 
 namespace NetDocsImporter.App;
 
@@ -15,6 +16,7 @@ public sealed partial class MainViewModel
     private const int WorkspaceSearchMaxParentCandidates = 4;
     private const int WorkspaceSearchMaxChildCandidatesPerParent = 3;
     private const int WorkspaceSearchMaxResolveAttempts = 12;
+    private static readonly TimeSpan WorkspaceCacheTtl = TimeSpan.FromMinutes(20);
 
     private readonly ObservableCollection<NetDocumentsTargetContainerView> _netDocumentsTargetContainers = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _recentTargets = new();
@@ -41,6 +43,8 @@ public sealed partial class MainViewModel
     private bool _selectedNetDocumentsTargetSupported;
     private string _targetProfileMetadataStatus = "No target confirmed yet.";
     private bool _isTargetBrowserBusy;
+    private bool _isLoadingRecentTargets;
+    private bool _isLoadingFavoriteTargets;
     private string _targetBrowserMessage = string.Empty;
     private NdTargetBrowserTab _selectedTargetBrowserTab = NdTargetBrowserTab.Recent;
     private string _workspaceSearchText = string.Empty;
@@ -48,6 +52,8 @@ public sealed partial class MainViewModel
     private EffectiveProfileDefaults _effectiveProfileDefaults = EffectiveProfileDefaults.Empty;
     private WorkspaceLookupContext? _workspaceLookupContext;
     private CancellationTokenSource? _workspaceSearchCts;
+    private bool _hasLoadedRecentTargets;
+    private bool _hasLoadedFavoriteTargets;
 
     public ObservableCollection<NetDocumentsTargetContainerView> NetDocumentsTargetContainers => _netDocumentsTargetContainers;
 
@@ -159,6 +165,18 @@ public sealed partial class MainViewModel
         private set => SetField(ref _isTargetBrowserBusy, value);
     }
 
+    public bool IsLoadingRecentTargets
+    {
+        get => _isLoadingRecentTargets;
+        private set => SetField(ref _isLoadingRecentTargets, value);
+    }
+
+    public bool IsLoadingFavoriteTargets
+    {
+        get => _isLoadingFavoriteTargets;
+        private set => SetField(ref _isLoadingFavoriteTargets, value);
+    }
+
     public string TargetBrowserMessage
     {
         get => _targetBrowserMessage;
@@ -168,7 +186,15 @@ public sealed partial class MainViewModel
     public NdTargetBrowserTab SelectedTargetBrowserTab
     {
         get => _selectedTargetBrowserTab;
-        set => SetField(ref _selectedTargetBrowserTab, value);
+        set
+        {
+            if (!SetField(ref _selectedTargetBrowserTab, value))
+            {
+                return;
+            }
+
+            _ = EnsureTargetBrowserTabLoadedAsync(value);
+        }
     }
 
     public string WorkspaceSearchText
@@ -245,6 +271,8 @@ public sealed partial class MainViewModel
                 SelectedWorkspaceSearchTarget = null;
                 _browseRootNodes.Clear();
             });
+            _hasLoadedRecentTargets = false;
+            _hasLoadedFavoriteTargets = false;
             return;
         }
 
@@ -296,16 +324,43 @@ public sealed partial class MainViewModel
             return;
         }
 
-        await RefreshRecentTargetsAsync();
-        await RefreshFavoriteTargetsAsync();
         if (_workspaceLookupContext is null)
         {
             _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync();
         }
 
-        if (_browseRootNodes.Count == 0)
+        await EnsureTargetBrowserTabLoadedAsync(SelectedTargetBrowserTab);
+    }
+
+    public async Task EnsureTargetBrowserTabLoadedAsync(NdTargetBrowserTab tab)
+    {
+        if (!CanPickNetDocumentsTarget)
         {
-            await LoadBrowseRootsAsync();
+            return;
+        }
+
+        switch (tab)
+        {
+            case NdTargetBrowserTab.Recent:
+                if (!_hasLoadedRecentTargets)
+                {
+                    await RefreshRecentTargetsAsync();
+                }
+                break;
+            case NdTargetBrowserTab.Favorites:
+                if (!_hasLoadedFavoriteTargets)
+                {
+                    await RefreshFavoriteTargetsAsync();
+                }
+                break;
+            case NdTargetBrowserTab.Browse:
+                if (_browseRootNodes.Count == 0)
+                {
+                    await LoadBrowseRootsAsync();
+                }
+                break;
+            default:
+                break;
         }
     }
 
@@ -316,26 +371,104 @@ public sealed partial class MainViewModel
             return;
         }
 
-        IReadOnlyList<NdTargetRecentItem> serverItems = Array.Empty<NdTargetRecentItem>();
+        if (IsLoadingRecentTargets)
+        {
+            return;
+        }
+
+        IsLoadingRecentTargets = true;
         try
         {
-            serverItems = await RequireSyncService().GetRecentTargetsAsync(SelectedNetDocumentsCabinetId);
+            var userKey = GetNetDocumentsUserCacheKey();
+            var serviceKey = GetNetDocumentsServiceKey();
+            var cabinetScope = SelectedNetDocumentsCabinetId;
+            await _jobStore.InitializeAsync();
+
+            var cachedRecords = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
+                userKey,
+                serviceKey,
+                cabinetScope);
+            if (cachedRecords.Count > 0 &&
+                DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
+            {
+                var cachedItems = cachedRecords.Select(ToRecentItem).ToList();
+                _localRecentTargets = cachedItems.ToList();
+                UpdateOnUi(() =>
+                {
+                    _recentTargets.Clear();
+                    foreach (var item in cachedItems)
+                    {
+                        _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                    }
+                });
+                _hasLoadedRecentTargets = true;
+                Trace.WriteLine($"NetDocuments target browser: recent source=cache count={cachedItems.Count}");
+                return;
+            }
+
+            var serverItems = (await RequireSyncService().GetRecentTargetsAsync(cabinetScope))
+                .GroupBy(item => NdTargetBrowserLogic.BuildTargetKey(item.Selection), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(item => item.LastUsedUtc)
+                    .First())
+                .ToList();
             Trace.WriteLine($"NetDocuments target browser: recent source=server count={serverItems.Count}");
+            _localRecentTargets = serverItems.ToList();
+
+            var syncedUtc = DateTime.UtcNow;
+            var records = serverItems
+                .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.LastUsedUtc, syncedUtc))
+                .ToList();
+            await _jobStore.ReplaceNetDocumentsRecentWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+
+            UpdateOnUi(() =>
+            {
+                _recentTargets.Clear();
+                foreach (var item in serverItems)
+                {
+                    _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                }
+            });
+            _hasLoadedRecentTargets = true;
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"NetDocuments target browser: recent source=fallback-local reason={ex.Message}");
-        }
-
-        var merged = NdTargetBrowserLogic.MergeRecentTargets(serverItems, _localRecentTargets);
-        UpdateOnUi(() =>
-        {
-            _recentTargets.Clear();
-            foreach (var item in merged)
+            Trace.WriteLine($"NetDocuments target browser: recent source=cache-fallback reason={ex.Message}");
+            try
             {
-                _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                var fallback = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
+                    GetNetDocumentsUserCacheKey(),
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsCabinetId);
+                var cachedItems = fallback.Select(ToRecentItem).ToList();
+                _localRecentTargets = cachedItems.ToList();
+                UpdateOnUi(() =>
+                {
+                    _recentTargets.Clear();
+                    foreach (var item in cachedItems)
+                    {
+                        _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                    }
+                });
+                _hasLoadedRecentTargets = true;
+                if (cachedItems.Count > 0)
+                {
+                    TargetBrowserMessage = "Recent workspaces loaded from cache.";
+                }
+                else
+                {
+                    TargetBrowserMessage = $"Unable to load recent workspaces: {ex.Message}";
+                }
             }
-        });
+            catch
+            {
+                TargetBrowserMessage = $"Unable to load recent workspaces: {ex.Message}";
+            }
+        }
+        finally
+        {
+            IsLoadingRecentTargets = false;
+        }
     }
 
     public async Task RefreshFavoriteTargetsAsync()
@@ -345,29 +478,104 @@ public sealed partial class MainViewModel
             return;
         }
 
-        IReadOnlyList<NdTargetFavoriteItem> serverItems = Array.Empty<NdTargetFavoriteItem>();
+        if (IsLoadingFavoriteTargets)
+        {
+            return;
+        }
+
+        IsLoadingFavoriteTargets = true;
         try
         {
-            serverItems = await RequireSyncService().GetFavoriteTargetsAsync(SelectedNetDocumentsCabinetId);
+            var userKey = GetNetDocumentsUserCacheKey();
+            var serviceKey = GetNetDocumentsServiceKey();
+            var cabinetScope = SelectedNetDocumentsCabinetId;
+            await _jobStore.InitializeAsync();
+
+            var cachedRecords = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
+                userKey,
+                serviceKey,
+                cabinetScope);
+            if (cachedRecords.Count > 0 &&
+                DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
+            {
+                var cachedItems = cachedRecords.Select(ToFavoriteItem).ToList();
+                _localFavoriteTargets = cachedItems.ToList();
+                UpdateOnUi(() =>
+                {
+                    _favoriteTargets.Clear();
+                    foreach (var item in cachedItems)
+                    {
+                        _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                    }
+                });
+                _hasLoadedFavoriteTargets = true;
+                Trace.WriteLine($"NetDocuments target browser: favorites source=cache count={cachedItems.Count}");
+                return;
+            }
+
+            var serverItems = (await RequireSyncService().GetFavoriteTargetsAsync(cabinetScope))
+                .GroupBy(item => NdTargetBrowserLogic.BuildTargetKey(item.Selection), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(item => item.PinnedUtc)
+                    .First())
+                .ToList();
             Trace.WriteLine($"NetDocuments target browser: favorites source=server count={serverItems.Count}");
+            _localFavoriteTargets = serverItems.ToList();
+
+            var syncedUtc = DateTime.UtcNow;
+            var records = serverItems
+                .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.PinnedUtc, syncedUtc))
+                .ToList();
+            await _jobStore.ReplaceNetDocumentsFavoriteWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+
+            UpdateOnUi(() =>
+            {
+                _favoriteTargets.Clear();
+                foreach (var item in serverItems)
+                {
+                    _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                }
+            });
+            _hasLoadedFavoriteTargets = true;
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"NetDocuments target browser: favorites source=fallback-local reason={ex.Message}");
-        }
-
-        var merged = NdTargetBrowserLogic.MergeFavoriteTargets(serverItems, _localFavoriteTargets)
-            .Where(item => !_locallyUnpinnedFavoriteKeys.Contains(NdTargetBrowserLogic.BuildTargetKey(item.Selection)))
-            .ToList();
-
-        UpdateOnUi(() =>
-        {
-            _favoriteTargets.Clear();
-            foreach (var item in merged)
+            Trace.WriteLine($"NetDocuments target browser: favorites source=cache-fallback reason={ex.Message}");
+            try
             {
-                _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                var fallback = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
+                    GetNetDocumentsUserCacheKey(),
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsCabinetId);
+                var cachedItems = fallback.Select(ToFavoriteItem).ToList();
+                _localFavoriteTargets = cachedItems.ToList();
+                UpdateOnUi(() =>
+                {
+                    _favoriteTargets.Clear();
+                    foreach (var item in cachedItems)
+                    {
+                        _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                    }
+                });
+                _hasLoadedFavoriteTargets = true;
+                if (cachedItems.Count > 0)
+                {
+                    TargetBrowserMessage = "Favorite workspaces loaded from cache.";
+                }
+                else
+                {
+                    TargetBrowserMessage = $"Unable to load favorite workspaces: {ex.Message}";
+                }
             }
-        });
+            catch
+            {
+                TargetBrowserMessage = $"Unable to load favorite workspaces: {ex.Message}";
+            }
+        }
+        finally
+        {
+            IsLoadingFavoriteTargets = false;
+        }
     }
 
     public async Task SearchWorkspacesAsync()
@@ -637,9 +845,23 @@ public sealed partial class MainViewModel
                     parent.Key,
                     query,
                     top: 25,
-                    includeUnfilteredFallback: false,
+                    includeUnfilteredFallback: true,
                     cancellationToken: cancellationToken);
                 var filteredChildren = FilterLookupCandidatesByTerm(children, query);
+                if (filteredChildren.Count == 0)
+                {
+                    var recentChildren = await sync.GetRecentChildLookupValuesAsync(
+                        _workspaceLookupContext.RepositoryId,
+                        _workspaceLookupContext.ChildAttrNum,
+                        parent.Key,
+                        top: 12,
+                        cancellationToken: cancellationToken);
+                    filteredChildren = FilterLookupCandidatesByTerm(recentChildren, query);
+                    if (filteredChildren.Count == 0)
+                    {
+                        filteredChildren = recentChildren.ToList();
+                    }
+                }
                 Trace.WriteLine($"NetDocuments workspace unified search: parent='{parent.Key}' child candidates={children.Count} filtered={filteredChildren.Count}.");
 
                 var childBatch = filteredChildren.Take(WorkspaceSearchMaxChildCandidatesPerParent).ToList();
@@ -798,6 +1020,91 @@ public sealed partial class MainViewModel
             .ToList();
     }
 
+    private string GetNetDocumentsServiceKey()
+    {
+        return GetApiBaseUrl().TrimEnd('/');
+    }
+
+    private string GetNetDocumentsUserCacheKey()
+    {
+        if (!string.IsNullOrWhiteSpace(_netDocumentsCurrentUserId))
+        {
+            return _netDocumentsCurrentUserId.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(NetDocumentsConnectedUser))
+        {
+            return NetDocumentsConnectedUser.Trim();
+        }
+
+        // TODO: replace fallback when a stable account identifier is always available.
+        return "default-user";
+    }
+
+    private static NetDocumentsWorkspaceCacheRecord ToWorkspaceCacheRecord(
+        string userKey,
+        string serviceKey,
+        string cabinetScope,
+        NdTargetSelection selection,
+        DateTime rowTimestampUtc,
+        DateTime syncedUtc)
+    {
+        return new NetDocumentsWorkspaceCacheRecord(
+            userKey,
+            serviceKey,
+            cabinetScope ?? string.Empty,
+            selection.Id,
+            selection.Name,
+            selection.Type.ToString(),
+            selection.ParentWorkspaceId,
+            selection.Extension,
+            selection.Name,
+            syncedUtc == default ? rowTimestampUtc : syncedUtc);
+    }
+
+    private static NdTargetRecentItem ToRecentItem(NetDocumentsWorkspaceCacheRecord record)
+    {
+        return new NdTargetRecentItem
+        {
+            Selection = new NdTargetSelection
+            {
+                Id = record.WorkspaceId,
+                Name = record.WorkspaceName,
+                Type = ParseTargetType(record.TargetType),
+                ParentWorkspaceId = record.ParentWorkspaceId,
+                Extension = record.Extension,
+                SourceFlow = NdTargetSourceFlow.Recent
+            },
+            LastUsedUtc = record.UpdatedUtc,
+            Source = NdTargetSource.Server
+        };
+    }
+
+    private static NdTargetFavoriteItem ToFavoriteItem(NetDocumentsWorkspaceCacheRecord record)
+    {
+        return new NdTargetFavoriteItem
+        {
+            Selection = new NdTargetSelection
+            {
+                Id = record.WorkspaceId,
+                Name = record.WorkspaceName,
+                Type = ParseTargetType(record.TargetType),
+                ParentWorkspaceId = record.ParentWorkspaceId,
+                Extension = record.Extension,
+                SourceFlow = NdTargetSourceFlow.Favorite
+            },
+            PinnedUtc = record.UpdatedUtc,
+            Source = NdTargetSource.Server
+        };
+    }
+
+    private static NdTargetType ParseTargetType(string raw)
+    {
+        return Enum.TryParse<NdTargetType>(raw, ignoreCase: true, out var parsed)
+            ? parsed
+            : NdTargetType.Workspace;
+    }
+
     public async Task SelectTargetFromBrowseNodeAsync()
     {
         if (SelectedBrowseNode is null)
@@ -886,8 +1193,6 @@ public sealed partial class MainViewModel
         try
         {
             await SyncSelectedTargetProfileSnapshotAsync();
-            AddSelectedTargetToLocalRecents();
-            await RefreshRecentTargetsAsync();
             QueueSettingsSave();
             await RefreshReviewScopeNetDocumentsAsync();
             OnPropertyChanged(nameof(CanContinueToReviewScope));
@@ -1018,31 +1323,6 @@ public sealed partial class MainViewModel
         });
     }
 
-    private void AddSelectedTargetToLocalRecents()
-    {
-        if (_selectedNetDocumentsTarget is null)
-        {
-            return;
-        }
-
-        var key = NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
-        _localRecentTargets = _localRecentTargets
-            .Where(item => !string.Equals(NdTargetBrowserLogic.BuildTargetKey(item.Selection), key, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        _localRecentTargets.Insert(0, new NdTargetRecentItem
-        {
-            Selection = CloneSelection(_selectedNetDocumentsTarget),
-            LastUsedUtc = DateTime.UtcNow,
-            Source = NdTargetSource.Local
-        });
-
-        if (_localRecentTargets.Count > 30)
-        {
-            _localRecentTargets = _localRecentTargets.Take(30).ToList();
-        }
-    }
-
     private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) || string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId))
@@ -1128,7 +1408,7 @@ public sealed partial class MainViewModel
 
     private void RestoreTargetSelectionFromSettings(NetDocumentsConnectionSettings settings)
     {
-        _localRecentTargets = NdTargetBrowserLogic.DeserializeRecentTargets(settings.RecentTargetsJson).ToList();
+        _localRecentTargets = new List<NdTargetRecentItem>();
         _localFavoriteTargets = NdTargetBrowserLogic.DeserializeFavoriteTargets(settings.FavoriteTargetsJson).ToList();
         WorkspaceSearchText = settings.LastWorkspaceQuery ?? string.Empty;
         _workspaceLookupContext = WorkspaceLookupContext.FromJson(settings.WorkspaceLookupContextJson);
@@ -1181,7 +1461,7 @@ public sealed partial class MainViewModel
 
     private void SaveTargetSelectionToSettings(NetDocumentsConnectionSettings settings)
     {
-        settings.RecentTargetsJson = NdTargetBrowserLogic.SerializeRecentTargets(_localRecentTargets);
+        settings.RecentTargetsJson = string.Empty;
         settings.FavoriteTargetsJson = NdTargetBrowserLogic.SerializeFavoriteTargets(_localFavoriteTargets);
         settings.LastWorkspaceQuery = WorkspaceSearchText ?? string.Empty;
         settings.WorkspaceLookupContextJson = _workspaceLookupContext?.ToJson() ?? string.Empty;

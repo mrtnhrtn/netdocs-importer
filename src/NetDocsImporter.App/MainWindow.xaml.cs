@@ -261,6 +261,26 @@ public partial class MainWindow : Window
         await _viewModel.SearchWorkspaceTargetsAsync();
     }
 
+    public void OnTargetBrowserTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TabControl tabControl ||
+            tabControl.SelectedItem is not TabItem selectedTab)
+        {
+            return;
+        }
+
+        var tab = selectedTab.Header?.ToString() switch
+        {
+            "Recent" => NdTargetBrowserTab.Recent,
+            "Favorites" => NdTargetBrowserTab.Favorites,
+            "Go to Workspace" => NdTargetBrowserTab.GoToWorkspace,
+            "Browse Tree" => NdTargetBrowserTab.Browse,
+            _ => NdTargetBrowserTab.Recent
+        };
+
+        _viewModel.SelectedTargetBrowserTab = tab;
+    }
+
     public async void OnUseSelectedWorkspaceTarget(object sender, RoutedEventArgs e)
     {
         await _viewModel.UseSelectedWorkspaceSearchTargetAsync();

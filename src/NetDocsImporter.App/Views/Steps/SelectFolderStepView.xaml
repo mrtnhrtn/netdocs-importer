@@ -91,13 +91,17 @@
                             Style="{StaticResource PrimaryButton}" />
                 </StackPanel>
 
-                <TabControl Margin="0,4,0,8">
+                <TabControl Margin="0,4,0,8"
+                            SelectionChanged="OnTargetBrowserTabSelectionChanged">
                     <TabItem Header="Recent">
                         <StackPanel Margin="4">
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshRecentTargets" Style="{StaticResource SecondaryButton}" />
                                 <Button Content="Use Selected" Width="110" Click="OnSelectTargetFromRecent" Style="{StaticResource SecondaryButton}" />
                             </StackPanel>
+                            <TextBlock Text="Loading recent workspaces..."
+                                       Foreground="#555555"
+                                       Margin="0,0,0,6"
+                                       Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             <ListView ItemsSource="{Binding RecentTargets}"
                                       SelectedItem="{Binding SelectedRecentTarget}"
                                       Height="150">
@@ -116,10 +120,13 @@
                     <TabItem Header="Favorites">
                         <StackPanel Margin="4">
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshFavoriteTargets" Style="{StaticResource SecondaryButton}" />
                                 <Button Content="Use Selected" Width="110" Margin="0,0,6,0" Click="OnSelectTargetFromFavorite" Style="{StaticResource SecondaryButton}" />
                                 <Button Content="Toggle Favorite" Width="120" Click="OnToggleFavoriteForSelectedTarget" Style="{StaticResource SecondaryButton}" />
                             </StackPanel>
+                            <TextBlock Text="Loading favorite workspaces..."
+                                       Foreground="#555555"
+                                       Margin="0,0,0,6"
+                                       Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             <ListView ItemsSource="{Binding FavoriteTargets}"
                                       SelectedItem="{Binding SelectedFavoriteTarget}"
                                       Height="150">

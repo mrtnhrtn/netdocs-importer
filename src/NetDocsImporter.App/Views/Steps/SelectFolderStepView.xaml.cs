@@ -98,6 +98,14 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnTargetBrowserTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnTargetBrowserTabSelectionChanged(sender, e);
+        }
+    }
+
     public void OnUseSelectedWorkspaceTarget(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

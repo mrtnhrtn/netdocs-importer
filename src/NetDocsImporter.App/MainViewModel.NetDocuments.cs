@@ -25,6 +25,7 @@ public sealed partial class MainViewModel
     private string _selectedNetDocumentsCabinetId = string.Empty;
     private string _selectedNetDocumentsCabinetName = string.Empty;
     private string _currentJobRepositoryId = string.Empty;
+    private string _netDocumentsCurrentUserId = string.Empty;
     private NetDocumentsSyncedAttributeView? _selectedSyncedAttribute;
 
     public ObservableCollection<NetDocumentsRepositoryView> NetDocumentsRepositories => _netDocumentsRepositories;
@@ -79,6 +80,8 @@ public sealed partial class MainViewModel
             _workspaceSearchTargets.Clear();
             SelectedWorkspaceSearchTarget = null;
             WorkspaceLookupStatus = string.Empty;
+            _hasLoadedRecentTargets = false;
+            _hasLoadedFavoriteTargets = false;
             FilterCabinetsByRepository();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
@@ -105,6 +108,8 @@ public sealed partial class MainViewModel
             _workspaceSearchTargets.Clear();
             SelectedWorkspaceSearchTarget = null;
             WorkspaceLookupStatus = string.Empty;
+            _hasLoadedRecentTargets = false;
+            _hasLoadedFavoriteTargets = false;
             var cabinet = _netDocumentsCabinets.FirstOrDefault(c => c.CabinetId == value);
             _selectedNetDocumentsCabinetName = cabinet?.CabinetName ?? string.Empty;
             OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
@@ -214,6 +219,7 @@ public sealed partial class MainViewModel
 
             await auth.SignInInteractiveAsync(BuildAuthContext());
             var user = await sync.GetCurrentUserAsync();
+            _netDocumentsCurrentUserId = string.IsNullOrWhiteSpace(user.UserId) ? string.Empty : user.UserId;
             NetDocumentsConnectedUser = string.IsNullOrWhiteSpace(user.DisplayName)
                 ? user.UserId
                 : $"{user.DisplayName} ({user.Email})";
@@ -247,6 +253,7 @@ public sealed partial class MainViewModel
             IsNetDocumentsConnected = true;
 
             var user = await RequireSyncService().GetCurrentUserAsync();
+            _netDocumentsCurrentUserId = string.IsNullOrWhiteSpace(user.UserId) ? string.Empty : user.UserId;
             NetDocumentsConnectedUser = string.IsNullOrWhiteSpace(user.DisplayName)
                 ? user.UserId
                 : $"{user.DisplayName} ({user.Email})";
@@ -254,6 +261,7 @@ public sealed partial class MainViewModel
         catch
         {
             IsNetDocumentsConnected = false;
+            _netDocumentsCurrentUserId = string.Empty;
         }
     }
 
