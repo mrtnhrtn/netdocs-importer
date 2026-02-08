@@ -2,6 +2,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -35,7 +36,8 @@ internal sealed class ProvisionedNetDocumentsOAuthClientConfigProvider : INetDoc
                 payload,
                 new JsonSerializerOptions
                 {
-                    PropertyNameCaseInsensitive = true
+                    PropertyNameCaseInsensitive = true,
+                    Converters = { new JsonStringEnumConverter() }
                 });
             return profiles ?? new Dictionary<string, NetDocumentsOAuthClientConfig>(StringComparer.OrdinalIgnoreCase);
         }

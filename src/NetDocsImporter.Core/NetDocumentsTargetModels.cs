@@ -131,9 +131,23 @@ public sealed class WorkspaceLookupContext
 
     public string CabinetId { get; set; } = string.Empty;
 
+    public bool WorkspaceEnabled { get; set; } = true;
+
+    public int WorkspaceAttrNum { get; set; }
+
+    public string WorkspaceAttrName { get; set; } = string.Empty;
+
+    public bool IsParentChild { get; set; } = true;
+
     public int ParentAttrNum { get; set; }
 
     public int ChildAttrNum { get; set; }
+
+    public string ParentAttrName { get; set; } = string.Empty;
+
+    public string ChildAttrName { get; set; } = string.Empty;
+
+    public bool? AllowFileInWorkspaces { get; set; }
 
     public string ParentKey { get; set; } = string.Empty;
 

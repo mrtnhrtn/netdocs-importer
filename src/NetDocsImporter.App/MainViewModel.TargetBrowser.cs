@@ -809,88 +809,181 @@ public sealed partial class MainViewModel
         _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(cancellationToken);
         if (_workspaceLookupContext is not null)
         {
-            Trace.WriteLine($"ND-SEARCH lookup-context parentAttr={_workspaceLookupContext.ParentAttrNum}, childAttr={_workspaceLookupContext.ChildAttrNum}");
-            var parentCandidates = await sync.SearchLookupValuesAsync(
-                _workspaceLookupContext.RepositoryId,
-                _workspaceLookupContext.ParentAttrNum,
-                query,
-                top: 20,
-                extendedFiltering: true,
-                cancellationToken: cancellationToken);
-            if (parentCandidates.Count == 0)
-            {
-                // Fallback to recent parents when text doesn't match parent lookup directly.
-                parentCandidates = await sync.SearchLookupValuesAsync(
-                    _workspaceLookupContext.RepositoryId,
-                    _workspaceLookupContext.ParentAttrNum,
-                    string.Empty,
-                    top: 8,
-                    extendedFiltering: true,
-                    cancellationToken: cancellationToken);
-            }
-            Trace.WriteLine($"ND-SEARCH parent-lookup-candidates={parentCandidates.Count}");
+            Trace.WriteLine(
+                $"ND-SEARCH lookup-context workspaceAttr={_workspaceLookupContext.WorkspaceAttrNum}('{_workspaceLookupContext.WorkspaceAttrName}') parentAttr={_workspaceLookupContext.ParentAttrNum}('{_workspaceLookupContext.ParentAttrName}') childAttr={_workspaceLookupContext.ChildAttrNum}('{_workspaceLookupContext.ChildAttrName}') parentChild={_workspaceLookupContext.IsParentChild}.");
 
             var resolveAttempts = 0;
-            foreach (var parent in parentCandidates.Take(WorkspaceSearchMaxParentCandidates))
+            if (_workspaceLookupContext.IsParentChild && _workspaceLookupContext.ChildAttrNum > 0)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var children = await sync.GetChildLookupValuesAsync(
+                var workspaceCandidates = await sync.SearchLookupValuesAsync(
                     _workspaceLookupContext.RepositoryId,
                     _workspaceLookupContext.ChildAttrNum,
-                    parent.Key,
                     query,
-                    top: 25,
-                    includeUnfilteredFallback: true,
+                    top: 30,
+                    extendedFiltering: true,
                     cancellationToken: cancellationToken);
-                var filteredChildren = RankLookupCandidatesByTerm(children, query);
-                if (filteredChildren.Count == 0)
-                {
-                    var recentChildren = await sync.GetRecentChildLookupValuesAsync(
-                        _workspaceLookupContext.RepositoryId,
-                        _workspaceLookupContext.ChildAttrNum,
-                        parent.Key,
-                        top: 12,
-                        cancellationToken: cancellationToken);
-                    filteredChildren = RankLookupCandidatesByTerm(recentChildren, query);
-                    if (filteredChildren.Count == 0)
-                    {
-                        filteredChildren = recentChildren.ToList();
-                    }
-                }
-                Trace.WriteLine($"ND-SEARCH parent='{parent.Key}' child-candidates={children.Count} ranked={filteredChildren.Count}.");
-
-                var normalizedQuery = (query ?? string.Empty).Trim();
-                var hasExactKey = !string.IsNullOrWhiteSpace(normalizedQuery) &&
-                                  filteredChildren.Any(c => string.Equals(c.Key, normalizedQuery, StringComparison.OrdinalIgnoreCase));
-                var perParentLimit = hasExactKey ? 1 : WorkspaceSearchMaxChildCandidatesPerParent;
-                var childBatch = filteredChildren.Take(perParentLimit).ToList();
-                resolveAttempts += childBatch.Count;
-                if (resolveAttempts > WorkspaceSearchMaxResolveAttempts)
-                {
-                    break;
-                }
-
-                var resolveTasks = childBatch
-                    .Select(child => ResolveWorkspaceCandidateAsync(parent, child, cancellationToken))
+                var rankedWorkspaceCandidates = RankLookupCandidatesByTerm(workspaceCandidates, query)
+                    .Where(c => !string.IsNullOrWhiteSpace(c.ParentKey))
                     .ToList();
-                var batchResolved = await Task.WhenAll(resolveTasks);
-                foreach (var resolved in batchResolved)
-                {
-                    if (resolved is null)
-                    {
-                        continue;
-                    }
+                Trace.WriteLine($"ND-SEARCH workspace-attribute-candidates={workspaceCandidates.Count} ranked={rankedWorkspaceCandidates.Count}.");
 
-                    if (seen.Add(resolved.Selection.Id))
+                foreach (var child in rankedWorkspaceCandidates.Take(WorkspaceSearchMaxResolveAttempts))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var parent = new NdLookupValueItem
+                    {
+                        Key = child.ParentKey,
+                        Description = child.ParentDescription
+                    };
+
+                    var resolved = await ResolveWorkspaceCandidateAsync(parent, child, cancellationToken);
+                    resolveAttempts++;
+                    if (resolved is not null && seen.Add(resolved.Selection.Id))
                     {
                         results.Add(resolved);
                         Trace.WriteLine($"ND-SEARCH resolved workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
                     }
+
+                    if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                    {
+                        break;
+                    }
                 }
 
-                if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                if (resolveAttempts == 0 && _workspaceLookupContext.ParentAttrNum > 0)
                 {
-                    break;
+                    var parentCandidates = await sync.SearchLookupValuesAsync(
+                        _workspaceLookupContext.RepositoryId,
+                        _workspaceLookupContext.ParentAttrNum,
+                        query,
+                        top: 12,
+                        extendedFiltering: true,
+                        cancellationToken: cancellationToken);
+                    var recentParents = await sync.SearchLookupValuesAsync(
+                        _workspaceLookupContext.RepositoryId,
+                        _workspaceLookupContext.ParentAttrNum,
+                        string.Empty,
+                        top: 10,
+                        extendedFiltering: true,
+                        cancellationToken: cancellationToken);
+                    if (recentParents.Count > 0)
+                    {
+                        var mergedParents = new Dictionary<string, NdLookupValueItem>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var candidate in parentCandidates)
+                        {
+                            if (!string.IsNullOrWhiteSpace(candidate.Key))
+                            {
+                                mergedParents[candidate.Key] = candidate;
+                            }
+                        }
+
+                        foreach (var recent in recentParents)
+                        {
+                            if (!string.IsNullOrWhiteSpace(recent.Key) && !mergedParents.ContainsKey(recent.Key))
+                            {
+                                mergedParents[recent.Key] = recent;
+                            }
+                        }
+
+                        parentCandidates = mergedParents.Values.ToList();
+                    }
+
+                    var rankedParents = RankLookupCandidatesByTerm(parentCandidates, query);
+                    Trace.WriteLine($"ND-SEARCH parent-fallback-candidates={parentCandidates.Count} ranked={rankedParents.Count}.");
+
+                    foreach (var parent in rankedParents.Take(WorkspaceSearchMaxParentCandidates))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var children = await sync.GetChildLookupValuesAsync(
+                            _workspaceLookupContext.RepositoryId,
+                            _workspaceLookupContext.ChildAttrNum,
+                            parent.Key,
+                            query,
+                            top: 25,
+                            includeUnfilteredFallback: false,
+                            cancellationToken: cancellationToken);
+                        var rankedChildren = RankLookupCandidatesByTerm(children, query);
+                        foreach (var child in rankedChildren.Take(WorkspaceSearchMaxChildCandidatesPerParent))
+                        {
+                            var resolved = await ResolveWorkspaceCandidateAsync(parent, child, cancellationToken);
+                            resolveAttempts++;
+                            if (resolved is not null && seen.Add(resolved.Selection.Id))
+                            {
+                                results.Add(resolved);
+                                Trace.WriteLine($"ND-SEARCH resolved workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}' via parent fallback.");
+                            }
+
+                            if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                            {
+                                break;
+                            }
+                        }
+
+                        if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if (resolveAttempts == 0 && _workspaceLookupContext.WorkspaceAttrNum > 0)
+                {
+                    var parentOnlyCandidates = await sync.SearchLookupValuesAsync(
+                        _workspaceLookupContext.RepositoryId,
+                        _workspaceLookupContext.WorkspaceAttrNum,
+                        query,
+                        top: 20,
+                        extendedFiltering: true,
+                        cancellationToken: cancellationToken);
+                    var rankedParentOnly = RankLookupCandidatesByTerm(parentOnlyCandidates, query);
+                    Trace.WriteLine($"ND-SEARCH workspace-attr-parent-only-fallback candidates={parentOnlyCandidates.Count} ranked={rankedParentOnly.Count}.");
+
+                    foreach (var parent in rankedParentOnly.Take(WorkspaceSearchMaxResolveAttempts))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var resolved = await ResolveWorkspaceCandidateAsync(parent, parent, cancellationToken);
+                        resolveAttempts++;
+                        if (resolved is not null && seen.Add(resolved.Selection.Id))
+                        {
+                            results.Add(resolved);
+                            Trace.WriteLine($"ND-SEARCH resolved parent-only fallback workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
+                        }
+
+                        if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!_workspaceLookupContext.IsParentChild && _workspaceLookupContext.ParentAttrNum > 0)
+            {
+                var parentCandidates = await sync.SearchLookupValuesAsync(
+                    _workspaceLookupContext.RepositoryId,
+                    _workspaceLookupContext.ParentAttrNum,
+                    query,
+                    top: 20,
+                    extendedFiltering: true,
+                    cancellationToken: cancellationToken);
+                var rankedParents = RankLookupCandidatesByTerm(parentCandidates, query);
+                Trace.WriteLine($"ND-SEARCH parent-only-candidates={parentCandidates.Count} ranked={rankedParents.Count}");
+
+                foreach (var parent in rankedParents.Take(WorkspaceSearchMaxResolveAttempts))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var resolved = await ResolveWorkspaceCandidateAsync(parent, parent, cancellationToken);
+                    resolveAttempts++;
+                    if (resolved is not null && seen.Add(resolved.Selection.Id))
+                    {
+                        results.Add(resolved);
+                        Trace.WriteLine($"ND-SEARCH resolved parent-only workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
+                    }
+
+                    if (resolveAttempts >= WorkspaceSearchMaxResolveAttempts || results.Count >= WorkspaceSearchMaxResults)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -901,9 +994,35 @@ public sealed partial class MainViewModel
 
         Trace.WriteLine($"ND-SEARCH final-result-count={results.Count}");
 
-        return results
+        var strictResults = FilterWorkspaceResultsByQuery(results, query);
+        Trace.WriteLine($"ND-SEARCH strict-filter query='{query}' kept={strictResults.Count} dropped={results.Count - strictResults.Count}.");
+
+        return strictResults
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .Take(WorkspaceSearchMaxResults)
+            .ToList();
+    }
+
+    private static List<NetDocumentsWorkspaceTargetResultView> FilterWorkspaceResultsByQuery(
+        List<NetDocumentsWorkspaceTargetResultView> results,
+        string? query)
+    {
+        var normalized = (query ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return results;
+        }
+
+        return results
+            .Where(item =>
+                (!string.IsNullOrWhiteSpace(item.ParentKey) &&
+                 item.ParentKey.Contains(normalized, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(item.ParentDescription) &&
+                 item.ParentDescription.Contains(normalized, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(item.ChildKey) &&
+                 item.ChildKey.Contains(normalized, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(item.ChildDescription) &&
+                 item.ChildDescription.Contains(normalized, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
 
@@ -1375,62 +1494,236 @@ public sealed partial class MainViewModel
 
         await _jobStore.InitializeAsync(cancellationToken);
         var attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
-        var lookups = attributes.Where(a => a.IsLookup).ToList();
-        if (lookups.Count == 0)
+        if (attributes.Count == 0)
         {
+            try
+            {
+                Trace.WriteLine(
+                    $"ND-SEARCH lookup-context bootstrap: syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                await RequireSyncService().SyncCabinetAttributesAsync(
+                    SelectedNetDocumentsCabinetId,
+                    SelectedNetDocumentsRepositoryId,
+                    cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                Trace.WriteLine($"ND-SEARCH lookup-context bootstrap: synced attributes count={attributes.Count}.");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"ND-SEARCH lookup-context bootstrap failed: {ex.Message}");
+            }
+        }
+        var selectedCabinet = _netDocumentsCabinets
+            .FirstOrDefault(c => string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+
+        var workspaceAttrNum = selectedCabinet?.WorkspaceAttributeNum;
+        var workspaceAttrName = selectedCabinet?.WorkspacePluralName ?? string.Empty;
+        var allowFileInWorkspaces = selectedCabinet?.AllowFileInWorkspaces;
+
+        var lookupAttributes = attributes
+            .Where(a => a.IsLookup)
+            .ToList();
+        if (lookupAttributes.Count == 0 && attributes.Count > 0)
+        {
+            try
+            {
+                Trace.WriteLine(
+                    $"ND-SEARCH lookup-context refresh: no lookup flags found; re-syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                await RequireSyncService().SyncCabinetAttributesAsync(
+                    SelectedNetDocumentsCabinetId,
+                    SelectedNetDocumentsRepositoryId,
+                    cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                lookupAttributes = attributes.Where(a => a.IsLookup).ToList();
+                Trace.WriteLine($"ND-SEARCH lookup-context refresh: lookup attributes after re-sync={lookupAttributes.Count}.");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"ND-SEARCH lookup-context refresh failed: {ex.Message}");
+            }
+        }
+
+        if ((!workspaceAttrNum.HasValue || workspaceAttrNum.Value <= 0) && attributes.Count > 0)
+        {
+            var relationshipChild = attributes
+                .Where(a => a.ParentAttributeNum.HasValue && a.ParentAttributeNum.Value > 0)
+                .OrderByDescending(a => NameContains(a.Name, "matter"))
+                .ThenBy(a => a.AttributeNum)
+                .FirstOrDefault();
+            if (relationshipChild is not null)
+            {
+                workspaceAttrNum = relationshipChild.AttributeNum;
+                if (string.IsNullOrWhiteSpace(workspaceAttrName))
+                {
+                    workspaceAttrName = relationshipChild.Name;
+                }
+
+                Trace.WriteLine(
+                    $"ND-SEARCH lookup-context inferred workspace attribute from parent-child metadata childAttr={relationshipChild.AttributeNum} parentAttr={relationshipChild.ParentAttributeNum}.");
+            }
+        }
+        if ((!workspaceAttrNum.HasValue || workspaceAttrNum.Value <= 0) && attributes.Count > 0)
+        {
+            var namedWorkspace = attributes
+                .Select(a => new
+                {
+                    Attribute = a,
+                    Score = NameContains(a.Name, "matter") * 6 +
+                            NameContains(a.Name, "workspace") * 4 +
+                            NameContains(a.Name, "project") * 2
+                })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Attribute.AttributeNum)
+                .Select(x => x.Attribute)
+                .FirstOrDefault();
+            if (namedWorkspace is not null)
+            {
+                workspaceAttrNum = namedWorkspace.AttributeNum;
+                if (string.IsNullOrWhiteSpace(workspaceAttrName))
+                {
+                    workspaceAttrName = namedWorkspace.Name;
+                }
+
+                Trace.WriteLine(
+                    $"ND-SEARCH lookup-context inferred workspace attribute by name childAttr={namedWorkspace.AttributeNum} name='{namedWorkspace.Name}'.");
+            }
+        }
+
+        if (lookupAttributes.Count == 0)
+        {
+            if (!workspaceAttrNum.HasValue || workspaceAttrNum.Value <= 0)
+            {
+                Trace.WriteLine("ND-SEARCH lookup-context unavailable: synced metadata did not identify workspace attribute.");
+                return null;
+            }
+
+            var inferredParentAttrNum = workspaceAttrNum.Value > 1 ? workspaceAttrNum.Value - 1 : 0;
+            var inferredIsParentChild = inferredParentAttrNum > 0;
+            var inferredParentName = inferredIsParentChild
+                ? attributes
+                    .Select(a => new
+                    {
+                        Attribute = a,
+                        Score = NameContains(a.Name, "client") * 6 +
+                                NameContains(a.Name, "customer") * 4 +
+                                NameContains(a.Name, "parent") * 2
+                    })
+                    .OrderByDescending(x => x.Score)
+                    .ThenBy(x => Math.Abs(x.Attribute.AttributeNum - workspaceAttrNum.Value))
+                    .ThenBy(x => x.Attribute.AttributeNum)
+                    .Select(x => x.Attribute.Name)
+                    .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "Parent"
+                : workspaceAttrName;
+            var inferredChildName = inferredIsParentChild ? workspaceAttrName : string.Empty;
+
+            Trace.WriteLine(
+                $"ND-SEARCH lookup-context fallback from cabinet metadata workspaceAttr={workspaceAttrNum.Value} parentAttr={inferredParentAttrNum} parentChild={inferredIsParentChild}.");
+
             return new WorkspaceLookupContext
             {
                 RepositoryId = SelectedNetDocumentsRepositoryId,
                 CabinetId = SelectedNetDocumentsCabinetId,
-                ParentAttrNum = 2,
-                ChildAttrNum = 3,
+                WorkspaceEnabled = true,
+                WorkspaceAttrNum = workspaceAttrNum.Value,
+                WorkspaceAttrName = workspaceAttrName,
+                IsParentChild = inferredIsParentChild,
+                ParentAttrNum = inferredIsParentChild ? inferredParentAttrNum : workspaceAttrNum.Value,
+                ChildAttrNum = inferredIsParentChild ? workspaceAttrNum.Value : 0,
+                ParentAttrName = inferredParentName,
+                ChildAttrName = inferredChildName,
+                AllowFileInWorkspaces = allowFileInWorkspaces,
                 ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
                 ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
             };
         }
-
-        var parentCandidate = lookups
-            .Where(a => !a.ParentAttributeNum.HasValue)
-            .OrderByDescending(a => NameContains(a.Name, "client"))
-            .ThenBy(a => a.AttributeNum)
-            .FirstOrDefault();
-        if (parentCandidate is null)
+        if (!workspaceAttrNum.HasValue || workspaceAttrNum.Value <= 0)
         {
-            return new WorkspaceLookupContext
+            var fallbackWorkspace = lookupAttributes
+                .OrderByDescending(a => NameContains(a.Name, "workspace"))
+                .ThenByDescending(a => NameContains(a.Name, "matter"))
+                .ThenBy(a => a.AttributeNum)
+                .FirstOrDefault();
+            workspaceAttrNum = fallbackWorkspace?.AttributeNum;
+            if (string.IsNullOrWhiteSpace(workspaceAttrName))
             {
-                RepositoryId = SelectedNetDocumentsRepositoryId,
-                CabinetId = SelectedNetDocumentsCabinetId,
-                ParentAttrNum = 2,
-                ChildAttrNum = 3,
-                ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
-                ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
-            };
+                workspaceAttrName = fallbackWorkspace?.Name ?? string.Empty;
+            }
         }
 
-        var childCandidate = lookups
-            .Where(a => a.ParentAttributeNum == parentCandidate.AttributeNum)
-            .OrderByDescending(a => NameContains(a.Name, "matter"))
-            .ThenBy(a => a.AttributeNum)
-            .FirstOrDefault();
-        if (childCandidate is null)
+        if (!workspaceAttrNum.HasValue || workspaceAttrNum.Value <= 0)
         {
-            return new WorkspaceLookupContext
+            Trace.WriteLine("ND-SEARCH lookup-context unavailable: workspace attribute number not detected.");
+            return null;
+        }
+
+        var workspaceAttribute = lookupAttributes
+            .FirstOrDefault(a => a.AttributeNum == workspaceAttrNum.Value);
+
+        var parentAttrNum = workspaceAttribute?.ParentAttributeNum ?? 0;
+        if (parentAttrNum <= 0)
+        {
+            var namedParent = attributes
+                .Select(a => new
+                {
+                    Attribute = a,
+                    Score = NameContains(a.Name, "client") * 6 +
+                            NameContains(a.Name, "customer") * 4 +
+                            NameContains(a.Name, "parent") * 2
+                })
+                .Where(x => x.Attribute.AttributeNum != workspaceAttrNum.Value && x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => Math.Abs(x.Attribute.AttributeNum - workspaceAttrNum.Value))
+                .ThenBy(x => x.Attribute.AttributeNum)
+                .Select(x => x.Attribute)
+                .FirstOrDefault();
+            if (namedParent is not null)
             {
-                RepositoryId = SelectedNetDocumentsRepositoryId,
-                CabinetId = SelectedNetDocumentsCabinetId,
-                ParentAttrNum = 2,
-                ChildAttrNum = 3,
-                ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
-                ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
-            };
+                parentAttrNum = namedParent.AttributeNum;
+            }
+        }
+
+        if (parentAttrNum <= 0 && workspaceAttrNum.Value > 1)
+        {
+            parentAttrNum = workspaceAttrNum.Value - 1;
+        }
+        var childAttrNum = workspaceAttrNum.Value;
+        var isParentChild = parentAttrNum > 0;
+
+        var parentAttrName = string.Empty;
+        var childAttrName = workspaceAttribute?.Name ?? workspaceAttrName;
+
+        if (isParentChild)
+        {
+            parentAttrName = attributes
+                .FirstOrDefault(a => a.AttributeNum == parentAttrNum)?.Name ?? string.Empty;
+        }
+        else
+        {
+            // Parent-only cabinet workspace structure.
+            parentAttrNum = workspaceAttrNum.Value;
+            childAttrNum = 0;
+            parentAttrName = workspaceAttribute?.Name ?? workspaceAttrName;
+            childAttrName = string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceAttrName))
+        {
+            workspaceAttrName = isParentChild ? childAttrName : parentAttrName;
         }
 
         return new WorkspaceLookupContext
         {
             RepositoryId = SelectedNetDocumentsRepositoryId,
             CabinetId = SelectedNetDocumentsCabinetId,
-            ParentAttrNum = parentCandidate.AttributeNum,
-            ChildAttrNum = childCandidate.AttributeNum,
+            WorkspaceEnabled = true,
+            WorkspaceAttrNum = workspaceAttrNum.Value,
+            WorkspaceAttrName = workspaceAttrName,
+            IsParentChild = isParentChild,
+            ParentAttrNum = parentAttrNum,
+            ChildAttrNum = childAttrNum,
+            ParentAttrName = parentAttrName,
+            ChildAttrName = childAttrName,
+            AllowFileInWorkspaces = allowFileInWorkspaces,
             ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
             ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
         };

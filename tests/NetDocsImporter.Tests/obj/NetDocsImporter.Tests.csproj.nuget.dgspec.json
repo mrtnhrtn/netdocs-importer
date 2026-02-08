@@ -1,7 +1,7 @@
 {
   "format": 1,
   "restore": {
-    "c:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj": {}
+    "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj": {}
   },
   "projects": {
     "c:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
@@ -686,14 +686,14 @@
         }
       }
     },
-    "c:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj": {
+    "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "c:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
+        "projectUniqueName": "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
         "projectName": "NetDocsImporter.Tests",
-        "projectPath": "c:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
+        "projectPath": "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
         "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-        "outputPath": "c:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\obj\\",
+        "outputPath": "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"

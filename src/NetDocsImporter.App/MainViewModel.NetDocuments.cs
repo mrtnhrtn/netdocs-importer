@@ -481,7 +481,14 @@ public sealed partial class MainViewModel
                     string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) ||
                     string.Equals(c.RepositoryId, SelectedNetDocumentsRepositoryId, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(c => c.CabinetName, StringComparer.OrdinalIgnoreCase)
-                .Select(c => new NetDocumentsCabinetView(c.CabinetId, c.RepositoryId, c.CabinetName, c.Description))
+                .Select(c => new NetDocumentsCabinetView(
+                    c.CabinetId,
+                    c.RepositoryId,
+                    c.CabinetName,
+                    c.Description,
+                    c.WorkspaceAttributeNum,
+                    c.WorkspacePluralName,
+                    c.AllowFileInWorkspaces))
                 .ToList();
 
             UpdateOnUi(() =>
@@ -665,12 +672,22 @@ public sealed class NetDocumentsRepositoryView
 
 public sealed class NetDocumentsCabinetView
 {
-    public NetDocumentsCabinetView(string cabinetId, string repositoryId, string cabinetName, string description)
+    public NetDocumentsCabinetView(
+        string cabinetId,
+        string repositoryId,
+        string cabinetName,
+        string description,
+        int? workspaceAttributeNum,
+        string workspacePluralName,
+        bool? allowFileInWorkspaces)
     {
         CabinetId = cabinetId;
         RepositoryId = repositoryId;
         CabinetName = cabinetName;
         Description = description;
+        WorkspaceAttributeNum = workspaceAttributeNum;
+        WorkspacePluralName = workspacePluralName;
+        AllowFileInWorkspaces = allowFileInWorkspaces;
     }
 
     public string CabinetId { get; }
@@ -680,6 +697,12 @@ public sealed class NetDocumentsCabinetView
     public string CabinetName { get; }
 
     public string Description { get; }
+
+    public int? WorkspaceAttributeNum { get; }
+
+    public string WorkspacePluralName { get; }
+
+    public bool? AllowFileInWorkspaces { get; }
 }
 
 public sealed class NetDocumentsSyncedAttributeView

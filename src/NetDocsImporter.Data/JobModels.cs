@@ -88,6 +88,9 @@ public sealed record NetDocumentsCabinetRecord(
     string RepositoryName,
     string CabinetName,
     string Description,
+    int? WorkspaceAttributeNum,
+    string WorkspacePluralName,
+    bool? AllowFileInWorkspaces,
     string Region,
     DateTime SyncedUtc);
 

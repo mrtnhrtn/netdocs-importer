@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using NetDocsImporter.Data;
 
@@ -71,13 +72,71 @@ public sealed partial class NetDocumentsSyncService
             var name = ReadString(cabinetElement, "name", "cabinetName", "description");
             var repositoryId = ReadString(cabinetElement, "repositoryId", "repoId");
             var repositoryName = ReadString(cabinetElement, "repositoryName", "repoName");
+            var workspaceAttributeNum = ReadNullableInt(
+                cabinetElement,
+                "workspaceAttributeId",
+                "workspaceAttributeNum",
+                "workspaceAttributeNumber",
+                "workspaceAttribute");
+            var workspacePluralName = ReadString(
+                cabinetElement,
+                "workspacePluralName",
+                "workspaceAttributePluralName",
+                "workspacePlural");
+            if (!workspaceAttributeNum.HasValue || string.IsNullOrWhiteSpace(workspacePluralName))
+            {
+                TryReadWorkspaceAttributeFromNode(cabinetElement, ref workspaceAttributeNum, ref workspacePluralName);
+            }
+            bool? allowFileInWorkspaces = null;
 
-            if (string.IsNullOrWhiteSpace(repositoryId))
+            if (string.IsNullOrWhiteSpace(repositoryId) ||
+                !workspaceAttributeNum.HasValue ||
+                string.IsNullOrWhiteSpace(workspacePluralName))
             {
                 using var cabinetInfo = await _apiClient.GetJsonAsync($"/v1/Cabinet/{Uri.EscapeDataString(id)}/info", cancellationToken);
                 var infoRoot = UnwrapSingle(cabinetInfo.RootElement);
-                repositoryId = ReadString(infoRoot, "repositoryId", "repoId");
-                repositoryName = ReadString(infoRoot, "repositoryName", "repoName");
+                if (string.IsNullOrWhiteSpace(repositoryId))
+                {
+                    repositoryId = ReadString(infoRoot, "repositoryId", "repoId");
+                }
+
+                if (string.IsNullOrWhiteSpace(repositoryName))
+                {
+                    repositoryName = ReadString(infoRoot, "repositoryName", "repoName");
+                }
+
+                workspaceAttributeNum ??= ReadNullableInt(
+                    infoRoot,
+                    "workspaceAttributeId",
+                    "workspaceAttributeNum",
+                    "workspaceAttributeNumber",
+                    "workspaceAttribute");
+                if (string.IsNullOrWhiteSpace(workspacePluralName))
+                {
+                    workspacePluralName = ReadString(
+                        infoRoot,
+                        "workspacePluralName",
+                        "workspaceAttributePluralName",
+                        "workspacePlural");
+                }
+                if (!workspaceAttributeNum.HasValue || string.IsNullOrWhiteSpace(workspacePluralName))
+                {
+                    TryReadWorkspaceAttributeFromNode(infoRoot, ref workspaceAttributeNum, ref workspacePluralName);
+                }
+            }
+
+            try
+            {
+                using var cabinetSettings = await _apiClient.GetJsonAsync($"/v1/Cabinet/{Uri.EscapeDataString(id)}/settings", cancellationToken);
+                var settingsRoot = UnwrapSingle(cabinetSettings.RootElement);
+                if (TryGetPropertyIgnoreCase(settingsRoot, "allowFileInWorkspaces", out var allowNode))
+                {
+                    allowFileInWorkspaces = ReadBool(settingsRoot, "allowFileInWorkspaces");
+                }
+            }
+            catch
+            {
+                // Settings endpoint can be unavailable in some tenants. Keep syncing cabinets.
             }
 
             cabinets.Add(new NetDocumentsCabinetRecord(
@@ -86,8 +145,14 @@ public sealed partial class NetDocumentsSyncService
                 repositoryName,
                 name,
                 ReadString(cabinetElement, "description"),
+                workspaceAttributeNum,
+                workspacePluralName,
+                allowFileInWorkspaces,
                 region,
                 DateTime.UtcNow));
+
+            Trace.WriteLine(
+                $"ND-SYNC cabinet='{id}' repo='{repositoryId}' name='{name}' workspaceAttr='{(workspaceAttributeNum.HasValue ? workspaceAttributeNum.Value.ToString() : "<none>")}' workspacePlural='{workspacePluralName}' allowFileInWorkspaces='{(allowFileInWorkspaces.HasValue ? allowFileInWorkspaces.Value.ToString() : "<unknown>")}'.");
         }
 
         await _jobStore.InitializeAsync(cancellationToken);
@@ -112,11 +177,22 @@ public sealed partial class NetDocumentsSyncService
                 continue;
             }
 
-            var parentAttrNum = ReadNullableInt(element, "parentAttrNum", "parentAttributeNum", "parentNum");
-            var isLookup = ReadBool(element, "isLookup", "lookup", "hasLookup");
+            var parentAttrNum = ReadNullableInt(
+                element,
+                "parentAttrNum",
+                "parentAttributeNum",
+                "parentNum",
+                "parentAttributeId",
+                "parentAttr",
+                "parent");
             var isMultiValue = ReadBool(element, "isMultiValue", "multiValue", "multivalue");
             var isRequired = ReadBool(element, "isRequired", "required");
-            var dataType = ReadString(element, "dataType", "type");
+            var dataType = ReadString(element, "dataType", "type", "attributeType", "valueType");
+            var isLookup = ReadBool(element, "isLookup", "lookup", "hasLookup", "isPicklist", "picklist");
+            if (!isLookup)
+            {
+                isLookup = LooksLikeLookupAttribute(element, dataType, parentAttrNum);
+            }
             var attrId = ReadString(element, "id", "attributeId");
             var name = ReadString(element, "name", "description", "label");
 
@@ -319,6 +395,24 @@ public sealed partial class NetDocumentsSyncService
             {
                 return number;
             }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString() ?? string.Empty;
+                if (TryExtractFirstInteger(text, out number))
+                {
+                    return number;
+                }
+            }
+
+            if (value.ValueKind == JsonValueKind.Object)
+            {
+                number = ReadInt(value, "id", "attrNum", "attributeNum", "number", "value");
+                if (number > 0)
+                {
+                    return number;
+                }
+            }
         }
 
         return 0;
@@ -356,10 +450,24 @@ public sealed partial class NetDocumentsSyncService
 
             if (value.ValueKind == JsonValueKind.String)
             {
-                var text = value.GetString();
+                var text = (value.GetString() ?? string.Empty).Trim();
                 if (bool.TryParse(text, out var parsedBool))
                 {
                     return parsedBool;
+                }
+
+                if (string.Equals(text, "y", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(text, "yes", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(text, "t", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (string.Equals(text, "n", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(text, "no", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(text, "f", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
                 }
 
                 if (int.TryParse(text, out var parsedInt))
@@ -393,5 +501,134 @@ public sealed partial class NetDocumentsSyncService
 
         value = default;
         return false;
+    }
+
+    private static void TryReadWorkspaceAttributeFromNode(
+        JsonElement node,
+        ref int? workspaceAttributeNum,
+        ref string workspacePluralName)
+    {
+        foreach (var nestedName in new[] { "standardAttributes", "attributes", "cabinet", "info", "data", "value" })
+        {
+            if (TryGetPropertyIgnoreCase(node, nestedName, out var nestedNode) && nestedNode.ValueKind == JsonValueKind.Object)
+            {
+                TryReadWorkspaceAttributeFromNode(nestedNode, ref workspaceAttributeNum, ref workspacePluralName);
+            }
+        }
+
+        if (TryGetPropertyIgnoreCase(node, "workspaceAttribute", out var workspaceAttributeNode))
+        {
+            if (!workspaceAttributeNum.HasValue)
+            {
+                workspaceAttributeNum = ReadNullableInt(
+                    workspaceAttributeNode,
+                    "id",
+                    "attrNum",
+                    "attributeNum",
+                    "workspaceAttributeId",
+                    "number");
+            }
+
+            if (string.IsNullOrWhiteSpace(workspacePluralName))
+            {
+                workspacePluralName = ReadString(
+                    workspaceAttributeNode,
+                    "pluralName",
+                    "workspacePluralName",
+                    "name",
+                    "description",
+                    "label");
+            }
+        }
+
+        if (TryGetPropertyIgnoreCase(node, "workspace", out var workspaceNode))
+        {
+            if (!workspaceAttributeNum.HasValue)
+            {
+                workspaceAttributeNum = ReadNullableInt(
+                    workspaceNode,
+                    "attributeId",
+                    "attributeNum",
+                    "workspaceAttributeId",
+                    "workspaceAttributeNum");
+            }
+
+            if (string.IsNullOrWhiteSpace(workspacePluralName))
+            {
+                workspacePluralName = ReadString(
+                    workspaceNode,
+                    "pluralName",
+                    "workspacePluralName",
+                    "name");
+            }
+        }
+    }
+
+    private static bool LooksLikeLookupAttribute(JsonElement element, string dataType, int? parentAttrNum)
+    {
+        if (parentAttrNum.HasValue && parentAttrNum.Value > 0)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dataType))
+        {
+            var normalized = dataType.Trim().ToLowerInvariant();
+            if (normalized.Contains("lookup", StringComparison.Ordinal) ||
+                normalized.Contains("picklist", StringComparison.Ordinal) ||
+                normalized.Contains("choice", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        if (TryGetPropertyIgnoreCase(element, "lookupTable", out var lookupTable) &&
+            lookupTable.ValueKind != JsonValueKind.Null &&
+            lookupTable.ValueKind != JsonValueKind.Undefined)
+        {
+            return true;
+        }
+
+        if (TryGetPropertyIgnoreCase(element, "pickList", out var pickList) &&
+            pickList.ValueKind == JsonValueKind.Array &&
+            pickList.GetArrayLength() > 0)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractFirstInteger(string text, out int number)
+    {
+        number = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var started = false;
+        var digits = new List<char>(10);
+        foreach (var ch in text)
+        {
+            if (char.IsDigit(ch))
+            {
+                started = true;
+                digits.Add(ch);
+                continue;
+            }
+
+            if (started)
+            {
+                break;
+            }
+        }
+
+        if (digits.Count == 0)
+        {
+            return false;
+        }
+
+        return int.TryParse(new string(digits.ToArray()), out number);
     }
 }

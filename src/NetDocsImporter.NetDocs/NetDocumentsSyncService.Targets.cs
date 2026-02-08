@@ -525,13 +525,11 @@ public sealed partial class NetDocumentsSyncService
             return string.Empty;
         }
 
-        var escapedCabinet = Uri.EscapeDataString(cabinetId);
         var encodedTarget = EncodeContainerIdForPath(targetId);
         foreach (var path in new[]
                  {
                      $"/v2/container/{encodedTarget}/ancestry",
                      $"/v2/container/{encodedTarget}/info",
-                     $"/v1/Cabinet/{escapedCabinet}/containers/{Uri.EscapeDataString(targetId)}",
                      $"/v1/Container/{Uri.EscapeDataString(targetId)}/info"
                  })
         {
@@ -610,9 +608,6 @@ public sealed partial class NetDocumentsSyncService
     private static IEnumerable<string> BuildContainerEndpointCandidates(string cabinetId)
     {
         var escaped = Uri.EscapeDataString(cabinetId);
-        yield return $"/v1/Cabinet/{escaped}/containers";
-        yield return $"/v1/Cabinet/{escaped}/containers?$select=id,name,type,parentId,parentWorkspaceId,parentName";
-        yield return $"/v1/Cabinet/{escaped}/workspaces";
         yield return $"/v1/Cabinet/{escaped}/folders";
     }
 
@@ -1076,13 +1071,11 @@ public sealed partial class NetDocumentsSyncService
 
     private static IEnumerable<string> BuildChildrenEndpointCandidates(string cabinetId, string? parentContainerId, string? workspaceId)
     {
-        var escapedCabinetId = Uri.EscapeDataString(cabinetId);
         if (!string.IsNullOrWhiteSpace(parentContainerId))
         {
             var escapedParent = Uri.EscapeDataString(parentContainerId);
             yield return $"/v1/Container/{escapedParent}/children";
             yield return $"/v1/Containers/{escapedParent}/children";
-            yield return $"/v1/Cabinet/{escapedCabinetId}/containers/{escapedParent}/children";
             yield break;
         }
 
@@ -1090,12 +1083,8 @@ public sealed partial class NetDocumentsSyncService
         {
             var escapedWorkspaceId = Uri.EscapeDataString(workspaceId);
             yield return $"/v1/Workspace/{escapedWorkspaceId}/children";
-            yield return $"/v1/Cabinet/{escapedCabinetId}/workspaces/{escapedWorkspaceId}/children";
             yield break;
         }
-
-        yield return $"/v1/Cabinet/{escapedCabinetId}/workspaces";
-        yield return $"/v1/Cabinet/{escapedCabinetId}/containers";
     }
 
     private static NdTargetRecentItem? ParseRecentItem(JsonElement element)
