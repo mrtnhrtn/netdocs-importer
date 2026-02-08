@@ -213,7 +213,7 @@ public sealed partial class MainViewModel
     {
         if (!CanConnectToNetDocuments)
         {
-            StatusText = "OAuth client profile is not configured for the selected region.";
+            StatusText = "OAuth profile for this region is not installed. Contact administrator.";
             return;
         }
 
@@ -249,6 +249,61 @@ public sealed partial class MainViewModel
         }
     }
 
+    public async Task SaveNetDocumentsOAuthProfileAsync()
+    {
+        if (!IsDeveloperMode)
+        {
+            StatusText = "Developer mode is required to save local OAuth profiles.";
+            return;
+        }
+
+        if (!CanSaveNetDocumentsDevBootstrap)
+        {
+            StatusText = "Provide Client ID and Redirect URI to save a local OAuth profile.";
+            return;
+        }
+
+        var redirectUri = NetDocumentsBootstrapRedirectUri.Trim();
+        if (!TryValidateLoopbackRedirectUri(redirectUri, out var redirectError))
+        {
+            StatusText = redirectError;
+            return;
+        }
+
+        var region = GetSelectedNetDocumentsRegionSetting();
+        if (string.IsNullOrWhiteSpace(region.ApiBaseUrl) ||
+            string.IsNullOrWhiteSpace(region.OAuthAuthorizeBaseUrl) ||
+            string.IsNullOrWhiteSpace(region.OAuthTokenUrl))
+        {
+            StatusText = "Selected NetDocuments region endpoints are not configured.";
+            return;
+        }
+
+        var profile = new NetDocumentsOAuthClientConfig
+        {
+            Region = SelectedNetDocumentsRegion,
+            ClientId = NetDocumentsBootstrapClientId.Trim(),
+            ClientSecret = NetDocumentsBootstrapClientSecret,
+            RedirectUri = redirectUri,
+            ApiBaseUrl = region.ApiBaseUrl,
+            OAuthAuthorizeBaseUrl = region.OAuthAuthorizeBaseUrl,
+            OAuthTokenUrl = region.OAuthTokenUrl
+        };
+
+        _netDocumentsOAuthClientProfiles[SelectedNetDocumentsRegion.ToString()] = profile;
+        await SaveNetDocumentsOAuthClientProfilesAsync();
+        ResolveNetDocumentsOAuthClientConfig();
+        ClearNetDocumentsBootstrapFields();
+
+        OnPropertyChanged(nameof(NetDocumentsConnectionProfileStatus));
+        OnPropertyChanged(nameof(CanConnectToNetDocuments));
+        OnPropertyChanged(nameof(CanShowNetDocumentsDevBootstrap));
+        OnPropertyChanged(nameof(CanSaveNetDocumentsDevBootstrap));
+        QueueSettingsSave();
+
+        StatusText = $"Developer OAuth profile saved for {SelectedNetDocumentsRegion}.";
+    }
+
     public async Task TryRestoreNetDocumentsSessionAsync()
     {
         try
@@ -268,6 +323,49 @@ public sealed partial class MainViewModel
             IsNetDocumentsConnected = false;
             _netDocumentsCurrentUserId = string.Empty;
         }
+    }
+
+    private void ClearNetDocumentsBootstrapFields()
+    {
+        _netDocumentsBootstrapClientId = string.Empty;
+        _netDocumentsBootstrapClientSecret = string.Empty;
+        _netDocumentsBootstrapRedirectUri = NetDocumentsRegionDefaults.DefaultRedirectUri;
+        OnPropertyChanged(nameof(NetDocumentsBootstrapClientId));
+        OnPropertyChanged(nameof(NetDocumentsBootstrapClientSecret));
+        OnPropertyChanged(nameof(NetDocumentsBootstrapRedirectUri));
+    }
+
+    private static bool TryValidateLoopbackRedirectUri(string redirectUri, out string error)
+    {
+        error = string.Empty;
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+        {
+            error = "Redirect URI must be a valid absolute URI.";
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Redirect URI must use http.";
+            return false;
+        }
+
+        var isLoopbackHost =
+            string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        if (!isLoopbackHost)
+        {
+            error = "Redirect URI host must be localhost or 127.0.0.1.";
+            return false;
+        }
+
+        if (uri.Port <= 0)
+        {
+            error = "Redirect URI must include a port.";
+            return false;
+        }
+
+        return true;
     }
 
     public async Task SyncNetDocumentsCabinetsAsync()

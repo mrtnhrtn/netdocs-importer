@@ -16,3 +16,9 @@ C:\Dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImp
 C:\Dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\refint\NetDocsImporter.NetDocs.dll
 C:\Dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\NetDocsImporter.NetDocs.pdb
 C:\Dev\netdocs-importer\src\NetDocsImporter.NetDocs\obj\Debug\net10.0\ref\NetDocsImporter.NetDocs.dll
+c:\Dev\netdocs-importer\artifacts\appcheck\NetDocsImporter.NetDocs.deps.json
+c:\Dev\netdocs-importer\artifacts\appcheck\NetDocsImporter.NetDocs.dll
+c:\Dev\netdocs-importer\artifacts\appcheck\NetDocsImporter.NetDocs.pdb
+c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.NetDocs.deps.json
+c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.NetDocs.dll
+c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.NetDocs.pdb

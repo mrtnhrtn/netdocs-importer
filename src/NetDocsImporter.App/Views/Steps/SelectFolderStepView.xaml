@@ -22,10 +22,33 @@
                 <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" />
-                        <TextBlock Text="{Binding NetDocumentsConnectionRedirectUri, StringFormat=Redirect URI: {0}}"
-                                   Foreground="#555555"
-                                   Margin="0,2,0,0"
+                    </StackPanel>
+                </Border>
+                <Border BorderBrush="#E4E7EB"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8"
+                        Margin="0,0,0,8"
+                        Visibility="{Binding CanShowNetDocumentsDevBootstrap, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="Developer mode only: local OAuth bootstrap (not for distribution)."
+                                   Foreground="#8A5A00"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,6"
                                    TextWrapping="Wrap" />
+                        <TextBlock Text="Client Id" Foreground="#555555" />
+                        <TextBox Text="{Binding NetDocumentsBootstrapClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                        <TextBlock Text="Client Secret" Foreground="#555555" />
+                        <PasswordBox Margin="0,2,0,6"
+                                     Loaded="OnNetDocumentsBootstrapClientSecretLoaded"
+                                     PasswordChanged="OnNetDocumentsBootstrapClientSecretPasswordChanged" />
+                        <TextBlock Text="Redirect URI" Foreground="#555555" />
+                        <TextBox Text="{Binding NetDocumentsBootstrapRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
+                        <Button Content="Save Local OAuth Profile"
+                                Width="180"
+                                Click="OnSaveNetDocumentsOAuthProfile"
+                                IsEnabled="{Binding CanSaveNetDocumentsDevBootstrap}"
+                                Style="{StaticResource SecondaryButton}" />
                     </StackPanel>
                 </Border>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">

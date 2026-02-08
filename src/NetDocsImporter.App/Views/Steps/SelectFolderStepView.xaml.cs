@@ -34,6 +34,30 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnNetDocumentsBootstrapClientSecretLoaded(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnNetDocumentsBootstrapClientSecretLoaded(sender, e);
+        }
+    }
+
+    public void OnNetDocumentsBootstrapClientSecretPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnNetDocumentsBootstrapClientSecretPasswordChanged(sender, e);
+        }
+    }
+
+    public void OnSaveNetDocumentsOAuthProfile(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSaveNetDocumentsOAuthProfile(sender, e);
+        }
+    }
+
     public void OnSyncNetDocumentsCabinets(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

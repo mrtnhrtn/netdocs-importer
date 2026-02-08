@@ -7,10 +7,16 @@ namespace NetDocsImporter.App;
 
 public partial class MainWindow : Window
 {
-    private readonly MainViewModel _viewModel = new();
+    private readonly MainViewModel _viewModel;
 
     public MainWindow()
+        : this(new AppRuntimeOptions())
     {
+    }
+
+    public MainWindow(AppRuntimeOptions runtimeOptions)
+    {
+        _viewModel = new MainViewModel(runtimeOptions);
         InitializeComponent();
         DataContext = _viewModel;
         Loaded += OnLoaded;
@@ -208,6 +214,28 @@ public partial class MainWindow : Window
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();
+    }
+
+    public void OnNetDocumentsBootstrapClientSecretPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox)
+        {
+            _viewModel.NetDocumentsBootstrapClientSecret = passwordBox.Password;
+        }
+    }
+
+    public void OnNetDocumentsBootstrapClientSecretLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox &&
+            passwordBox.Password != _viewModel.NetDocumentsBootstrapClientSecret)
+        {
+            passwordBox.Password = _viewModel.NetDocumentsBootstrapClientSecret;
+        }
+    }
+
+    public async void OnSaveNetDocumentsOAuthProfile(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SaveNetDocumentsOAuthProfileAsync();
     }
 
     public async void OnSyncNetDocumentsCabinets(object sender, RoutedEventArgs e)

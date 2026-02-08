@@ -16,10 +16,15 @@ public partial class App : System.Windows.Application
         System.Windows.Forms.Application.EnableVisualStyles();
         System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
 
+        var runtimeOptions = AppRuntimeOptions.FromArgs(e.Args);
         base.OnStartup(e);
 
         ConfigureLogging();
         HookGlobalExceptionHandlers();
+
+        var mainWindow = new MainWindow(runtimeOptions);
+        MainWindow = mainWindow;
+        mainWindow.Show();
     }
 
     private void ConfigureLogging()

@@ -1,0 +1,56 @@
+{
+  "Vault": {
+    "region": "Vault",
+    "clientId": "DUMMY-VAULT-CLIENT-ID",
+    "clientSecret": "DUMMY-VAULT-CLIENT-SECRET",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.vault.netvoyage.com",
+    "oauthAuthorizeBaseUrl": "https://api.vault.netvoyage.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.vault.netvoyage.com/v1/OAuth"
+  },
+  "EU": {
+    "region": "EU",
+    "clientId": "DUMMY-EU-CLIENT-ID",
+    "clientSecret": "DUMMY-EU-CLIENT-SECRET",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.eu.netdocuments.com",
+    "oauthAuthorizeBaseUrl": "https://api.eu.netdocuments.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.eu.netdocuments.com/v1/OAuth"
+  },
+  "DE": {
+    "region": "DE",
+    "clientId": "DUMMY-DE-CLIENT-ID",
+    "clientSecret": "DUMMY-DE-CLIENT-SECRET",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.de.netdocuments.com",
+    "oauthAuthorizeBaseUrl": "https://api.de.netdocuments.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.de.netdocuments.com/v1/OAuth"
+  },
+  "AU": {
+    "region": "AU",
+    "clientId": "AP-SI5BDQQ3",
+    "clientSecret": "41o58j1kqZ8INan9vxBLX26c42S5nfBTpyEBhKOLVh7xgjT2",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.au.netdocuments.com",
+    "oauthAuthorizeBaseUrl": "https://api.au.netdocuments.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.au.netdocuments.com/v1/OAuth"
+  },
+  "CAN": {
+    "region": "CAN",
+    "clientId": "DUMMY-CAN-CLIENT-ID",
+    "clientSecret": "DUMMY-CAN-CLIENT-SECRET",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.can.netdocuments.com",
+    "oauthAuthorizeBaseUrl": "https://api.can.netdocuments.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.can.netdocuments.com/v1/OAuth"
+  },
+  "Ducot": {
+    "region": "Ducot",
+    "clientId": "DUMMY-DUCOT-CLIENT-ID",
+    "clientSecret": "DUMMY-DUCOT-CLIENT-SECRET",
+    "redirectUri": "http://localhost:8400/callback",
+    "apiBaseUrl": "https://api.ducot.netdocuments.com",
+    "oauthAuthorizeBaseUrl": "https://api.ducot.netdocuments.com/neWeb2/OAuth.aspx",
+    "oauthTokenUrl": "https://api.ducot.netdocuments.com/v1/OAuth"
+  }
+}

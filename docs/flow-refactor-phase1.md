@@ -2,6 +2,13 @@
 
 ## What Changed
 - NetDocuments connect/setup moved to **Select Folder** step.
+- Distribution-first OAuth behavior:
+  - End users do not configure OAuth client details in UI.
+  - App resolves OAuth profiles from provisioned machine data.
+  - Missing region profile disables Connect with admin guidance.
+- Optional developer startup mode:
+  - Launch with `/dev` or `--dev` to enable local dev-only OAuth bootstrap panel.
+  - Dev bootstrap is for testing only and is not part of production distribution flow.
 - Source folder scan now requires an active NetDocuments connection.
 - Target destination selection now supports only:
   - `Workspace`
