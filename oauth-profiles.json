@@ -28,8 +28,8 @@
   },
   "AU": {
     "region": "AU",
-    "clientId": "AP-SI5BDQQ3",
-    "clientSecret": "41o58j1kqZ8INan9vxBLX26c42S5nfBTpyEBhKOLVh7xgjT2",
+    "clientId": "DUMMY-AU-CLIENT-ID",
+    "clientSecret": "DUMMY-AU-CLIENT-SECRET",
     "redirectUri": "http://localhost:8400/callback",
     "apiBaseUrl": "https://api.au.netdocuments.com",
     "oauthAuthorizeBaseUrl": "https://api.au.netdocuments.com/neWeb2/OAuth.aspx",
