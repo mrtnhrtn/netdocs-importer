@@ -77,6 +77,7 @@ public sealed partial class MainViewModel
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
             _workspaceLookupPairCache.Clear();
+            _workspaceLookupInvalidPairCache.Clear();
             _workspaceSearchTargets.Clear();
             SelectedWorkspaceSearchTarget = null;
             WorkspaceLookupStatus = string.Empty;
@@ -105,6 +106,7 @@ public sealed partial class MainViewModel
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
             _workspaceLookupPairCache.Clear();
+            _workspaceLookupInvalidPairCache.Clear();
             _workspaceSearchTargets.Clear();
             SelectedWorkspaceSearchTarget = null;
             WorkspaceLookupStatus = string.Empty;
@@ -173,7 +175,7 @@ public sealed partial class MainViewModel
             OAuthTokenUrl = region.OAuthTokenUrl,
             ClientId = NetDocumentsClientId,
             ClientSecret = NetDocumentsClientSecret,
-            RedirectUri = NetDocumentsRedirectUri
+            RedirectUri = (NetDocumentsRedirectUri ?? string.Empty).Trim()
         };
     }
 

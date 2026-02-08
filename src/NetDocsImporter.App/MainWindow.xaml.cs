@@ -274,7 +274,6 @@ public partial class MainWindow : Window
             "Recent" => NdTargetBrowserTab.Recent,
             "Favorites" => NdTargetBrowserTab.Favorites,
             "Go to Workspace" => NdTargetBrowserTab.GoToWorkspace,
-            "Browse Tree" => NdTargetBrowserTab.Browse,
             _ => NdTargetBrowserTab.Recent
         };
 
@@ -309,37 +308,6 @@ public partial class MainWindow : Window
     public async void OnToggleFavoriteForSelectedTarget(object sender, RoutedEventArgs e)
     {
         await _viewModel.ToggleFavoriteForSelectedTargetAsync();
-    }
-
-    public async void OnRefreshBrowseTree(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.LoadBrowseRootsAsync();
-    }
-
-    public async void OnBrowseTreeExpanded(object sender, RoutedEventArgs e)
-    {
-        if (e.OriginalSource is not TreeViewItem item)
-        {
-            return;
-        }
-
-        if (item.DataContext is NetDocumentsBrowseNodeView node)
-        {
-            await _viewModel.ExpandBrowseNodeAsync(node);
-        }
-    }
-
-    public void OnBrowseTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
-    {
-        if (e.NewValue is NetDocumentsBrowseNodeView node)
-        {
-            _viewModel.SelectedBrowseNode = node;
-        }
-    }
-
-    public async void OnSelectTargetFromBrowseNode(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.SelectTargetFromBrowseNodeAsync();
     }
 
     public async void OnConfirmTargetContainer(object sender, RoutedEventArgs e)

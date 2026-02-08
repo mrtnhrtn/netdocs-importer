@@ -14,8 +14,8 @@ public sealed partial class MainViewModel
     private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
     private const int WorkspaceSearchMaxResults = 8;
     private const int WorkspaceSearchMaxParentCandidates = 4;
-    private const int WorkspaceSearchMaxChildCandidatesPerParent = 3;
-    private const int WorkspaceSearchMaxResolveAttempts = 12;
+    private const int WorkspaceSearchMaxChildCandidatesPerParent = 2;
+    private const int WorkspaceSearchMaxResolveAttempts = 8;
     private static readonly TimeSpan WorkspaceCacheTtl = TimeSpan.FromMinutes(20);
 
     private readonly ObservableCollection<NetDocumentsTargetContainerView> _netDocumentsTargetContainers = new();
@@ -28,6 +28,7 @@ public sealed partial class MainViewModel
     private readonly Dictionary<string, NdTargetProfileSnapshot> _targetProfileCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _locallyUnpinnedFavoriteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetDocumentsWorkspaceTargetResultView?> _workspaceLookupPairCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _workspaceLookupInvalidPairCache = new(StringComparer.OrdinalIgnoreCase);
 
     private List<NdTargetRecentItem> _localRecentTargets = new();
     private List<NdTargetFavoriteItem> _localFavoriteTargets = new();
@@ -353,12 +354,6 @@ public sealed partial class MainViewModel
                     await RefreshFavoriteTargetsAsync();
                 }
                 break;
-            case NdTargetBrowserTab.Browse:
-                if (_browseRootNodes.Count == 0)
-                {
-                    await LoadBrowseRootsAsync();
-                }
-                break;
             default:
                 break;
         }
@@ -402,7 +397,7 @@ public sealed partial class MainViewModel
                     }
                 });
                 _hasLoadedRecentTargets = true;
-                Trace.WriteLine($"NetDocuments target browser: recent source=cache count={cachedItems.Count}");
+                Trace.WriteLine($"ND-CACHE recent source=cache count={cachedItems.Count}");
                 return;
             }
 
@@ -412,7 +407,7 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.LastUsedUtc)
                     .First())
                 .ToList();
-            Trace.WriteLine($"NetDocuments target browser: recent source=server count={serverItems.Count}");
+            Trace.WriteLine($"ND-CACHE recent source=server count={serverItems.Count}");
             _localRecentTargets = serverItems.ToList();
 
             var syncedUtc = DateTime.UtcNow;
@@ -433,7 +428,7 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"NetDocuments target browser: recent source=cache-fallback reason={ex.Message}");
+            Trace.WriteLine($"ND-CACHE recent source=cache-fallback reason={ex.Message}");
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
@@ -509,7 +504,7 @@ public sealed partial class MainViewModel
                     }
                 });
                 _hasLoadedFavoriteTargets = true;
-                Trace.WriteLine($"NetDocuments target browser: favorites source=cache count={cachedItems.Count}");
+                Trace.WriteLine($"ND-CACHE favorites source=cache count={cachedItems.Count}");
                 return;
             }
 
@@ -519,7 +514,7 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.PinnedUtc)
                     .First())
                 .ToList();
-            Trace.WriteLine($"NetDocuments target browser: favorites source=server count={serverItems.Count}");
+            Trace.WriteLine($"ND-CACHE favorites source=server count={serverItems.Count}");
             _localFavoriteTargets = serverItems.ToList();
 
             var syncedUtc = DateTime.UtcNow;
@@ -540,7 +535,7 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"NetDocuments target browser: favorites source=cache-fallback reason={ex.Message}");
+            Trace.WriteLine($"ND-CACHE favorites source=cache-fallback reason={ex.Message}");
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
@@ -632,7 +627,7 @@ public sealed partial class MainViewModel
                 ? "No workspaces matched your search."
                 : $"Workspace matches: {resolved.Count}.";
             TargetBrowserMessage = WorkspaceLookupStatus;
-            Trace.WriteLine($"NetDocuments target browser: workspace unified search query='{query}' count={resolved.Count}");
+            Trace.WriteLine($"ND-SEARCH ui-result query='{query}' count={resolved.Count}");
             QueueSettingsSave();
         }
         catch (OperationCanceledException)
@@ -782,9 +777,9 @@ public sealed partial class MainViewModel
         var results = new List<NetDocumentsWorkspaceTargetResultView>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sync = RequireSyncService();
-        Trace.WriteLine($"NetDocuments workspace unified search: start repo='{SelectedNetDocumentsRepositoryId}', cabinet='{SelectedNetDocumentsCabinetId}', query='{query}'.");
+        Trace.WriteLine($"ND-SEARCH start repo='{SelectedNetDocumentsRepositoryId}', cabinet='{SelectedNetDocumentsCabinetId}', query='{query}'.");
         var fallbackWorkspaces = await sync.SearchWorkspacesAsync(SelectedNetDocumentsCabinetId, query, 50, cancellationToken);
-        Trace.WriteLine($"NetDocuments workspace unified search: API fallback candidates={fallbackWorkspaces.Count}.");
+        Trace.WriteLine($"ND-SEARCH api-fallback-candidates={fallbackWorkspaces.Count}");
         foreach (var item in fallbackWorkspaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -809,12 +804,12 @@ public sealed partial class MainViewModel
                 break;
             }
         }
-        Trace.WriteLine($"NetDocuments workspace unified search: API objects kept={results.Count}.");
+        Trace.WriteLine($"ND-SEARCH api-objects-kept={results.Count}");
 
         _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(cancellationToken);
         if (_workspaceLookupContext is not null)
         {
-            Trace.WriteLine($"NetDocuments workspace unified search: lookup context parentAttr={_workspaceLookupContext.ParentAttrNum}, childAttr={_workspaceLookupContext.ChildAttrNum}.");
+            Trace.WriteLine($"ND-SEARCH lookup-context parentAttr={_workspaceLookupContext.ParentAttrNum}, childAttr={_workspaceLookupContext.ChildAttrNum}");
             var parentCandidates = await sync.SearchLookupValuesAsync(
                 _workspaceLookupContext.RepositoryId,
                 _workspaceLookupContext.ParentAttrNum,
@@ -833,7 +828,7 @@ public sealed partial class MainViewModel
                     extendedFiltering: true,
                     cancellationToken: cancellationToken);
             }
-            Trace.WriteLine($"NetDocuments workspace unified search: parent lookup candidates={parentCandidates.Count}.");
+            Trace.WriteLine($"ND-SEARCH parent-lookup-candidates={parentCandidates.Count}");
 
             var resolveAttempts = 0;
             foreach (var parent in parentCandidates.Take(WorkspaceSearchMaxParentCandidates))
@@ -847,7 +842,7 @@ public sealed partial class MainViewModel
                     top: 25,
                     includeUnfilteredFallback: true,
                     cancellationToken: cancellationToken);
-                var filteredChildren = FilterLookupCandidatesByTerm(children, query);
+                var filteredChildren = RankLookupCandidatesByTerm(children, query);
                 if (filteredChildren.Count == 0)
                 {
                     var recentChildren = await sync.GetRecentChildLookupValuesAsync(
@@ -856,15 +851,19 @@ public sealed partial class MainViewModel
                         parent.Key,
                         top: 12,
                         cancellationToken: cancellationToken);
-                    filteredChildren = FilterLookupCandidatesByTerm(recentChildren, query);
+                    filteredChildren = RankLookupCandidatesByTerm(recentChildren, query);
                     if (filteredChildren.Count == 0)
                     {
                         filteredChildren = recentChildren.ToList();
                     }
                 }
-                Trace.WriteLine($"NetDocuments workspace unified search: parent='{parent.Key}' child candidates={children.Count} filtered={filteredChildren.Count}.");
+                Trace.WriteLine($"ND-SEARCH parent='{parent.Key}' child-candidates={children.Count} ranked={filteredChildren.Count}.");
 
-                var childBatch = filteredChildren.Take(WorkspaceSearchMaxChildCandidatesPerParent).ToList();
+                var normalizedQuery = (query ?? string.Empty).Trim();
+                var hasExactKey = !string.IsNullOrWhiteSpace(normalizedQuery) &&
+                                  filteredChildren.Any(c => string.Equals(c.Key, normalizedQuery, StringComparison.OrdinalIgnoreCase));
+                var perParentLimit = hasExactKey ? 1 : WorkspaceSearchMaxChildCandidatesPerParent;
+                var childBatch = filteredChildren.Take(perParentLimit).ToList();
                 resolveAttempts += childBatch.Count;
                 if (resolveAttempts > WorkspaceSearchMaxResolveAttempts)
                 {
@@ -885,7 +884,7 @@ public sealed partial class MainViewModel
                     if (seen.Add(resolved.Selection.Id))
                     {
                         results.Add(resolved);
-                        Trace.WriteLine($"NetDocuments workspace unified search: resolved workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
+                        Trace.WriteLine($"ND-SEARCH resolved workspace id='{resolved.Selection.Id}' name='{resolved.Selection.Name}'.");
                     }
                 }
 
@@ -897,10 +896,10 @@ public sealed partial class MainViewModel
         }
         else
         {
-            Trace.WriteLine("NetDocuments workspace unified search: lookup context unavailable, skipping lookup enrichment.");
+            Trace.WriteLine("ND-SEARCH lookup-context unavailable; skipping lookup enrichment.");
         }
 
-        Trace.WriteLine($"NetDocuments workspace unified search: final result count={results.Count}.");
+        Trace.WriteLine($"ND-SEARCH final-result-count={results.Count}");
 
         return results
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
@@ -959,9 +958,15 @@ public sealed partial class MainViewModel
         CancellationToken cancellationToken)
     {
         var pairKey = $"{parent.Key}|{child.Key}";
+        if (_workspaceLookupInvalidPairCache.ContainsKey(pairKey))
+        {
+            Trace.WriteLine($"ND-SEARCH skipped invalid wsurl pair parent='{parent.Key}' child='{child.Key}'");
+            return null;
+        }
+
         if (_workspaceLookupPairCache.TryGetValue(pairKey, out var cached))
         {
-            Trace.WriteLine($"NetDocuments workspace unified search: lookup cache hit parent='{parent.Key}' child='{child.Key}' hasResult={(cached is not null)}.");
+            Trace.WriteLine($"ND-SEARCH lookup-cache hit parent='{parent.Key}' child='{child.Key}' hasResult={(cached is not null)}.");
             return cached;
         }
 
@@ -985,7 +990,13 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"NetDocuments workspace unified search: lookup resolve failed parent='{parent.Key}' child='{child.Key}' error='{ex.Message}'.");
+            if (ex.Message.Contains("400 Bad Request", StringComparison.OrdinalIgnoreCase))
+            {
+                _workspaceLookupInvalidPairCache[pairKey] = true;
+                Trace.WriteLine($"ND-SEARCH marked invalid wsurl pair parent='{parent.Key}' child='{child.Key}'.");
+            }
+
+            Trace.WriteLine($"ND-SEARCH lookup-resolve failed parent='{parent.Key}' child='{child.Key}' error='{ex.Message}'.");
             _workspaceLookupPairCache[pairKey] = null;
             return null;
         }
@@ -998,9 +1009,9 @@ public sealed partial class MainViewModel
             : $"{description} ({key})";
     }
 
-    private static List<NdLookupValueItem> FilterLookupCandidatesByTerm(
+    private static List<NdLookupValueItem> RankLookupCandidatesByTerm(
         IReadOnlyList<NdLookupValueItem> values,
-        string term)
+        string? term)
     {
         if (values.Count == 0)
         {
@@ -1013,11 +1024,43 @@ public sealed partial class MainViewModel
             return values.ToList();
         }
 
-        return values
-            .Where(v =>
-                (!string.IsNullOrWhiteSpace(v.Key) && v.Key.Contains(normalized, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrWhiteSpace(v.Description) && v.Description.Contains(normalized, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ranked = new List<NdLookupValueItem>();
+
+        var exactKey = values
+            .Where(v => !string.IsNullOrWhiteSpace(v.Key) &&
+                        string.Equals(v.Key, normalized, StringComparison.OrdinalIgnoreCase));
+        foreach (var item in exactKey)
+        {
+            if (seen.Add(item.Key))
+            {
+                ranked.Add(item);
+            }
+        }
+
+        var descriptionContains = values
+            .Where(v => !string.IsNullOrWhiteSpace(v.Description) &&
+                        v.Description.Contains(normalized, StringComparison.OrdinalIgnoreCase));
+        foreach (var item in descriptionContains)
+        {
+            if (seen.Add(item.Key))
+            {
+                ranked.Add(item);
+            }
+        }
+
+        var keyContains = values
+            .Where(v => !string.IsNullOrWhiteSpace(v.Key) &&
+                        v.Key.Contains(normalized, StringComparison.OrdinalIgnoreCase));
+        foreach (var item in keyContains)
+        {
+            if (seen.Add(item.Key))
+            {
+                ranked.Add(item);
+            }
+        }
+
+        return ranked;
     }
 
     private string GetNetDocumentsServiceKey()

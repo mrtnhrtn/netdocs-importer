@@ -24,45 +24,116 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
     public async Task SignInInteractiveAsync(NetDocumentsAuthContext context, CancellationToken cancellationToken = default)
     {
         ValidateContext(context);
+        var activeContext = NormalizeContext(context);
 
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
 
-        var authorizeUrl = BuildAuthorizeUrl(context, state);
-        using var listener = CreateListener(context.RedirectUri);
-        listener.Start();
-
-        OpenSystemBrowser(authorizeUrl);
-        var callback = await WaitForCallbackAsync(listener, cancellationToken);
-
+        HttpListener? listener = null;
         try
         {
-            await SendBrowserResponseAsync(callback.Context, callback.ErrorMessage, cancellationToken);
+            Trace.WriteLine($"ND-AUTH listener bind attempt redirectUri='{activeContext.RedirectUri}'.");
+            listener = CreateListener(activeContext.RedirectUri);
+            listener.Start();
+            Trace.WriteLine($"ND-AUTH listener bind success redirectUri='{activeContext.RedirectUri}'.");
         }
-        catch
+        catch (HttpListenerException ex) when (CanFallbackToLocalhost(activeContext.RedirectUri))
         {
-            // Ignore callback response write failures.
+            listener?.Close();
+            var fallbackContext = CreateLocalhostFallbackContext(activeContext);
+            Trace.WriteLine(
+                $"ND-AUTH listener bind failed redirectUri='{activeContext.RedirectUri}' error={ex.ErrorCode}. " +
+                $"Retrying with localhost redirectUri='{fallbackContext.RedirectUri}'.");
+            listener = CreateListener(fallbackContext.RedirectUri);
+            listener.Start();
+            activeContext = fallbackContext;
+            Trace.WriteLine($"ND-AUTH listener bind success redirectUri='{activeContext.RedirectUri}'.");
+        }
+        catch (HttpListenerException ex)
+        {
+            Trace.WriteLine($"ND-AUTH listener bind failed redirectUri='{activeContext.RedirectUri}' error={ex.ErrorCode} message='{ex.Message}'.");
+            throw new InvalidOperationException(
+                $"Failed to listen on redirect URI '{activeContext.RedirectUri}'. The prefix is unavailable on this machine (error={ex.ErrorCode}). " +
+                "Use a registered loopback redirect URI that is free (for example localhost if registered), or free the conflicting URL reservation.",
+                ex);
         }
 
-        if (!string.IsNullOrWhiteSpace(callback.ErrorMessage))
+        using (listener)
         {
-            throw new InvalidOperationException(callback.ErrorMessage);
+            var authorizeUrl = BuildAuthorizeUrl(activeContext, state);
+            Trace.WriteLine($"ND-AUTH browser launch authorizeUrl='{authorizeUrl}'.");
+            OpenSystemBrowser(authorizeUrl);
+            var callback = await WaitForCallbackAsync(listener, cancellationToken);
+
+            try
+            {
+                await SendBrowserResponseAsync(callback.Context, callback.ErrorMessage, cancellationToken);
+            }
+            catch
+            {
+                // Ignore callback response write failures.
+            }
+
+            if (!string.IsNullOrWhiteSpace(callback.ErrorMessage))
+            {
+                throw new InvalidOperationException(callback.ErrorMessage);
+            }
+
+            if (!string.Equals(callback.State, state, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("OAuth state validation failed.");
+            }
+
+            if (string.IsNullOrWhiteSpace(callback.Code))
+            {
+                throw new InvalidOperationException("Authorization code was not returned.");
+            }
+
+            var token = await ExchangeCodeForTokenAsync(activeContext, callback.Code, cancellationToken);
+            await SaveCacheAsync(token, cancellationToken);
+        }
+    }
+
+    private static NetDocumentsAuthContext NormalizeContext(NetDocumentsAuthContext context)
+    {
+        return new NetDocumentsAuthContext
+        {
+            OAuthAuthorizeBaseUrl = context.OAuthAuthorizeBaseUrl?.Trim() ?? string.Empty,
+            OAuthTokenUrl = context.OAuthTokenUrl?.Trim() ?? string.Empty,
+            ClientId = context.ClientId?.Trim() ?? string.Empty,
+            ClientSecret = context.ClientSecret ?? string.Empty,
+            RedirectUri = context.RedirectUri?.Trim() ?? string.Empty
+        };
+    }
+
+    private static bool CanFallbackToLocalhost(string redirectUri)
+    {
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+        {
+            return false;
         }
 
-        if (!string.Equals(callback.State, state, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("OAuth state validation failed.");
-        }
+        return string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+    }
 
-        if (string.IsNullOrWhiteSpace(callback.Code))
+    private static NetDocumentsAuthContext CreateLocalhostFallbackContext(NetDocumentsAuthContext context)
+    {
+        var uri = new Uri(context.RedirectUri, UriKind.Absolute);
+        var builder = new UriBuilder(uri)
         {
-            throw new InvalidOperationException("Authorization code was not returned.");
-        }
+            Host = "localhost"
+        };
 
-        var token = await ExchangeCodeForTokenAsync(context, callback.Code, cancellationToken);
-        await SaveCacheAsync(token, cancellationToken);
+        return new NetDocumentsAuthContext
+        {
+            OAuthAuthorizeBaseUrl = context.OAuthAuthorizeBaseUrl,
+            OAuthTokenUrl = context.OAuthTokenUrl,
+            ClientId = context.ClientId,
+            ClientSecret = context.ClientSecret,
+            RedirectUri = builder.Uri.ToString().Trim()
+        };
     }
 
     public async Task<string> GetAccessTokenAsync(

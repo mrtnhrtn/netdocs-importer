@@ -99,8 +99,6 @@ public sealed partial class NetDocumentsSyncService
             return Array.Empty<NdWorkspaceSearchResult>();
         }
 
-        var escapedCabinetId = Uri.EscapeDataString(cabinetId);
-        var escapedQuery = Uri.EscapeDataString(query.Trim());
         var results = new List<NdWorkspaceSearchResult>();
 
         try
@@ -111,7 +109,7 @@ public sealed partial class NetDocumentsSyncService
                 query.Trim(),
                 cancellationToken,
                 Math.Max(10, top));
-            Trace.WriteLine($"NetDocuments workspace search: v2 extension search returned {items.Count} item(s) for query='{query}'.");
+            Trace.WriteLine($"ND-SEARCH workspace v2-extension query='{query}' count={items.Count}.");
             results.AddRange(items.Select(item => new NdWorkspaceSearchResult
             {
                 WorkspaceId = item.Id,
@@ -128,43 +126,10 @@ public sealed partial class NetDocumentsSyncService
         }
         catch
         {
-            Trace.WriteLine($"NetDocuments workspace search: v2 extension search failed for query='{query}'.");
-            // Continue to v1 fallback candidates.
+            Trace.WriteLine($"ND-SEARCH workspace v2-extension failed query='{query}'.");
         }
 
-        foreach (var path in new[]
-                 {
-                     $"/v1/Cabinet/{escapedCabinetId}/workspaces?$search={escapedQuery}&$top={top}",
-                     $"/v1/Cabinet/{escapedCabinetId}/containers?$search={escapedQuery}&type=workspace&$top={top}",
-                     $"/v1/workspaces?$search={escapedQuery}&$top={top}"
-                 })
-        {
-            try
-            {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var items = EnumerateArray(document.RootElement)
-                    .Select(element => new NdWorkspaceSearchResult
-                    {
-                        WorkspaceId = ReadString(element, "id", "workspaceId"),
-                        WorkspaceName = ReadString(element, "name", "description", "label"),
-                        RepositoryId = ReadString(element, "repositoryId", "repoId"),
-                        CabinetId = ReadString(element, "cabinetId")
-                    })
-                    .Where(item => !string.IsNullOrWhiteSpace(item.WorkspaceId))
-                    .ToList();
-                Trace.WriteLine($"NetDocuments workspace search: endpoint='{path}' returned {items.Count} item(s).");
-                if (items.Count > 0)
-                {
-                    results.AddRange(items);
-                    break;
-                }
-            }
-            catch
-            {
-                Trace.WriteLine($"NetDocuments workspace search: endpoint='{path}' failed.");
-                // Continue to endpoint fallback.
-            }
-        }
+        Trace.WriteLine("ND-SEARCH workspace fallback-disabled reason='tenant stability; removed known dead v1 fallback endpoints'.");
 
         return results
             .OrderBy(item => item.WorkspaceName, StringComparer.OrdinalIgnoreCase)

@@ -31,12 +31,14 @@ public sealed class NetDocumentsApiClient
     public async Task<JsonDocument> GetJsonAsync(string relativeOrAbsolutePath, CancellationToken cancellationToken = default)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
         using var response = await SendWithRetryAsync(() =>
         {
             var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
             return request;
         }, cancellationToken);
+        stopwatch.Stop();
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -50,10 +52,13 @@ public sealed class NetDocumentsApiClient
         if (!mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
         {
             var snippet = content.Length > 180 ? content[..180] : content;
-            Trace.WriteLine($"NetDocuments API non-JSON response: method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} mediaType='{mediaType}' snippet='{SensitiveDataRedactor.RedactBearerTokens(snippet)}'");
+            Trace.WriteLine($"ND-HTTP non-json method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} mediaType='{mediaType}' snippet='{SensitiveDataRedactor.RedactBearerTokens(snippet)}'");
             throw new InvalidOperationException(
                 $"NetDocuments API returned non-JSON content ('{mediaType}') for '{relativeOrAbsolutePath}'. Snippet: {snippet}");
         }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
 
         return JsonDocument.Parse(content);
     }
@@ -73,6 +78,7 @@ public sealed class NetDocumentsApiClient
         CancellationToken cancellationToken = default)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
         {
             Content = content
@@ -80,6 +86,7 @@ public sealed class NetDocumentsApiClient
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
 
         using var response = await _client.SendAsync(request, cancellationToken);
+        stopwatch.Stop();
         var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
@@ -88,6 +95,9 @@ public sealed class NetDocumentsApiClient
             throw new InvalidOperationException(
                 $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
         }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -107,7 +117,7 @@ public sealed class NetDocumentsApiClient
             }
 
             var retryAfter = response.Headers.RetryAfter?.Delta ?? delay;
-            Trace.WriteLine($"NetDocuments API throttled: status=429 attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0}");
+            Trace.WriteLine($"ND-HTTP throttled status=429 attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0}");
             response.Dispose();
             await Task.Delay(retryAfter, cancellationToken);
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
@@ -143,7 +153,7 @@ public sealed class NetDocumentsApiClient
         var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
         var snippet = BuildSnippet(body);
         Trace.WriteLine(
-            $"NetDocuments API error: method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' snippet='{snippet}'");
+            $"ND-HTTP error method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' snippet='{snippet}'");
     }
 
     private static string BuildSnippet(string text)

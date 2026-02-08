@@ -146,38 +146,6 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
-    public void OnRefreshBrowseTree(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnRefreshBrowseTree(sender, e);
-        }
-    }
-
-    public void OnBrowseTreeExpanded(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnBrowseTreeExpanded(sender, e);
-        }
-    }
-
-    public void OnBrowseTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnBrowseTreeSelectedItemChanged(sender, e);
-        }
-    }
-
-    public void OnSelectTargetFromBrowseNode(object sender, RoutedEventArgs e)
-    {
-        if (Window.GetWindow(this) is MainWindow main)
-        {
-            main.OnSelectTargetFromBrowseNode(sender, e);
-        }
-    }
-
     public void OnContinueToReviewScope(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

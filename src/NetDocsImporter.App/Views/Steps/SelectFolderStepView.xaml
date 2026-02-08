@@ -170,33 +170,6 @@
                         </StackPanel>
                     </TabItem>
 
-                    <TabItem Header="Browse Tree">
-                        <StackPanel Margin="4">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="Refresh" Width="90" Margin="0,0,6,0" Click="OnRefreshBrowseTree" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="Use Selected" Width="110" Click="OnSelectTargetFromBrowseNode" Style="{StaticResource SecondaryButton}" />
-                            </StackPanel>
-                            <Border BorderThickness="1" BorderBrush="#D9E2EC" CornerRadius="4" Padding="4">
-                                <TreeView ItemsSource="{Binding BrowseRootNodes}"
-                                          SelectedItemChanged="OnBrowseTreeSelectedItemChanged">
-                                    <TreeView.Resources>
-                                        <HierarchicalDataTemplate DataType="{x:Type local:NetDocumentsBrowseNodeView}" ItemsSource="{Binding Children}">
-                                            <TextBlock Text="{Binding DisplayName}">
-                                                <TextBlock.ToolTip>
-                                                    <TextBlock Text="{Binding UnsupportedReason}" TextWrapping="Wrap" MaxWidth="260" />
-                                                </TextBlock.ToolTip>
-                                            </TextBlock>
-                                        </HierarchicalDataTemplate>
-                                    </TreeView.Resources>
-                                    <TreeView.ItemContainerStyle>
-                                        <Style TargetType="TreeViewItem">
-                                            <EventSetter Event="Expanded" Handler="OnBrowseTreeExpanded" />
-                                        </Style>
-                                    </TreeView.ItemContainerStyle>
-                                </TreeView>
-                            </Border>
-                        </StackPanel>
-                    </TabItem>
                 </TabControl>
 
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
