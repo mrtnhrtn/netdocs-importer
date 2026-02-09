@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "u9JLa+NXzKE=",
+  "dgSpecHash": "W0ewj3NuLsU=",
   "success": true,
-  "projectFilePath": "C:\\dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
+  "projectFilePath": "C:\\Dev\\netdocs-importer\\tests\\NetDocsImporter.Tests\\NetDocsImporter.Tests.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\mrtnh\\.nuget\\packages\\coverlet.collector\\6.0.4\\coverlet.collector.6.0.4.nupkg.sha512",
     "C:\\Users\\mrtnh\\.nuget\\packages\\microsoft.codecoverage\\17.14.1\\microsoft.codecoverage.17.14.1.nupkg.sha512",

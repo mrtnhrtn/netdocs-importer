@@ -177,6 +177,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
+                OnPropertyChanged(nameof(CanRunDirectUpload));
             }
         }
     }
@@ -1220,6 +1221,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         _ndImportDateFormat = NormalizeNdImportDateFormat(_settings.NdImportDateFormat);
         OnPropertyChanged(nameof(NdImportDateFormat));
+        _selectedImportExecutionMode = ParseImportExecutionMode(_settings.ImportExecutionMode);
+        OnPropertyChanged(nameof(SelectedImportExecutionMode));
+        OnPropertyChanged(nameof(IsNdImportCsvMode));
+        OnPropertyChanged(nameof(IsDirectApiMode));
+        OnPropertyChanged(nameof(CanRunDirectUpload));
 
         _rememberNdImportPassword = _settings.RememberNdImportPassword;
         OnPropertyChanged(nameof(RememberNdImportPassword));
@@ -1306,6 +1312,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _settings.NdImportCabinet = NdImportCabinet;
         _settings.NdImportUsername = NdImportUsername;
         _settings.NdImportDateFormat = NdImportDateFormat;
+        _settings.ImportExecutionMode = SelectedImportExecutionMode.ToString();
         _settings.RememberNdImportPassword = RememberNdImportPassword;
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;

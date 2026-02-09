@@ -211,6 +211,16 @@ public partial class MainWindow : Window
         await _viewModel.LaunchNdImportAsync();
     }
 
+    public async void OnRefreshDirectUploadPlan(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshDirectUploadPreflightAsync();
+    }
+
+    public async void OnRunDirectUpload(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RunDirectUploadAsync();
+    }
+
     public void OnBrowseNdImportExecutable(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog

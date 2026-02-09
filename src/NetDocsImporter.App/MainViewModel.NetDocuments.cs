@@ -18,6 +18,7 @@ public sealed partial class MainViewModel
     private NetDocumentsApiClient? _netDocumentsApiClient;
     private NetDocumentsSyncService? _netDocumentsSyncService;
     private INetDocumentsMetadataProvider? _netDocumentsMetadataProvider;
+    private IDirectUploadService? _netDocumentsDirectUploadService;
 
     private bool _isNetDocumentsConnected;
     private string _netDocumentsConnectedUser = string.Empty;
@@ -54,6 +55,7 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+                OnPropertyChanged(nameof(CanRunDirectUpload));
             }
         }
     }
@@ -163,6 +165,7 @@ public sealed partial class MainViewModel
             GetApiBaseUrl);
         _netDocumentsSyncService = new NetDocumentsSyncService(_netDocumentsApiClient, _jobStore);
         _netDocumentsMetadataProvider = new NetDocumentsMetadataProvider(_jobStore);
+        _netDocumentsDirectUploadService = new NetDocumentsDirectUploadService(_netDocumentsApiClient, _jobStore);
     }
 
     private NetDocumentsAuthContext BuildAuthContext()
@@ -199,6 +202,11 @@ public sealed partial class MainViewModel
     private INetDocumentsMetadataProvider RequireMetadataProvider()
     {
         return _netDocumentsMetadataProvider ?? throw new InvalidOperationException("NetDocuments metadata provider is not initialized.");
+    }
+
+    private IDirectUploadService RequireDirectUploadService()
+    {
+        return _netDocumentsDirectUploadService ?? throw new InvalidOperationException("NetDocuments direct upload service is not initialized.");
     }
 
     private bool IsRepositoryAllowedForCurrentJob(string repositoryId)

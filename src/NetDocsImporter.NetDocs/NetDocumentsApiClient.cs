@@ -100,6 +100,47 @@ public sealed class NetDocumentsApiClient
             $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
     }
 
+    public async Task<JsonDocument?> PostJsonAsync(
+        string relativeOrAbsolutePath,
+        HttpContent content,
+        CancellationToken cancellationToken = default)
+    {
+        var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = content
+        };
+        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+        using var response = await _client.SendAsync(request, cancellationToken);
+        stopwatch.Stop();
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            LogHttpFailure("POST", relativeOrAbsolutePath, requestUri, response, responseContent);
+            throw new InvalidOperationException(
+                $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
+        }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+
+        if (string.IsNullOrWhiteSpace(responseContent))
+        {
+            return null;
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+        if (!mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return JsonDocument.Parse(responseContent);
+    }
+
     private async Task<HttpResponseMessage> SendWithRetryAsync(
         Func<HttpRequestMessage> requestFactory,
         CancellationToken cancellationToken)

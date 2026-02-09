@@ -21,6 +21,8 @@ public sealed class AppSettings
 
     public string NdImportDateFormat { get; set; } = "DMY";
 
+    public string ImportExecutionMode { get; set; } = "NdImportCsv";
+
     public bool RememberNdImportPassword { get; set; }
 
     public string NdImportPasswordRef { get; set; } = string.Empty;

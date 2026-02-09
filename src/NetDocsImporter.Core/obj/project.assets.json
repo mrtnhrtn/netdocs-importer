@@ -381,11 +381,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
+      "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
       "projectName": "NetDocsImporter.Core",
-      "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
+      "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
       "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-      "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\obj\\",
+      "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"

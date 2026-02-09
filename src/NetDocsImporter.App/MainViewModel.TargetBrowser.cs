@@ -119,6 +119,7 @@ public sealed partial class MainViewModel
 
             OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
             OnPropertyChanged(nameof(CanContinueToReviewScope));
+            OnPropertyChanged(nameof(CanRunDirectUpload));
             QueueSettingsSave();
         }
     }
