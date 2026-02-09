@@ -39,7 +39,14 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     private readonly record struct FolderCreateResult(
         bool Success,
         string? CreatedContainerId,
-        string RequestedName);
+        string RequestedName,
+        bool DuplicateNameConflict);
+
+    private readonly record struct WorkspaceFolderHydrationResult(
+        bool Success,
+        string Name,
+        string ExtensionOrType,
+        string FailureReason);
 
     public async Task<UploadPlanResult> BuildPlanAsync(
         string jobId,
@@ -217,7 +224,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 continue;
             }
 
-            var uploadResult = await TryUploadFileAsync(file, cancellationToken);
+            var uploadResult = await TryUploadFileAsync(file, context, cancellationToken);
             results.Add(uploadResult);
             completed++;
             progress?.Report(new DirectUploadProgress(completed, files.Count, file.RelativePath));
@@ -233,47 +240,76 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
     private async Task<DirectUploadFileResult> TryUploadFileAsync(
         UploadPlanFileEntry file,
+        DirectUploadPlanContext context,
         CancellationToken cancellationToken)
     {
-        var encodedContainer = EncodeContainerIdForPath(file.DestinationContainerId);
         var candidateEndpoints = new[]
         {
-            $"/v2/container/{encodedContainer}/documents",
-            $"/v2/container/{encodedContainer}/files",
-            $"/v1/Container/{Uri.EscapeDataString(file.DestinationContainerId)}/documents"
+            (Path: "/v1/Document", IncludeAction: true),
+            (Path: "/v1/Document/upload", IncludeAction: false)
         };
 
-        foreach (var endpoint in candidateEndpoints)
+        var failureMessages = new List<string>();
+
+        foreach (var candidate in candidateEndpoints)
         {
             try
             {
                 await using var stream = File.OpenRead(file.FullPath);
                 using var multipart = new MultipartFormDataContent();
+
+                if (candidate.IncludeAction)
+                {
+                    multipart.Add(new StringContent("upload", Encoding.UTF8), "action");
+                }
+
+                multipart.Add(new StringContent(Path.GetFileNameWithoutExtension(file.FullPath), Encoding.UTF8), "name");
+                var extension = Path.GetExtension(file.FullPath).TrimStart('.');
+                if (!string.IsNullOrWhiteSpace(extension))
+                {
+                    multipart.Add(new StringContent(extension, Encoding.UTF8), "extension");
+                }
+
+                if (!string.IsNullOrWhiteSpace(context.CabinetId))
+                {
+                    multipart.Add(new StringContent(context.CabinetId, Encoding.UTF8), "cabinet");
+                }
+
+                multipart.Add(new StringContent(file.DestinationContainerId, Encoding.UTF8), "destination");
+
+                if (file.ProfileValues.Count > 0)
+                {
+                    var profileJson = JsonSerializer.Serialize(file.ProfileValues);
+                    multipart.Add(new StringContent(profileJson, Encoding.UTF8, "application/json"), "profile");
+                }
+
                 var streamContent = new StreamContent(stream);
                 streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
                 multipart.Add(streamContent, "file", Path.GetFileName(file.FullPath));
-
-                foreach (var kvp in file.ProfileValues)
-                {
-                    multipart.Add(new StringContent(kvp.Value ?? string.Empty, Encoding.UTF8), $"profile[{kvp.Key}]");
-                }
 
                 if (!string.IsNullOrWhiteSpace(file.Acl))
                 {
                     multipart.Add(new StringContent(file.Acl, Encoding.UTF8), "acl");
                 }
 
-                await _apiClient.PostAsync(endpoint, multipart, cancellationToken);
+                await _apiClient.PostAsync(candidate.Path, multipart, cancellationToken);
+                Trace.WriteLine(
+                    $"ND-DIRECT upload success endpoint='{candidate.Path}' relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
                 return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
             }
             catch (Exception ex)
             {
                 var status = TryExtractStatusCode(ex);
-                if (status is 404 or 405 or 501)
+                if (status is 400 or 404 or 405 or 415 or 500 or 501)
                 {
+                    failureMessages.Add($"{candidate.Path}:{status}");
+                    Trace.WriteLine(
+                        $"ND-DIRECT upload endpoint rejected endpoint='{candidate.Path}' relativePath='{file.RelativePath}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
                     continue;
                 }
 
+                Trace.WriteLine(
+                    $"ND-DIRECT upload failed endpoint='{candidate.Path}' relativePath='{file.RelativePath}' status={status ?? 0} message='{SanitizeForTrace(ex.Message)}'.");
                 return new DirectUploadFileResult(file.RelativePath, false, status ?? 0, ex.Message);
             }
         }
@@ -282,7 +318,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             file.RelativePath,
             false,
             0,
-            "No supported upload endpoint accepted the request for this destination.");
+            failureMessages.Count > 0
+                ? $"No supported upload endpoint accepted the request for this destination ({string.Join(",", failureMessages)})."
+                : "No supported upload endpoint accepted the request for this destination.");
     }
 
     private async Task<Dictionary<string, string>> BuildProfileValuesForFileAsync(
@@ -411,6 +449,8 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
             if (string.IsNullOrWhiteSpace(childContainerId) && !lookup.QueryReliable)
             {
+                Trace.WriteLine(
+                    $"ND-DIRECT folder-create blocked reason='query-unreliable' parent='{currentContainerId}' segment='{segment}' path='{currentPath}'.");
                 issues.Add(new DirectUploadIssue(
                     DirectUploadIssueSeverity.Error,
                     "FOLDER_ENUMERATION_UNRELIABLE",
@@ -456,6 +496,24 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                         childContainerId = refreshLookup.ContainerId;
                     }
                 }
+                else if (createResult.DuplicateNameConflict)
+                {
+                    folderChildrenCache.Remove(currentContainerId);
+                    _folderListReliabilityCache.Remove(currentContainerId);
+                    var refreshLookup = await TryFindChildContainerByNameAsync(
+                        parentContainerId: currentContainerId,
+                        childName: createResult.RequestedName,
+                        isWorkspaceRoot: isFirstSegment && targetType == NdTargetType.Workspace,
+                        folderChildrenCache: folderChildrenCache,
+                        issues: issues,
+                        cancellationToken: cancellationToken);
+                    childContainerId = refreshLookup.ContainerId;
+                    if (!string.IsNullOrWhiteSpace(childContainerId))
+                    {
+                        Trace.WriteLine(
+                            $"ND-DIRECT folder-create duplicate-resolved parent='{currentContainerId}' name='{createResult.RequestedName}' id='{childContainerId}'.");
+                    }
+                }
             }
 
             if (string.IsNullOrWhiteSpace(childContainerId))
@@ -489,6 +547,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         {
             var cachedReliability = _folderListReliabilityCache.TryGetValue(parentContainerId, out var reliable) && reliable;
             var cachedId = cachedMap.TryGetValue(NormalizeFolderName(childName), out var cached) ? cached : null;
+            if (!string.IsNullOrWhiteSpace(cachedId))
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT folder-resolve matched parent='{parentContainerId}' child='{childName}' id='{cachedId}' source='cache'.");
+            }
             return new ChildLookupResult(cachedId, cachedReliability);
         }
 
@@ -496,6 +559,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         folderChildrenCache[parentContainerId] = listResult.Children;
         _folderListReliabilityCache[parentContainerId] = listResult.QueryReliable;
         var found = listResult.Children.TryGetValue(NormalizeFolderName(childName), out var foundId) ? foundId : null;
+        if (!string.IsNullOrWhiteSpace(found))
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT folder-resolve matched parent='{parentContainerId}' child='{childName}' id='{found}' source='query'.");
+        }
         return new ChildLookupResult(found, listResult.QueryReliable);
     }
 
@@ -553,23 +621,88 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             }
 
             var totalItems = 0;
+            var hydrationCandidates = 0;
+            var hydrationResolved = 0;
+            var hydrationFailures = 0;
             foreach (var item in items)
             {
                 totalItems++;
                 var id = ReadString(item, "id", "containerId", "envId", "nev", "folderId");
                 var name = ReadString(item, "name", "displayName", "title", "description");
                 var extension = ReadString(item, "extension", "ext", "Ext", "type", "objectType", "fileType");
-                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+                if (string.IsNullOrWhiteSpace(id))
                 {
                     continue;
                 }
 
-                if (!IsFolderItem(item, id, extension))
+                var resolvedName = name;
+                var resolvedType = extension;
+                if (ShouldHydrateFolderListEntry(id, extension) &&
+                    (string.IsNullOrWhiteSpace(resolvedName) || !IsFolderItem(item, id, resolvedType)))
+                {
+                    hydrationCandidates++;
+                    var hydrated = await TryHydrateWorkspaceFolderAsync(id, cancellationToken);
+                    if (hydrated.Success)
+                    {
+                        hydrationResolved++;
+                        if (string.IsNullOrWhiteSpace(resolvedName))
+                        {
+                            resolvedName = hydrated.Name;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(resolvedType))
+                        {
+                            resolvedType = hydrated.ExtensionOrType;
+                        }
+                    }
+                    else
+                    {
+                        hydrationFailures++;
+                        Trace.WriteLine(
+                            $"ND-DIRECT folder-list hydration-failed endpoint='{endpoint}' parent='{parentContainerId}' id='{id}' reason='{hydrated.FailureReason}'.");
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(resolvedName))
                 {
                     continue;
                 }
 
-                children[NormalizeFolderName(name)] = id;
+                if (!IsFolderItem(item, id, resolvedType))
+                {
+                    continue;
+                }
+
+                children[NormalizeFolderName(resolvedName)] = id;
+            }
+
+            if (isWorkspaceRoot)
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT workspace-list raw={totalItems} hydrated={hydrationResolved} hydrationFailures={hydrationFailures} endpoint='{endpoint}' parent='{parentContainerId}'.");
+                if (hydrationCandidates > 0 && hydrationFailures > 0)
+                {
+                    issues.Add(new DirectUploadIssue(
+                        DirectUploadIssueSeverity.Error,
+                        "FOLDER_LIST_HYDRATION_FAILED",
+                        $"Workspace folder listing for '{parentContainerId}' could not be reliably hydrated from container info. Folder creation is blocked to avoid duplicates.",
+                        parentContainerId));
+                    return new FolderListResult(children, false, topLevelKeys, listNode);
+                }
+            }
+            else
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT folder-list raw={totalItems} hydrated={hydrationResolved} hydrationFailures={hydrationFailures} endpoint='{endpoint}' parent='{parentContainerId}'.");
+                if (hydrationCandidates > 0 && hydrationFailures > 0)
+                {
+                    issues.Add(new DirectUploadIssue(
+                        DirectUploadIssueSeverity.Error,
+                        "FOLDER_LIST_HYDRATION_FAILED",
+                        $"Folder listing for '{parentContainerId}' could not be reliably hydrated from container info. Folder creation is blocked to avoid duplicates.",
+                        parentContainerId));
+                    return new FolderListResult(children, false, topLevelKeys, listNode);
+                }
             }
 
             if (totalItems > 0 && children.Count == 0)
@@ -583,6 +716,26 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 var sampleExt = ReadString(sample, "extension", "ext", "Ext", "type", "objectType", "fileType");
                 Trace.WriteLine(
                     $"ND-DIRECT folder-list filtered-all endpoint='{endpoint}' parent='{parentContainerId}' listNode='{listNode}' topKeys='{topLevelKeys}' sampleKeys='{sampleKeys}' sampleId='{sampleId}' sampleName='{sampleName}' sampleType='{sampleExt}'.");
+
+                if (children.Count == 0)
+                {
+                    if (isWorkspaceRoot)
+                    {
+                        _workspaceListSupported = true;
+                    }
+                    else
+                    {
+                        _folderListSupported = false;
+                    }
+
+                    issues.Add(new DirectUploadIssue(
+                        DirectUploadIssueSeverity.Error,
+                        "FOLDER_LIST_AMBIGUOUS",
+                        $"Folder listing for '{endpoint}' returned items but none could be matched as folders under '{parentContainerId}'. Creation is blocked to avoid duplicates.",
+                        parentContainerId));
+
+                    return new FolderListResult(children, false, topLevelKeys, listNode);
+                }
             }
 
             if (isWorkspaceRoot)
@@ -670,7 +823,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     {
         if (_folderCreateSupported == false)
         {
-            return new FolderCreateResult(false, null, NormalizeCreatedFolderName(childName));
+            return new FolderCreateResult(false, null, NormalizeCreatedFolderName(childName), false);
         }
 
         var requestedName = NormalizeCreatedFolderName(childName);
@@ -693,15 +846,17 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             var createdId = response is null ? null : TryExtractCreatedContainerId(response.RootElement);
             Trace.WriteLine(
                 $"ND-DIRECT folder-create success endpoint='/v1/Folder' parent='{parentContainerId}' name='{requestedName}' id='{createdId ?? string.Empty}'.");
-            return new FolderCreateResult(true, createdId, requestedName);
+            return new FolderCreateResult(true, createdId, requestedName, false);
         }
         catch (Exception ex)
         {
             var status = TryExtractStatusCode(ex) ?? 0;
             _folderCreateSupported = false;
+            var duplicateNameConflict = status == 400 &&
+                                        ex.Message.IndexOf("already contains a folder with this name", StringComparison.OrdinalIgnoreCase) >= 0;
             Trace.WriteLine(
                 $"ND-DIRECT folder-create failed endpoint='/v1/Folder' parent='{parentContainerId}' name='{requestedName}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
-            return new FolderCreateResult(false, null, requestedName);
+            return new FolderCreateResult(false, null, requestedName, duplicateNameConflict);
         }
     }
 
@@ -1066,10 +1221,103 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return value.Trim();
     }
 
+    private async Task<WorkspaceFolderHydrationResult> TryHydrateWorkspaceFolderAsync(string containerId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var encoded = EncodeContainerIdForPath(containerId);
+            using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info", cancellationToken);
+            var root = document.RootElement;
+            var name = ReadString(root, "name", "displayName", "title", "description");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = TryFindStringRecursive(root, "name", "displayName", "title", "description") ?? string.Empty;
+            }
+
+            var extension = ReadString(root, "extension", "ext", "Ext", "type", "objectType", "fileType");
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                extension = TryFindStringRecursive(root, "extension", "ext", "Ext", "type", "objectType", "fileType") ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(extension) && IsLikelyFolderId(containerId))
+            {
+                extension = "ndfld";
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return new WorkspaceFolderHydrationResult(false, string.Empty, string.Empty, "missing-name");
+            }
+
+            return new WorkspaceFolderHydrationResult(true, name, extension, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            return new WorkspaceFolderHydrationResult(false, string.Empty, string.Empty, SanitizeForTrace(ex.Message));
+        }
+    }
+
+    private static bool ShouldHydrateFolderListEntry(string id, string type)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        var normalizedType = type.Trim().ToLowerInvariant();
+        if (normalizedType is "fil" or "fld" or "folder" or "ndfld" || string.IsNullOrWhiteSpace(normalizedType))
+        {
+            return true;
+        }
+
+        return IsLikelyFolderId(id);
+    }
+
+    private static string? TryFindStringRecursive(JsonElement element, params string[] names)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var name in names)
+            {
+                if (TryGetPropertyIgnoreCase(element, name, out var value) && value.ValueKind == JsonValueKind.String)
+                {
+                    var text = value.GetString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return text;
+                    }
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = TryFindStringRecursive(property.Value, names);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = TryFindStringRecursive(item, names);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static bool IsFolderItem(JsonElement item, string id, string extensionOrType)
     {
         var normalized = extensionOrType.Trim().ToLowerInvariant();
-        if (normalized is "ndfld" or "folder")
+        if (normalized is "ndfld" or "fld" or "folder")
         {
             return true;
         }
