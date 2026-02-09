@@ -8,6 +8,8 @@ public sealed partial class NetDocumentsSyncService
 {
     private readonly NetDocumentsApiClient _apiClient;
     private readonly JobStore _jobStore;
+    private bool _defaultsEndpointFamilyUnavailableForSession;
+    private bool _defaultsEndpointFamilySkipLogged;
 
     public NetDocumentsSyncService(NetDocumentsApiClient apiClient, JobStore jobStore)
     {

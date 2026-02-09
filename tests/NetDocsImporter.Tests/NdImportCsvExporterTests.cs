@@ -338,7 +338,7 @@ public class NdImportCsvExporterTests
 
         var lines = await File.ReadAllLinesAsync(result.OutputPath);
         Assert.Contains("Document Type", lines[0]);
-        Assert.Contains("Correspondence", lines[1]);
+        Assert.Contains("2001", lines[1]);
 
         var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
         Assert.Contains("UNRESOLVED_VALUE", warningLines[1]);
@@ -463,6 +463,131 @@ public class NdImportCsvExporterTests
 
         var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
         Assert.Contains(warningLines, line => line.Contains("UNRESOLVED_VALUE", StringComparison.Ordinal));
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_IncludesAllSchemaColumns_WhenSchemaMetadataEnabled()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include");
+        await store.UpdateFolderProfileModeAsync(rootFolderId, "override");
+        await store.UpsertFolderProfileAsync(
+            jobId,
+            rootFolderId,
+            ProfilePayloadCodec.Serialize(new[]
+            {
+                new ProfileFieldEntry("Document Type", "2001", ProfileFieldMode.Code)
+            }));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\doc.txt",
+            "doc.txt",
+            42,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null));
+
+        var schema = new ProfileSchemaDictionary(
+            "Cab",
+            "1",
+            new[]
+            {
+                new ProfileSchemaField("1001", "Document Type", new[] { new ProfileSchemaValue("2001", "Correspondence") }, isLookup: true),
+                new ProfileSchemaField("1002", "Author", Array.Empty<ProfileSchemaValue>())
+            });
+
+        var result = await new NdImportCsvExporter(store).ExportAsync(
+            jobId,
+            reportsDir,
+            new NdImportExportOptions
+            {
+                IncludeAuditStamps = false,
+                IncludeProfileMetadata = true,
+                ProfileSchema = schema,
+                IncludeAllCabinetAttributes = true
+            });
+
+        var lines = await File.ReadAllLinesAsync(result.OutputPath);
+        Assert.Contains("Document Type", lines[0]);
+        Assert.Contains("Author", lines[0]);
+        CleanupTempRoot(tempRoot);
+    }
+
+    [Fact]
+    public async Task ExportAsync_ConvertsLookupLabelsToKeys_WhenExportLookupKeysEnabled()
+    {
+        var tempRoot = CreateTempRoot();
+        var reportsDir = Path.Combine(tempRoot, "reports");
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+
+        var jobId = Guid.NewGuid().ToString("N");
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, "C:\\data", "Complete"));
+
+        var rootFolderId = await InsertFolderAsync(store, jobId, "C:\\data", string.Empty, null, 0, "include");
+        await store.UpdateFolderProfileModeAsync(rootFolderId, "override");
+        await store.UpsertFolderProfileAsync(
+            jobId,
+            rootFolderId,
+            ProfilePayloadCodec.Serialize(new[]
+            {
+                new ProfileFieldEntry("Matter Type", "Good Value", ProfileFieldMode.Label)
+            }));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            "C:\\data\\doc.txt",
+            "doc.txt",
+            42,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
+            "inherit",
+            null));
+
+        var schema = new ProfileSchemaDictionary(
+            "Cab",
+            "1",
+            new[]
+            {
+                new ProfileSchemaField(
+                    "1001",
+                    "Matter Type",
+                    new[] { new ProfileSchemaValue("GOOD", "Good Value") },
+                    isLookup: true)
+            });
+
+        var result = await new NdImportCsvExporter(store).ExportAsync(
+            jobId,
+            reportsDir,
+            new NdImportExportOptions
+            {
+                IncludeAuditStamps = false,
+                IncludeProfileMetadata = true,
+                ProfileSchema = schema,
+                ExportLookupKeys = true
+            });
+
+        var lines = await File.ReadAllLinesAsync(result.OutputPath);
+        Assert.Contains("GOOD", lines[1]);
+
+        var warningLines = await File.ReadAllLinesAsync(result.WarningsPath);
+        Assert.Single(warningLines);
         CleanupTempRoot(tempRoot);
     }
 

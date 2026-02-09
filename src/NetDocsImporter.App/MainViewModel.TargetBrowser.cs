@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
@@ -653,6 +654,19 @@ public sealed partial class MainViewModel
             WorkspaceLookupStatus = "Select a workspace result first.";
             TargetBrowserMessage = WorkspaceLookupStatus;
             return;
+        }
+
+        if (_workspaceLookupContext is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(SelectedWorkspaceSearchTarget.ParentKey))
+            {
+                _workspaceLookupContext.ParentKey = SelectedWorkspaceSearchTarget.ParentKey;
+            }
+
+            if (!string.IsNullOrWhiteSpace(SelectedWorkspaceSearchTarget.ChildKey))
+            {
+                _workspaceLookupContext.ChildKey = SelectedWorkspaceSearchTarget.ChildKey;
+            }
         }
 
         await SetSelectedTargetAsync(SelectedWorkspaceSearchTarget.Selection, SelectedWorkspaceSearchTarget.PathDisplay);
@@ -1408,6 +1422,7 @@ public sealed partial class MainViewModel
         }
 
         SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(knownPath) ? selection.Name : knownPath;
+        TryApplyWorkspaceLookupKeysFromSelection(selection, SelectedNetDocumentsTargetPath);
         TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}.";
         Trace.WriteLine($"NetDocuments target browser: selected target type={selection.Type}, id={selection.Id}, name={selection.Name}, flow={selection.SourceFlow}");
         OnPropertyChanged(nameof(IsSelectedTargetFavorite));
@@ -1429,10 +1444,17 @@ public sealed partial class MainViewModel
         var cacheKey = BuildTargetSnapshotCacheKey(_selectedNetDocumentsTarget);
         if (!_targetProfileCache.TryGetValue(cacheKey, out var snapshot))
         {
+            var lookupContext =
+                _selectedNetDocumentsTarget.Type == NdTargetType.Workspace &&
+                _workspaceLookupContext is not null &&
+                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey)
+                    ? _workspaceLookupContext
+                    : null;
             snapshot = await RequireSyncService().GetTargetProfileSnapshotAsync(
                 SelectedNetDocumentsCabinetId,
                 SelectedNetDocumentsRepositoryId,
-                _selectedNetDocumentsTarget);
+                _selectedNetDocumentsTarget,
+                lookupContext);
             _targetProfileCache[cacheKey] = snapshot;
         }
 
@@ -1463,6 +1485,62 @@ public sealed partial class MainViewModel
             $"Synced {attributeRows.Count} profile attributes and {defaultRows.Count} inherited defaults at {snapshot.SyncedUtc.ToLocalTime():g}.";
 
         Trace.WriteLine($"NetDocuments profile metadata synced attributes={attributeRows.Count} defaults={defaultRows.Count}");
+    }
+
+    private void TryApplyWorkspaceLookupKeysFromSelection(NdTargetSelection selection, string? pathDisplay)
+    {
+        if (_workspaceLookupContext is null ||
+            selection.Type != NdTargetType.Workspace)
+        {
+            return;
+        }
+
+        if (TryExtractWorkspaceKeys(pathDisplay, out var pathParentKey, out var pathChildKey))
+        {
+            _workspaceLookupContext.ParentKey = pathParentKey;
+            _workspaceLookupContext.ChildKey = pathChildKey;
+            return;
+        }
+
+        if (TryExtractWorkspaceKeys(selection.Name, out var nameParentKey, out var nameChildKey))
+        {
+            _workspaceLookupContext.ParentKey = nameParentKey;
+            _workspaceLookupContext.ChildKey = nameChildKey;
+        }
+    }
+
+    private static bool TryExtractWorkspaceKeys(string? text, out string parentKey, out string childKey)
+    {
+        parentKey = string.Empty;
+        childKey = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var pathPattern = Regex.Match(
+            text,
+            @"\((?<parent>[A-Za-z0-9_-]+)\)\s*/\s*.*\((?<child>[A-Za-z0-9_-]+)\)",
+            RegexOptions.CultureInvariant);
+        if (pathPattern.Success)
+        {
+            parentKey = pathPattern.Groups["parent"].Value;
+            childKey = pathPattern.Groups["child"].Value;
+            return !string.IsNullOrWhiteSpace(parentKey) && !string.IsNullOrWhiteSpace(childKey);
+        }
+
+        var dottedPattern = Regex.Match(
+            text,
+            @"\b(?<parent>[A-Za-z0-9_-]+)\.(?<child>[A-Za-z0-9_-]+)\b",
+            RegexOptions.CultureInvariant);
+        if (dottedPattern.Success)
+        {
+            parentKey = dottedPattern.Groups["parent"].Value;
+            childKey = dottedPattern.Groups["child"].Value;
+            return !string.IsNullOrWhiteSpace(parentKey) && !string.IsNullOrWhiteSpace(childKey);
+        }
+
+        return false;
     }
 
     private void UpdateProfileViewCollections(

@@ -7,7 +7,7 @@
         xmlns:core="clr-namespace:NetDocsImporter.Core;assembly=NetDocsImporter.Core"
         xmlns:steps="clr-namespace:NetDocsImporter.App.Views.Steps"
         mc:Ignorable="d"
-        Title="NetDocs Importer" Height="720" Width="1180" MinHeight="620" MinWidth="980">
+        Title="NetDocs Importer" Height="720" Width="1180" MinHeight="620" MinWidth="980" WindowState="Maximized">
     <Window.Resources>
         <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />

@@ -12,6 +12,22 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         InitializeComponent();
     }
 
+    public void OnSelectFolder(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnSelectFolder(sender, e);
+        }
+    }
+
+    public void OnCancelScan(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnCancelScan(sender, e);
+        }
+    }
+
     public void OnFolderTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (Window.GetWindow(this) is MainWindow main)

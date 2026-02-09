@@ -19,6 +19,8 @@ public sealed class AppSettings
 
     public string NdImportUsername { get; set; } = string.Empty;
 
+    public string NdImportDateFormat { get; set; } = "DMY";
+
     public bool RememberNdImportPassword { get; set; }
 
     public string NdImportPasswordRef { get; set; } = string.Empty;

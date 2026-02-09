@@ -74,6 +74,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            _refreshedCabinetSchemaThisSession.Clear();
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
             _workspaceLookupPairCache.Clear();
@@ -103,6 +104,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            _refreshedCabinetSchemaThisSession.Clear();
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
             _workspaceLookupPairCache.Clear();
@@ -115,10 +117,7 @@ public sealed partial class MainViewModel
             var cabinet = _netDocumentsCabinets.FirstOrDefault(c => c.CabinetId == value);
             _selectedNetDocumentsCabinetName = cabinet?.CabinetName ?? string.Empty;
             OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
-            if (cabinet is not null && !string.Equals(NdImportCabinet, cabinet.CabinetName, StringComparison.OrdinalIgnoreCase))
-            {
-                NdImportCabinet = cabinet.CabinetName;
-            }
+            SyncNdImportCabinetFromSelectedCabinetId();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
@@ -219,6 +218,7 @@ public sealed partial class MainViewModel
 
         try
         {
+            _refreshedCabinetSchemaThisSession.Clear();
             var auth = RequireAuthService();
             var sync = RequireSyncService();
 
@@ -322,6 +322,7 @@ public sealed partial class MainViewModel
         {
             IsNetDocumentsConnected = false;
             _netDocumentsCurrentUserId = string.Empty;
+            _refreshedCabinetSchemaThisSession.Clear();
         }
     }
 
@@ -463,6 +464,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         }
 
+        _refreshedCabinetSchemaThisSession.Clear();
         FilterCabinetsByRepository();
         await LoadSyncedAttributesForSelectedCabinetAsync();
         await LoadNetDocumentsTargetContainersAsync();
@@ -503,6 +505,7 @@ public sealed partial class MainViewModel
                 {
                     _selectedNetDocumentsCabinetId = string.Empty;
                     _selectedNetDocumentsCabinetName = string.Empty;
+                    _refreshedCabinetSchemaThisSession.Clear();
                     OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
                     OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
                     return;
@@ -512,11 +515,27 @@ public sealed partial class MainViewModel
                 {
                     _selectedNetDocumentsCabinetId = _netDocumentsCabinets[0].CabinetId;
                     _selectedNetDocumentsCabinetName = _netDocumentsCabinets[0].CabinetName;
+                    _refreshedCabinetSchemaThisSession.Clear();
                     OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
                     OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+                    SyncNdImportCabinetFromSelectedCabinetId();
                 }
             });
         });
+    }
+
+    private void SyncNdImportCabinetFromSelectedCabinetId()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedNetDocumentsCabinetId))
+        {
+            return;
+        }
+
+        var selectedId = _selectedNetDocumentsCabinetId.Trim();
+        if (!string.Equals(NdImportCabinet, selectedId, StringComparison.OrdinalIgnoreCase))
+        {
+            NdImportCabinet = selectedId;
+        }
     }
 
     private async Task EnsureCurrentJobRepositoryAsync(string repositoryId)
@@ -653,7 +672,7 @@ public sealed partial class MainViewModel
             Buttons = { TaskDialogButton.OK }
         };
 
-        TaskDialog.ShowDialog(dialog);
+        ShowTaskDialog(dialog);
     }
 }
 

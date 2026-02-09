@@ -6,6 +6,10 @@
              mc:Ignorable="d"
              d:DesignHeight="500" d:DesignWidth="900">
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="360" MinWidth="260" />
             <ColumnDefinition Width="6" />
@@ -13,7 +17,29 @@
             <ColumnDefinition Width="340" />
         </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Column="0">
+        <Border Grid.Row="0" Grid.ColumnSpan="4" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Select Folder"
+                            Width="120"
+                            Margin="0,0,6,0"
+                            Click="OnSelectFolder"
+                            IsEnabled="{Binding CanSelectSourceFolder}"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button Content="Cancel Scan"
+                            Width="110"
+                            Click="OnCancelScan"
+                            IsEnabled="{Binding IsScanning}"
+                            Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Style="{StaticResource SecondaryButton}" />
+                </StackPanel>
+                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#555555" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="1" Grid.Column="0" Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
             <TextBlock Text="Folders" Style="{StaticResource SectionTitle}" />
             <TextBox Text="{Binding TreeSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
             <Border Background="#F8FAFC" BorderBrush="#D9E2EC" BorderThickness="1" CornerRadius="6" Padding="6">
@@ -59,10 +85,11 @@
             </Border>
         </StackPanel>
 
-        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+        <GridSplitter Grid.Row="1" Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                      Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}"
                       Background="#E4E7EB" ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
 
-        <StackPanel Grid.Column="2" Margin="8,0,12,0">
+        <StackPanel Grid.Row="1" Grid.Column="2" Margin="8,0,12,0" Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
             <TextBlock Text="Files" Style="{StaticResource SectionTitle}" />
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                 <TextBox Width="220" Text="{Binding FileSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0" />
@@ -91,8 +118,40 @@
             </DataGrid>
         </StackPanel>
 
-        <ScrollViewer Grid.Column="3" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Pre-export Warnings" Style="{StaticResource SectionTitle}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="{Binding PreExportLargeFileWarningsDisplay, StringFormat=Large files (&gt;1.8GB): {0}}" Foreground="#B45309" Margin="0,0,12,0" />
+                            <TextBlock Text="{Binding PreExportEmptyFolderWarningsDisplay, StringFormat=Empty folders: {0}}" Foreground="#B45309" />
+                        </StackPanel>
+                        <TextBlock Text="Running checks..." Foreground="#555555" Margin="0,0,0,6">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPreExportWarningsBusy}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="{Binding PreExportWarningsStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <ListView ItemsSource="{Binding PreExportWarnings}" Height="140">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Type" Width="100" DisplayMemberBinding="{Binding Type}" />
+                                    <GridViewColumn Header="Path" Width="360" DisplayMemberBinding="{Binding Path}" />
+                                    <GridViewColumn Header="Detail" Width="240" DisplayMemberBinding="{Binding Detail}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </StackPanel>
+                </Border>
+
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />

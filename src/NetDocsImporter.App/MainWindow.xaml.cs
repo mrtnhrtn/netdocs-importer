@@ -211,6 +211,21 @@ public partial class MainWindow : Window
         await _viewModel.LaunchNdImportAsync();
     }
 
+    public void OnBrowseNdImportExecutable(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "ndimport executable (ndimport.exe)|ndimport.exe|Executable files (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _viewModel.NdImportPath = dialog.FileName;
+        }
+    }
+
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();

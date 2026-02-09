@@ -34,9 +34,17 @@ public sealed class NdImportExportOptions
 
     public ProfileSchemaDictionary? ProfileSchema { get; set; }
 
+    public bool IncludeAllCabinetAttributes { get; set; } = true;
+
+    public bool ExportLookupKeys { get; set; } = true;
+
     public bool ValidateLookupKeys { get; set; } = true;
 
     public EffectiveProfileDefaults? EffectiveProfileDefaults { get; set; }
+
+    public bool UseNdImportDateFormat { get; set; }
+
+    public string NdImportDateFormat { get; set; } = string.Empty;
 }
 
 public sealed class NdImportExportResult
@@ -84,6 +92,41 @@ public sealed class NdImportExportResult
     public int FileExcludeOverrides { get; }
 
     public int AccessDeniedWarnings { get; }
+}
+
+public sealed class PreExportWarningItem
+{
+    public PreExportWarningItem(string type, string path, string detail)
+    {
+        Type = type;
+        Path = path;
+        Detail = detail;
+    }
+
+    public string Type { get; }
+
+    public string Path { get; }
+
+    public string Detail { get; }
+}
+
+public sealed class NdImportWarningPreviewResult
+{
+    public NdImportWarningPreviewResult(
+        int largeFileWarnings,
+        int emptyFolderWarnings,
+        IReadOnlyList<PreExportWarningItem> warnings)
+    {
+        LargeFileWarnings = largeFileWarnings;
+        EmptyFolderWarnings = emptyFolderWarnings;
+        Warnings = warnings;
+    }
+
+    public int LargeFileWarnings { get; }
+
+    public int EmptyFolderWarnings { get; }
+
+    public IReadOnlyList<PreExportWarningItem> Warnings { get; }
 }
 
 public static class NdImportCsv
@@ -142,9 +185,11 @@ public sealed class NdImportCsvExporter
         var folderProfiles = await _jobStore.GetFolderProfilesForJobAsync(jobId, cancellationToken);
 
         Directory.CreateDirectory(reportsDirectory);
+        var diagnosticsDirectory = Path.Combine(reportsDirectory, "diagnostics");
+        Directory.CreateDirectory(diagnosticsDirectory);
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         var outputPath = Path.Combine(reportsDirectory, $"ndimport-{jobId}-{timestamp}.csv");
-        var warningsPath = Path.Combine(reportsDirectory, $"ndimport-{jobId}-{timestamp}-warnings.csv");
+        var warningsPath = Path.Combine(diagnosticsDirectory, $"ndimport-{jobId}-{timestamp}-warnings.csv");
 
         var largeFileWarnings = 0;
         var accessDeniedWarnings = 0;
@@ -163,7 +208,12 @@ public sealed class NdImportCsvExporter
         var includeProfileMetadata = options.IncludeProfileMetadata || (options.EffectiveProfileDefaults?.HasValues ?? false);
 
         var profileColumns = includeProfileMetadata
-            ? BuildProfileColumns(folders, folderProfiles, options.ProfileSchema, options.EffectiveProfileDefaults)
+            ? BuildProfileColumns(
+                folders,
+                folderProfiles,
+                options.ProfileSchema,
+                options.EffectiveProfileDefaults,
+                options.IncludeAllCabinetAttributes)
             : new List<string>();
 
         header.AddRange(profileColumns);
@@ -223,7 +273,7 @@ public sealed class NdImportCsvExporter
 
                 if (TryGetFileCreationUtc(file.FullPath, out var createdUtc))
                 {
-                    row.Add(NdImportCsv.Escape(FormatLocalDate(createdUtc)));
+                    row.Add(NdImportCsv.Escape(FormatLocalDate(createdUtc, options.UseNdImportDateFormat, options.NdImportDateFormat)));
                 }
                 else
                 {
@@ -232,14 +282,31 @@ public sealed class NdImportCsvExporter
                 }
 
                 row.Add(NdImportCsv.Escape(importedBy));
-                row.Add(NdImportCsv.Escape(FormatLocalDate(file.ModifiedUtc)));
+                row.Add(NdImportCsv.Escape(FormatLocalDate(file.ModifiedUtc, options.UseNdImportDateFormat, options.NdImportDateFormat)));
             }
 
             await writer.WriteLineAsync(string.Join(",", row));
         }
 
-        largeFileWarnings = allFiles.Count(f => f.IsLargeWarning || f.SizeBytes > LargeFileThresholdBytes);
-        var emptyFolderWarnings = await WriteWarningsReportAsync(jobId, warningsPath, allFiles, folders, warnings, cancellationToken);
+        var excludedWarnings = allFiles
+            .Where(f => string.Equals(f.ImportMode, "exclude", StringComparison.OrdinalIgnoreCase))
+            .Select(file => new ExportWarning(
+                "EXCLUDED_FILE",
+                string.Empty,
+                string.Empty,
+                file.RelativePath,
+                file.FullPath,
+                file.SizeBytes.ToString(CultureInfo.InvariantCulture),
+                file.ImportReason ?? "User excluded"))
+            .ToList();
+        warnings.AddRange(excludedWarnings);
+
+        var structuralWarnings = await BuildStructuralWarningsAsync(jobId, allFiles, folders, cancellationToken);
+        warnings.AddRange(structuralWarnings.Warnings);
+
+        largeFileWarnings = structuralWarnings.LargeFileWarnings;
+        var emptyFolderWarnings = structuralWarnings.EmptyFolderWarnings;
+        await WriteWarningsReportAsync(warningsPath, warnings, cancellationToken);
         var unresolvedFieldWarnings = warnings.Count(w => w.Type == "UNRESOLVED_FIELD");
         var unresolvedValueWarnings = warnings.Count(w => w.Type == "UNRESOLVED_VALUE");
         var fileIncludeOverrides = allFiles.Count(f => string.Equals(f.ImportMode, "include", StringComparison.OrdinalIgnoreCase));
@@ -257,23 +324,46 @@ public sealed class NdImportCsvExporter
             accessDeniedWarnings);
     }
 
-    private async Task<int> WriteWarningsReportAsync(
+    public async Task<NdImportWarningPreviewResult> PreviewWarningsAsync(
         string jobId,
-        string warningsPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            throw new ArgumentException("Job id is required.", nameof(jobId));
+        }
+
+        await _jobStore.InitializeAsync(cancellationToken);
+        var allFiles = await _jobStore.GetFilesForJobAsync(jobId, cancellationToken);
+        var folders = await _jobStore.GetFoldersForJobAsync(jobId, cancellationToken);
+        var structuralWarnings = await BuildStructuralWarningsAsync(jobId, allFiles, folders, cancellationToken);
+
+        var items = structuralWarnings.Warnings
+            .Where(w => string.Equals(w.Type, "LARGE_FILE", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(w.Type, "EMPTY_FOLDER", StringComparison.OrdinalIgnoreCase))
+            .Select(w => new PreExportWarningItem(
+                w.Type,
+                string.IsNullOrWhiteSpace(w.RelativePath) ? w.FullPath : w.RelativePath,
+                w.Details))
+            .ToList();
+
+        return new NdImportWarningPreviewResult(
+            structuralWarnings.LargeFileWarnings,
+            structuralWarnings.EmptyFolderWarnings,
+            items);
+    }
+
+    private async Task<StructuralWarningSummary> BuildStructuralWarningsAsync(
+        string jobId,
         IReadOnlyList<FileRecord> allFiles,
         IReadOnlyList<FolderRecord> folders,
-        List<ExportWarning> warnings,
         CancellationToken cancellationToken)
     {
         var counts = await _jobStore.GetFolderImportCountsForJobAsync(jobId, cancellationToken);
         var countsByFolder = counts.ToDictionary(c => c.FolderId, c => c, StringComparer.OrdinalIgnoreCase);
 
         var emptyFolderWarnings = 0;
-
-        await using var stream = new FileStream(warningsPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-
-        await writer.WriteLineAsync("TYPE,FIELD,VALUE,RELATIVE PATH,FULL PATH,SIZE BYTES,DETAILS");
+        var warnings = new List<ExportWarning>();
 
         foreach (var file in allFiles)
         {
@@ -292,18 +382,6 @@ public sealed class NdImportCsvExporter
                 file.FullPath,
                 file.SizeBytes.ToString(CultureInfo.InvariantCulture),
                 "File exceeds 1.8GB"));
-        }
-
-        foreach (var file in allFiles.Where(f => string.Equals(f.ImportMode, "exclude", StringComparison.OrdinalIgnoreCase)))
-        {
-            warnings.Add(new ExportWarning(
-                "EXCLUDED_FILE",
-                string.Empty,
-                string.Empty,
-                file.RelativePath,
-                file.FullPath,
-                file.SizeBytes.ToString(CultureInfo.InvariantCulture),
-                file.ImportReason ?? "User excluded"));
         }
 
         foreach (var folder in folders)
@@ -331,8 +409,25 @@ public sealed class NdImportCsvExporter
                 "No included files"));
         }
 
+        return new StructuralWarningSummary(
+            warnings.Count(w => string.Equals(w.Type, "LARGE_FILE", StringComparison.OrdinalIgnoreCase)),
+            emptyFolderWarnings,
+            warnings);
+    }
+
+    private static async Task WriteWarningsReportAsync(
+        string warningsPath,
+        IReadOnlyList<ExportWarning> warnings,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(warningsPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+
+        await writer.WriteLineAsync("TYPE,FIELD,VALUE,RELATIVE PATH,FULL PATH,SIZE BYTES,DETAILS");
+
         foreach (var warning in warnings)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var row = string.Join(",", new[]
             {
                 warning.Type,
@@ -345,18 +440,33 @@ public sealed class NdImportCsvExporter
             });
             await writer.WriteLineAsync(row);
         }
-
-        return emptyFolderWarnings;
     }
 
     private static IReadOnlyList<string> BuildProfileColumns(
         IReadOnlyList<FolderRecord> folders,
         IReadOnlyDictionary<string, string> folderProfiles,
         ProfileSchemaDictionary? schema,
-        EffectiveProfileDefaults? effectiveDefaults)
+        EffectiveProfileDefaults? effectiveDefaults,
+        bool includeAllCabinetAttributes)
     {
         var columns = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (schema is not null && includeAllCabinetAttributes)
+        {
+            foreach (var field in schema.Fields)
+            {
+                if (string.IsNullOrWhiteSpace(field.Name))
+                {
+                    continue;
+                }
+
+                if (seen.Add(field.Name))
+                {
+                    columns.Add(field.Name);
+                }
+            }
+        }
 
         if (effectiveDefaults?.HasValues == true)
         {
@@ -438,7 +548,7 @@ public sealed class NdImportCsvExporter
         List<ExportWarning> warnings)
     {
         var schema = options.ProfileSchema;
-        var valuesByColumn = BuildDefaultValuesByColumn(options.EffectiveProfileDefaults);
+        var valuesByColumn = BuildDefaultValuesByColumn(options.EffectiveProfileDefaults, options.ExportLookupKeys);
         var explicitColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
@@ -467,7 +577,7 @@ public sealed class NdImportCsvExporter
         return values;
     }
 
-    private static Dictionary<string, string> BuildDefaultValuesByColumn(EffectiveProfileDefaults? effectiveDefaults)
+    private static Dictionary<string, string> BuildDefaultValuesByColumn(EffectiveProfileDefaults? effectiveDefaults, bool exportLookupKeys)
     {
         var valuesByColumn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (effectiveDefaults?.HasValues != true)
@@ -482,8 +592,10 @@ public sealed class NdImportCsvExporter
                 continue;
             }
 
-            var raw = string.IsNullOrWhiteSpace(value.RawValue) ? value.DisplayValue : value.RawValue;
-            valuesByColumn[value.AttributeName] = EscapeInlineSemicolons(raw);
+            var preferred = exportLookupKeys
+                ? (string.IsNullOrWhiteSpace(value.RawValue) ? value.DisplayValue : value.RawValue)
+                : (string.IsNullOrWhiteSpace(value.DisplayValue) ? value.RawValue : value.DisplayValue);
+            valuesByColumn[value.AttributeName] = EscapeInlineSemicolons(preferred);
         }
 
         return valuesByColumn;
@@ -538,7 +650,14 @@ public sealed class NdImportCsvExporter
         var transformed = new List<string>(tokens.Count);
         foreach (var token in tokens)
         {
-            var resolved = ResolveSingleValue(entry, field, token, options.ValidateLookupKeys, file, warnings);
+            var resolved = ResolveSingleValue(
+                entry,
+                field,
+                token,
+                options.ValidateLookupKeys,
+                options.ExportLookupKeys,
+                file,
+                warnings);
             transformed.Add(EscapeInlineSemicolons(resolved));
         }
 
@@ -555,6 +674,7 @@ public sealed class NdImportCsvExporter
         ProfileSchemaField field,
         string token,
         bool validateLookupKeys,
+        bool exportLookupKeys,
         FileRecord file,
         List<ExportWarning> warnings)
     {
@@ -562,21 +682,26 @@ public sealed class NdImportCsvExporter
         {
             if (entry.Mode == ProfileFieldMode.Label)
             {
-                if (field.ValuesByLabel.ContainsKey(token))
+                if (field.ValuesByLabel.TryGetValue(token, out var codeFromLabel))
                 {
-                    return token;
+                    return exportLookupKeys ? codeFromLabel : token;
                 }
 
                 if (field.ValuesByCode.TryGetValue(token, out var labelFromCode))
                 {
-                    return labelFromCode;
+                    return exportLookupKeys ? token : labelFromCode;
+                }
+
+                if (!validateLookupKeys)
+                {
+                    return token;
                 }
             }
             else
             {
-                if (!validateLookupKeys && field.ValuesByCode.TryGetValue(token, out var laxLabel))
+                if (field.ValuesByCode.TryGetValue(token, out var strictLabel))
                 {
-                    return laxLabel;
+                    return exportLookupKeys ? token : strictLabel;
                 }
 
                 if (!validateLookupKeys)
@@ -584,9 +709,9 @@ public sealed class NdImportCsvExporter
                     return token;
                 }
 
-                if (field.ValuesByCode.TryGetValue(token, out var strictLabel))
+                if (field.ValuesByLabel.TryGetValue(token, out var codeFromLabel))
                 {
-                    return strictLabel;
+                    return exportLookupKeys ? codeFromLabel : token;
                 }
             }
 
@@ -603,9 +728,19 @@ public sealed class NdImportCsvExporter
 
         if (entry.Mode == ProfileFieldMode.Code)
         {
+            if (field.ValuesByCode.Count == 0 && field.ValuesByLabel.Count == 0)
+            {
+                return token;
+            }
+
             if (field.ValuesByCode.TryGetValue(token, out var label))
             {
-                return label;
+                return exportLookupKeys ? token : label;
+            }
+
+            if (field.ValuesByLabel.TryGetValue(token, out var code))
+            {
+                return exportLookupKeys ? code : token;
             }
 
             warnings.Add(new ExportWarning(
@@ -619,7 +754,15 @@ public sealed class NdImportCsvExporter
             return token;
         }
 
-        if (!string.IsNullOrWhiteSpace(token) && field.ValuesByLabel.Count > 0 && !field.ValuesByLabel.ContainsKey(token))
+        if (field.ValuesByLabel.TryGetValue(token, out var resolvedCode))
+        {
+            return exportLookupKeys ? resolvedCode : token;
+        }
+
+        if (!string.IsNullOrWhiteSpace(token) &&
+            field.ValuesByLabel.Count > 0 &&
+            !field.ValuesByLabel.ContainsKey(token) &&
+            !field.ValuesByCode.ContainsKey(token))
         {
             warnings.Add(new ExportWarning(
                 "UNRESOLVED_VALUE",
@@ -655,6 +798,11 @@ public sealed class NdImportCsvExporter
         string FullPath,
         string SizeBytes,
         string Details);
+
+    private sealed record StructuralWarningSummary(
+        int LargeFileWarnings,
+        int EmptyFolderWarnings,
+        IReadOnlyList<ExportWarning> Warnings);
 
     private static string ResolveFolderPath(string relativePath, NdImportMappingMode mappingMode, string anchorFolderPath)
     {
@@ -693,8 +841,25 @@ public sealed class NdImportCsvExporter
         }
     }
 
-    private static string FormatLocalDate(DateTime utcValue)
+    private static string FormatLocalDate(DateTime utcValue, bool useNdImportDateFormat, string ndImportDateFormat = "")
     {
-        return utcValue.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        var localValue = utcValue.ToLocalTime();
+        if (!string.IsNullOrWhiteSpace(ndImportDateFormat))
+        {
+            return ndImportDateFormat.Trim().ToUpperInvariant() switch
+            {
+                "DMY" => localValue.ToString("d/M/yyyy H:mm:ss", CultureInfo.InvariantCulture),
+                "YMD" => localValue.ToString("yyyy/M/d H:mm:ss", CultureInfo.InvariantCulture),
+                "MDY" => localValue.ToString("M/d/yyyy H:mm:ss", CultureInfo.InvariantCulture),
+                _ => localValue.ToString("d/M/yyyy H:mm:ss", CultureInfo.InvariantCulture)
+            };
+        }
+
+        if (useNdImportDateFormat)
+        {
+            return localValue.ToString("M/d/yyyy h:mm:ss tt", CultureInfo.InvariantCulture);
+        }
+
+        return localValue.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 }

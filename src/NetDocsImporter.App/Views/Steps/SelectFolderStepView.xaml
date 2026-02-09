@@ -8,8 +8,8 @@
              d:DesignHeight="720" d:DesignWidth="900">
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel>
-        <TextBlock Text="Connect, Select Folder, Target Container" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Connect first, then scan a local folder, then choose a Workspace, Workspace Filter, or Folder destination."
+        <TextBlock Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
+        <TextBlock Text="Login and choose your NetDocuments location to pre-fill profiling attributes."
                    Foreground="#555555" Margin="0,0,0,8" TextWrapping="Wrap" />
 
         <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
@@ -69,24 +69,9 @@
             </StackPanel>
         </Border>
 
-        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
-            <StackPanel>
-                <TextBlock Text="2) Select Source Folder" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <StackPanel Orientation="Horizontal">
-                    <Button Content="Select Folder" Width="120" Margin="0,0,6,0" Click="OnSelectFolder"
-                            IsEnabled="{Binding CanSelectSourceFolder}"
-                            Style="{StaticResource SecondaryButton}" />
-                    <Button Content="Cancel Scan" Width="110" Click="OnCancelScan"
-                            IsEnabled="{Binding IsScanning}"
-                            Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            Style="{StaticResource SecondaryButton}" />
-                </StackPanel>
-            </StackPanel>
-        </Border>
-
         <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
             <StackPanel>
-                <TextBlock Text="3) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <TextBlock Text="2) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
                 <TextBlock Text="Repository" Foreground="#555555" />
                 <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
                           SelectedValuePath="RepositoryId"

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using NetDocsImporter.Core;
@@ -7,6 +8,18 @@ namespace NetDocsImporter.NetDocs;
 
 public sealed partial class NetDocumentsSyncService
 {
+    private enum TargetDefaultsSource
+    {
+        V1Endpoints,
+        WorkspaceLookupContext,
+        V2ContainerInfo,
+        None
+    }
+
+    private readonly record struct TargetDefaultsResolutionResult(
+        EffectiveProfileDefaults Defaults,
+        TargetDefaultsSource Source);
+
     public async Task<IReadOnlyList<NdTargetSelection>> GetSupportedTargetContainersAsync(
         string cabinetId,
         CancellationToken cancellationToken = default)
@@ -568,6 +581,7 @@ public sealed partial class NetDocumentsSyncService
         string cabinetId,
         string repositoryId,
         NdTargetSelection target,
+        WorkspaceLookupContext? lookupContext = null,
         CancellationToken cancellationToken = default)
     {
         await _jobStore.InitializeAsync(cancellationToken);
@@ -590,11 +604,18 @@ public sealed partial class NetDocumentsSyncService
                 .ToList();
         }
 
-        var defaults = await TryFetchTargetDefaultsAsync(target, attributes, cancellationToken);
+        var defaultsResolution = await TryFetchTargetDefaultsAsync(
+            target,
+            attributes,
+            lookupContext,
+            cancellationToken);
+        var defaults = defaultsResolution.Defaults;
         await ResolveDefaultDisplayValuesAsync(cabinetId, attributes, defaults, cancellationToken);
 
         Trace.WriteLine(
             $"NetDocuments target profile sync: target={target.Type}:{target.Id}, attributes={attributes.Count}, defaults={defaults.ValuesByAttributeId.Count}");
+        Trace.WriteLine(
+            $"ND-PROFILE defaults source={defaultsResolution.Source} count={defaults.ValuesByAttributeId.Count} target={target.Id}");
 
         return new NdTargetProfileSnapshot
         {
@@ -1514,29 +1535,61 @@ public sealed partial class NetDocumentsSyncService
         return string.Empty;
     }
 
-    private async Task<EffectiveProfileDefaults> TryFetchTargetDefaultsAsync(
+    private async Task<TargetDefaultsResolutionResult> TryFetchTargetDefaultsAsync(
         NdTargetSelection target,
         IReadOnlyList<NdProfileAttribute> attributes,
+        WorkspaceLookupContext? lookupContext,
         CancellationToken cancellationToken)
     {
-        foreach (var path in BuildDefaultEndpointCandidates(target))
+        if (!_defaultsEndpointFamilyUnavailableForSession)
         {
-            try
+            var allClientErrors = true;
+            var attemptedCount = 0;
+            foreach (var path in BuildDefaultEndpointCandidates(target))
             {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var parsed = ParseEffectiveDefaults(document.RootElement, attributes);
-                if (parsed.HasValues)
+                attemptedCount++;
+                try
                 {
-                    return parsed;
+                    using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                    allClientErrors = false;
+                    var parsed = ParseEffectiveDefaults(document.RootElement, attributes);
+                    if (parsed.HasValues)
+                    {
+                        return new TargetDefaultsResolutionResult(parsed, TargetDefaultsSource.V1Endpoints);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    allClientErrors &= IsClientError400Or404(ex);
                 }
             }
-            catch
+
+            if (attemptedCount > 0 && allClientErrors)
             {
-                // Try next endpoint.
+                _defaultsEndpointFamilyUnavailableForSession = true;
+                _defaultsEndpointFamilySkipLogged = true;
+                Trace.WriteLine("ND-PROFILE defaults-endpoint-family unavailable; using fallback path");
             }
         }
+        else if (!_defaultsEndpointFamilySkipLogged)
+        {
+            _defaultsEndpointFamilySkipLogged = true;
+            Trace.WriteLine("ND-PROFILE defaults-endpoint-family unavailable; using fallback path");
+        }
 
-        return EffectiveProfileDefaults.Empty;
+        var fromLookupContext = BuildDefaultsFromWorkspaceLookupContext(attributes, lookupContext);
+        if (fromLookupContext.HasValues)
+        {
+            return new TargetDefaultsResolutionResult(fromLookupContext, TargetDefaultsSource.WorkspaceLookupContext);
+        }
+
+        var fromContainerInfo = await TryFetchDefaultsFromV2ContainerInfoAsync(target, attributes, cancellationToken);
+        if (fromContainerInfo.HasValues)
+        {
+            return new TargetDefaultsResolutionResult(fromContainerInfo, TargetDefaultsSource.V2ContainerInfo);
+        }
+
+        return new TargetDefaultsResolutionResult(EffectiveProfileDefaults.Empty, TargetDefaultsSource.None);
     }
 
     private static IEnumerable<string> BuildDefaultEndpointCandidates(NdTargetSelection target)
@@ -1549,6 +1602,353 @@ public sealed partial class NetDocumentsSyncService
         {
             yield return $"/v1/Workspace/{escaped}/profileDefaults";
         }
+    }
+
+    private static bool IsClientError400Or404(Exception ex)
+    {
+        if (ex is not InvalidOperationException invalidOperation)
+        {
+            return false;
+        }
+
+        return invalidOperation.Message.Contains("(400 ", StringComparison.OrdinalIgnoreCase) ||
+               invalidOperation.Message.Contains("(404 ", StringComparison.OrdinalIgnoreCase) ||
+               invalidOperation.Message.Contains(" 400 ", StringComparison.OrdinalIgnoreCase) ||
+               invalidOperation.Message.Contains(" 404 ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static EffectiveProfileDefaults BuildDefaultsFromWorkspaceLookupContext(
+        IReadOnlyList<NdProfileAttribute> attributes,
+        WorkspaceLookupContext? lookupContext)
+    {
+        if (lookupContext is null)
+        {
+            return EffectiveProfileDefaults.Empty;
+        }
+
+        var defaults = new EffectiveProfileDefaults();
+        if (lookupContext.IsParentChild)
+        {
+            AddDefaultFromAttributeNumber(
+                defaults,
+                attributes,
+                lookupContext.ParentAttrNum,
+                lookupContext.ParentKey,
+                lookupContext.ParentAttrName);
+            AddDefaultFromAttributeNumber(
+                defaults,
+                attributes,
+                lookupContext.ChildAttrNum,
+                lookupContext.ChildKey,
+                lookupContext.ChildAttrName);
+        }
+        else
+        {
+            var attrNum = lookupContext.ParentAttrNum > 0
+                ? lookupContext.ParentAttrNum
+                : lookupContext.WorkspaceAttrNum;
+            var attrName = string.IsNullOrWhiteSpace(lookupContext.ParentAttrName)
+                ? lookupContext.WorkspaceAttrName
+                : lookupContext.ParentAttrName;
+            var key = !string.IsNullOrWhiteSpace(lookupContext.ParentKey)
+                ? lookupContext.ParentKey
+                : lookupContext.ChildKey;
+            AddDefaultFromAttributeNumber(defaults, attributes, attrNum, key, attrName);
+        }
+
+        return defaults;
+    }
+
+    private async Task<EffectiveProfileDefaults> TryFetchDefaultsFromV2ContainerInfoAsync(
+        NdTargetSelection target,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(target.Id))
+        {
+            return EffectiveProfileDefaults.Empty;
+        }
+
+        var defaults = new EffectiveProfileDefaults();
+        var select = Uri.EscapeDataString(
+            "StandardAttributes,CustomAttributes,StatusAttributes,ContainerInfo,DeletedStatus,Descriptions,DispNames,UseLongName");
+        var candidateIds = BuildContainerIdCandidates(target.Id, NormalizeWorkspaceEnvId(target.Id))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToList();
+        if (candidateIds.Count == 0)
+        {
+            candidateIds.Add(target.Id);
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidateId in candidateIds)
+        {
+            if (!seen.Add(candidateId))
+            {
+                continue;
+            }
+
+            try
+            {
+                var encoded = EncodeContainerIdForPath(candidateId);
+                var path = $"/v2/container/{encoded}/info?select={select}&options=AddToRecents";
+                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object &&
+                    TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+                    dataNode.ValueKind == JsonValueKind.Object)
+                {
+                    root = dataNode;
+                }
+
+                AddDefaultsFromContainerInfoNode(root, attributes, defaults);
+                if (defaults.HasValues)
+                {
+                    return defaults;
+                }
+            }
+            catch
+            {
+                // Try the next candidate id.
+            }
+        }
+
+        return defaults;
+    }
+
+    private static void AddDefaultsFromContainerInfoNode(
+        JsonElement root,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        EffectiveProfileDefaults defaults)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var propertyName in new[] { "customAttributes", "standardAttributes", "statusAttributes", "attributes" })
+        {
+            if (TryGetPropertyIgnoreCase(root, propertyName, out var node))
+            {
+                AddDefaultsFromContainerAttributeNode(node, attributes, defaults);
+            }
+        }
+    }
+
+    private static void AddDefaultsFromContainerAttributeNode(
+        JsonElement node,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        EffectiveProfileDefaults defaults)
+    {
+        if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in node.EnumerateArray())
+            {
+                AddDefaultFromContainerAttributeItem(item, attributes, defaults, fallbackAttributeToken: null);
+            }
+
+            return;
+        }
+
+        if (node.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var property in node.EnumerateObject())
+        {
+            if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+            {
+                AddDefaultFromContainerAttributeItem(property.Value, attributes, defaults, property.Name);
+                continue;
+            }
+
+            AddDefaultFromAttributeParts(
+                defaults,
+                attributes,
+                attrNum: null,
+                attrId: property.Name,
+                attrName: property.Name,
+                rawValue: ReadValueAsString(property.Value),
+                displayValue: string.Empty);
+        }
+    }
+
+    private static void AddDefaultFromContainerAttributeItem(
+        JsonElement item,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        EffectiveProfileDefaults defaults,
+        string? fallbackAttributeToken)
+    {
+        if (item.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var nested in item.EnumerateArray())
+            {
+                AddDefaultFromContainerAttributeItem(nested, attributes, defaults, fallbackAttributeToken);
+            }
+
+            return;
+        }
+
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            AddDefaultFromAttributeParts(
+                defaults,
+                attributes,
+                attrNum: null,
+                attrId: fallbackAttributeToken,
+                attrName: fallbackAttributeToken,
+                rawValue: ReadValueAsString(item),
+                displayValue: string.Empty);
+            return;
+        }
+
+        var attrNum = ReadNullableInt(item, "attrNum", "attributeNum", "number");
+        var attrId = ReadString(item, "attributeId", "attrId", "id", "fieldId");
+        if (string.IsNullOrWhiteSpace(attrId))
+        {
+            attrId = fallbackAttributeToken;
+        }
+
+        var attrName = ReadString(item, "attributeName", "field", "name", "label");
+        if (string.IsNullOrWhiteSpace(attrName))
+        {
+            attrName = fallbackAttributeToken;
+        }
+
+        var rawValue = ReadString(item, "rawValue", "value", "key", "id");
+        if (string.IsNullOrWhiteSpace(rawValue) &&
+            TryGetPropertyIgnoreCase(item, "value", out var valueNode))
+        {
+            rawValue = ReadValueAsString(valueNode);
+        }
+
+        var displayValue = ReadString(item, "displayValue", "description", "label", "name");
+        if (string.IsNullOrWhiteSpace(displayValue) &&
+            TryGetPropertyIgnoreCase(item, "description", out var descriptionNode))
+        {
+            displayValue = ReadValueAsString(descriptionNode);
+        }
+
+        AddDefaultFromAttributeParts(defaults, attributes, attrNum, attrId, attrName, rawValue, displayValue);
+    }
+
+    private static void AddDefaultFromAttributeNumber(
+        EffectiveProfileDefaults defaults,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        int attributeNum,
+        string? rawValue,
+        string? fallbackName)
+    {
+        if (attributeNum <= 0 || string.IsNullOrWhiteSpace(rawValue))
+        {
+            return;
+        }
+
+        AddDefaultFromAttributeParts(
+            defaults,
+            attributes,
+            attributeNum,
+            attrId: attributeNum.ToString(CultureInfo.InvariantCulture),
+            attrName: fallbackName,
+            rawValue: rawValue,
+            displayValue: rawValue);
+    }
+
+    private static void AddDefaultFromAttributeParts(
+        EffectiveProfileDefaults defaults,
+        IReadOnlyList<NdProfileAttribute> attributes,
+        int? attrNum,
+        string? attrId,
+        string? attrName,
+        string? rawValue,
+        string? displayValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return;
+        }
+
+        var attribute = ResolveProfileAttribute(attributes, attrNum, attrId, attrName);
+        if (attribute is null)
+        {
+            return;
+        }
+
+        var resolvedId = string.IsNullOrWhiteSpace(attribute.AttributeId)
+            ? (attrNum?.ToString(CultureInfo.InvariantCulture) ?? attrId ?? attrName)
+            : attribute.AttributeId;
+        if (string.IsNullOrWhiteSpace(resolvedId))
+        {
+            return;
+        }
+
+        defaults.ValuesByAttributeId[resolvedId] = new NdProfileValue
+        {
+            AttributeId = resolvedId,
+            AttributeName = string.IsNullOrWhiteSpace(attribute.Name) ? (attrName ?? resolvedId) : attribute.Name,
+            RawValue = rawValue.Trim(),
+            DisplayValue = string.IsNullOrWhiteSpace(displayValue) ? rawValue.Trim() : displayValue.Trim(),
+            PicklistItemId = rawValue.Trim()
+        };
+    }
+
+    private static NdProfileAttribute? ResolveProfileAttribute(
+        IReadOnlyList<NdProfileAttribute> attributes,
+        int? attrNum,
+        string? attrId,
+        string? attrName)
+    {
+        if (attrNum.HasValue && attrNum.Value > 0)
+        {
+            var byNum = attributes.FirstOrDefault(a => a.AttributeNum == attrNum.Value);
+            if (byNum is not null)
+            {
+                return byNum;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(attrId))
+        {
+            var byId = attributes.FirstOrDefault(a =>
+                string.Equals(a.AttributeId, attrId, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+            {
+                return byId;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(attrName))
+        {
+            var byName = attributes.FirstOrDefault(a =>
+                string.Equals(a.Name, attrName, StringComparison.OrdinalIgnoreCase));
+            if (byName is not null)
+            {
+                return byName;
+            }
+        }
+
+        if (attrNum.HasValue && attrNum.Value > 0)
+        {
+            var attrNumText = attrNum.Value.ToString(CultureInfo.InvariantCulture);
+            return attributes.FirstOrDefault(a =>
+                string.Equals(a.AttributeId, attrNumText, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
+    }
+
+    private static string ReadValueAsString(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Object => ReadString(value, "rawValue", "value", "key", "id", "name", "description"),
+            _ => string.Empty
+        };
     }
 
     private static EffectiveProfileDefaults ParseEffectiveDefaults(JsonElement root, IReadOnlyList<NdProfileAttribute> attributes)
