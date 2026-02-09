@@ -643,10 +643,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Login & choose your NetDocuments location to pre-fill profiling attributes", this));
         Steps.Add(new StepItem(2, StepKey.ReviewScope, "Review & scope", "Select folder and review for issues", this));
-        Steps.Add(new StepItem(3, StepKey.Profiling, "Profiling", "Set profile fields and overrides", this));
-        Steps.Add(new StepItem(4, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
-        Steps.Add(new StepItem(5, StepKey.RunImport, "Run import", "Start/pause/resume/cancel + sessions", this));
-        Steps.Add(new StepItem(6, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+        Steps.Add(new StepItem(3, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
+        Steps.Add(new StepItem(4, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();

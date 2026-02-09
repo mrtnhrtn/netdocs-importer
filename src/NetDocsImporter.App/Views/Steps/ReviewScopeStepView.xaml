@@ -184,7 +184,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8" Visibility="Collapsed">
                     <StackPanel>
                         <TextBlock Text="Profiling Validation" Style="{StaticResource SectionTitle}" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
@@ -232,67 +232,69 @@
                     </StackPanel>
                 </Border>
 
-                <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
-                <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
-                <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
-                           Foreground="#B45309"
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,8"
-                           Visibility="{Binding SelectedFolderIsEffectivelyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <StackPanel Visibility="Collapsed">
+                    <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
+                               Foreground="#B45309"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,8"
+                               Visibility="{Binding SelectedFolderIsEffectivelyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
-                <StackPanel Orientation="Vertical" Margin="0,0,0,8">
-                    <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
-                </StackPanel>
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
+                    </StackPanel>
 
-                <TextBlock Text="Folder selection" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
-                            <TextBlock Text="Inherit" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                            <TextBlock Text="Include" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                            <TextBlock Text="Exclude" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-                <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
-                <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
-                <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
+                    <TextBlock Text="Folder selection" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
+                                <TextBlock Text="Inherit" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                                <TextBlock Text="Include" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                                <TextBlock Text="Exclude" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
+                    <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
+                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
 
-                <TextBlock Text="File selection" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetFileInclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                            <TextBlock Text="Include" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetFileExclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                            <TextBlock Text="Exclude" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Click="OnClearFileOverride" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
-                            <TextBlock Text="Clear" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="File selection" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileInclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                                <TextBlock Text="Include" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileExclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                                <TextBlock Text="Exclude" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Click="OnClearFileOverride" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
+                                <TextBlock Text="Clear" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

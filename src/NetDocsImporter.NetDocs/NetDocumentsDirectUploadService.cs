@@ -140,9 +140,37 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         Trace.WriteLine(
             $"ND-DIRECT preflight folders resolved={resolvedFolders.Count} created={createCount} issues={issues.Count}.");
 
+        var zeroByteCount = 0;
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            var sizeBytes = file.SizeBytes;
+            if (sizeBytes <= 0 && File.Exists(file.FullPath))
+            {
+                try
+                {
+                    sizeBytes = new FileInfo(file.FullPath).Length;
+                }
+                catch
+                {
+                    // Ignore file metadata read failures and keep recorded size.
+                }
+            }
+
+            if (sizeBytes <= 0)
+            {
+                zeroByteCount++;
+                Trace.WriteLine(
+                    $"ND-DIRECT preflight zero-byte detected relativePath='{file.RelativePath}' fullPath='{file.FullPath}'.");
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Error,
+                    "ZERO_BYTE_FILE",
+                    "File is zero bytes and cannot be uploaded.",
+                    file.RelativePath));
+                continue;
+            }
+
             var relativeFolderPath = GetRelativeFolderPath(file.RelativePath);
             if (!resolvedFolders.TryGetValue(relativeFolderPath, out var destinationId) || string.IsNullOrWhiteSpace(destinationId))
             {
@@ -186,6 +214,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 profileValues,
                 context.DefaultAcl));
         }
+
+        Trace.WriteLine(
+            $"ND-DIRECT preflight files planned={fileEntries.Count} zeroByte={zeroByteCount} issues={issues.Count}.");
 
         var canUpload = fileEntries.Count > 0 && issues.All(i => i.Severity != DirectUploadIssueSeverity.Error);
         return new UploadPlanResult

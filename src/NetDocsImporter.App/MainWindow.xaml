@@ -231,14 +231,8 @@
                         <DataTemplate x:Key="ReviewScopeTemplate">
                             <steps:ReviewScopeStepView />
                         </DataTemplate>
-                        <DataTemplate x:Key="ProfilingTemplate">
-                            <steps:ProfilingStepView />
-                        </DataTemplate>
                         <DataTemplate x:Key="NdImportConfigTemplate">
                             <steps:NdImportConfigStepView />
-                        </DataTemplate>
-                        <DataTemplate x:Key="RunImportTemplate">
-                            <steps:RunImportStepView />
                         </DataTemplate>
                         <DataTemplate x:Key="RecentJobsTemplate">
                             <steps:RecentJobsStepView />
@@ -254,14 +248,8 @@
                                 <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.ReviewScope}">
                                     <Setter Property="ContentTemplate" Value="{StaticResource ReviewScopeTemplate}" />
                                 </DataTrigger>
-                                <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.Profiling}">
-                                    <Setter Property="ContentTemplate" Value="{StaticResource ProfilingTemplate}" />
-                                </DataTrigger>
                                 <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.NdImportConfig}">
                                     <Setter Property="ContentTemplate" Value="{StaticResource NdImportConfigTemplate}" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.RunImport}">
-                                    <Setter Property="ContentTemplate" Value="{StaticResource RunImportTemplate}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.RecentJobs}">
                                     <Setter Property="ContentTemplate" Value="{StaticResource RecentJobsTemplate}" />
