@@ -86,7 +86,7 @@ public sealed partial class MainViewModel
         _directUploadPlan.CanUpload &&
         _directUploadPlan.Files.Count > 0;
 
-    public async Task RefreshDirectUploadPreflightAsync()
+    public async Task RefreshDirectUploadPreflightAsync(bool forceRescan = false)
     {
         if (!IsDirectApiMode)
         {
@@ -104,6 +104,11 @@ public sealed partial class MainViewModel
         {
             DirectUploadStatus = "Select and confirm a NetDocuments target before direct upload.";
             SetDirectUploadPlan(null);
+            return;
+        }
+
+        if (forceRescan && await TryRescanSourceFolderBeforePreflightAsync())
+        {
             return;
         }
 
@@ -268,9 +273,7 @@ public sealed partial class MainViewModel
 
             foreach (var skippedIssue in executionPlan.Issues.Where(DirectUploadIssueUtilities.IsSkippedFileIssue))
             {
-                var reason = string.Equals(skippedIssue.Code, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase)
-                    ? "0KB file skipped"
-                    : "Missing file skipped";
+                var reason = GetSkippedFileReason(skippedIssue.Code);
                 NdImportSessions.Insert(0, new NdImportSessionView(
                     DateTime.Now,
                     "DirectUpload Skip",
@@ -300,6 +303,37 @@ public sealed partial class MainViewModel
             MaxConcurrency = Math.Clamp(MaxConcurrency, 1, 8),
             MaxRetryAttempts = 4
         };
+    }
+
+    private async Task<bool> TryRescanSourceFolderBeforePreflightAsync()
+    {
+        if (IsScanning)
+        {
+            DirectUploadStatus = "Source folder scan already in progress...";
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(CurrentJobSourceRoot))
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(CurrentJobSourceRoot))
+        {
+            DirectUploadStatus = $"Source folder not found: {CurrentJobSourceRoot}";
+            SetDirectUploadPlan(null);
+            return true;
+        }
+
+        if (!string.Equals(SelectedFolder, CurrentJobSourceRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedFolder = CurrentJobSourceRoot;
+        }
+
+        DirectUploadStatus = "Rescanning source folder before refreshing preflight...";
+        Trace.WriteLine($"ND-DIRECT preflight refresh requested; rescanning source root '{CurrentJobSourceRoot}'.");
+        await StartScanAsync(CurrentJobSourceRoot);
+        return true;
     }
 
     private async Task<string> WriteDirectUploadReportAsync(UploadPlanResult plan, DirectUploadRunResult result)
@@ -335,9 +369,7 @@ public sealed partial class MainViewModel
             }));
         }
 
-        foreach (var skipped in plan.Issues.Where(i =>
-                     string.Equals(i.Code, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(i.Code, "MISSING_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase)))
+        foreach (var skipped in plan.Issues.Where(DirectUploadIssueUtilities.IsSkippedFileIssue))
         {
             lines.Add(string.Join(",", new[]
             {
@@ -406,6 +438,26 @@ public sealed partial class MainViewModel
 
         await File.WriteAllTextAsync(logPath, builder.ToString(), new UTF8Encoding(false));
         return logPath;
+    }
+
+    private static string GetSkippedFileReason(string? issueCode)
+    {
+        if (string.Equals(issueCode, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase))
+        {
+            return "0KB file skipped";
+        }
+
+        if (string.Equals(issueCode, "MISSING_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Missing file skipped";
+        }
+
+        if (string.Equals(issueCode, "MISSING_EXTENSION_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Extensionless file skipped";
+        }
+
+        return "File skipped";
     }
 
     public async Task ExportLastDirectUploadLogAsync(string destinationPath)

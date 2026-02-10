@@ -229,7 +229,7 @@ public partial class MainWindow : Window
 
     public async void OnRefreshDirectUploadPlan(object sender, RoutedEventArgs e)
     {
-        await _viewModel.RefreshDirectUploadPreflightAsync();
+        await _viewModel.RefreshDirectUploadPreflightAsync(forceRescan: true);
     }
 
     public async void OnRunDirectUpload(object sender, RoutedEventArgs e)

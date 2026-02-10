@@ -146,7 +146,7 @@
                             <ProgressBar Width="280"
                                          Height="12"
                                          Maximum="100"
-                                         Value="{Binding DirectUploadProgressPercent}" />
+                                         Value="{Binding DirectUploadProgressPercent, Mode=OneWay}" />
                             <TextBlock Text="{Binding DirectUploadProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                         <TextBlock Text="{Binding DirectUploadStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />

@@ -26,7 +26,7 @@ public class DirectUploadIssueUtilitiesTests
             new DirectUploadIssue(DirectUploadIssueSeverity.Info, "ZERO_BYTE_FILE_SKIPPED", "skip", "A/one.txt"),
             new DirectUploadIssue(DirectUploadIssueSeverity.Info, "MISSING_FILE_SKIPPED", "skip", "B/two.txt"),
             new DirectUploadIssue(DirectUploadIssueSeverity.Info, "ZERO_BYTE_FILE_SKIPPED", "skip", "C/three.txt"),
-            new DirectUploadIssue(DirectUploadIssueSeverity.Info, "MISSING_FILE_SKIPPED", "skip", "D/four.txt")
+            new DirectUploadIssue(DirectUploadIssueSeverity.Info, "MISSING_EXTENSION_FILE_SKIPPED", "skip", "D/four")
         };
 
         var summary = DirectUploadIssueUtilities.BuildSkippedFilesSummary(issues, maxInline: 3);
@@ -56,10 +56,12 @@ public class DirectUploadIssueUtilitiesTests
     {
         var zero = new DirectUploadIssue(DirectUploadIssueSeverity.Info, "ZERO_BYTE_FILE_SKIPPED", "skip", "x");
         var missing = new DirectUploadIssue(DirectUploadIssueSeverity.Info, "MISSING_FILE_SKIPPED", "skip", "y");
+        var extensionless = new DirectUploadIssue(DirectUploadIssueSeverity.Info, "MISSING_EXTENSION_FILE_SKIPPED", "skip", "z");
         var other = new DirectUploadIssue(DirectUploadIssueSeverity.Info, "ACL_REQUIRED", "nope", "z");
 
         Assert.True(DirectUploadIssueUtilities.IsSkippedFileIssue(zero));
         Assert.True(DirectUploadIssueUtilities.IsSkippedFileIssue(missing));
+        Assert.True(DirectUploadIssueUtilities.IsSkippedFileIssue(extensionless));
         Assert.False(DirectUploadIssueUtilities.IsSkippedFileIssue(other));
     }
 }

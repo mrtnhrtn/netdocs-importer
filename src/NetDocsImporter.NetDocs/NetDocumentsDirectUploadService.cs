@@ -16,7 +16,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 {
     private static readonly Regex StatusCodeRegex = new(@"\((?<status>\d{3})\s", RegexOptions.Compiled);
     private static readonly Regex LegacyWorkspaceIdRegex = new(@"^\d{4}-\d{4}-\d{4}$", RegexOptions.Compiled);
-    private const int DefaultMaxUploadConcurrency = 4;
+    private const int DefaultMaxUploadConcurrency = 8;
     private const int MaxUploadConcurrency = 8;
     private const int DefaultMaxUploadAttempts = 4;
 
@@ -162,6 +162,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         var zeroByteCount = 0;
         var missingFileCount = 0;
+        var missingExtensionCount = 0;
         var skippedCount = 0;
         foreach (var file in files)
         {
@@ -208,6 +209,21 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 continue;
             }
 
+            var extension = Path.GetExtension(file.FullPath);
+            if (string.IsNullOrWhiteSpace(extension) || string.Equals(extension, ".", StringComparison.Ordinal))
+            {
+                missingExtensionCount++;
+                skippedCount++;
+                Trace.WriteLine(
+                    $"ND-DIRECT preflight file skipped reason='missing-extension' relativePath='{file.RelativePath}' fullPath='{file.FullPath}'.");
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Info,
+                    "MISSING_EXTENSION_FILE_SKIPPED",
+                    "File has no extension and was skipped from upload.",
+                    file.RelativePath));
+                continue;
+            }
+
             var relativeFolderPath = GetRelativeFolderPath(file.RelativePath);
             if (!resolvedFolders.TryGetValue(relativeFolderPath, out var destinationId) || string.IsNullOrWhiteSpace(destinationId))
             {
@@ -243,17 +259,24 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     file.RelativePath));
             }
 
+            var useMultipartUpload =
+                context.EnableMultipartUpload &&
+                sizeBytes >= context.MultipartThresholdBytes &&
+                sizeBytes <= context.MultipartMaxFileSizeBytes;
+
             fileEntries.Add(new UploadPlanFileEntry(
                 file.FileId,
                 file.RelativePath,
                 file.FullPath,
+                sizeBytes,
                 destinationId,
                 profileValues,
-                context.DefaultAcl));
+                context.DefaultAcl,
+                useMultipartUpload));
         }
 
         Trace.WriteLine(
-            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} files requested={files.Count} planned={fileEntries.Count} skipped={skippedCount} zeroByte={zeroByteCount} missing={missingFileCount} planned-folder-creates={createCount} issues={issues.Count}.");
+            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} files requested={files.Count} planned={fileEntries.Count} skipped={skippedCount} zeroByte={zeroByteCount} missing={missingFileCount} missingExtension={missingExtensionCount} planned-folder-creates={createCount} issues={issues.Count}.");
 
         var canUpload = fileEntries.Count > 0 && issues.All(i => i.Severity != DirectUploadIssueSeverity.Error);
         return new UploadPlanResult
@@ -593,8 +616,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     {
         var candidateEndpoints = new[]
         {
-            (Path: "/v1/Document", IncludeAction: true),
-            (Path: "/v1/Document/upload", IncludeAction: false)
+            (Path: "/v1/Document", IncludeAction: true)
         };
 
         var failureMessages = new List<string>();
@@ -912,9 +934,38 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         ICollection<DirectUploadIssue> issues,
         CancellationToken cancellationToken)
     {
+        if (parentContainerId.StartsWith("planned:", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!folderChildrenCache.TryGetValue(parentContainerId, out var plannedChildren))
+            {
+                plannedChildren = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                folderChildrenCache[parentContainerId] = plannedChildren;
+            }
+
+            var plannedId = plannedChildren.TryGetValue(NormalizeFolderName(childName), out var cachedPlanned)
+                ? cachedPlanned
+                : null;
+
+            if (!string.IsNullOrWhiteSpace(plannedId))
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT folder-resolve matched parent='{parentContainerId}' child='{childName}' id='{plannedId}' source='planned-cache'.");
+            }
+            else
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT folder-resolve parent='{parentContainerId}' child='{childName}' source='planned-cache' no-match.");
+            }
+
+            // Dry-run virtual parents are local plan artifacts and must not call server listing APIs.
+            return new ChildLookupResult(plannedId, true);
+        }
+
         if (folderChildrenCache.TryGetValue(parentContainerId, out var cachedMap))
         {
-            var cachedReliability = _folderListReliabilityCache.TryGetValue(parentContainerId, out var reliable) && reliable;
+            var cachedReliability = _folderListReliabilityCache.TryGetValue(parentContainerId, out var reliable)
+                ? reliable
+                : true;
             var cachedId = cachedMap.TryGetValue(NormalizeFolderName(childName), out var cached) ? cached : null;
             if (!string.IsNullOrWhiteSpace(cachedId))
             {

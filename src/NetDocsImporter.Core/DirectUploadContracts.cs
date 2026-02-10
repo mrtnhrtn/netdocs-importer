@@ -28,9 +28,11 @@ public sealed record UploadPlanFileEntry(
     string FileId,
     string RelativePath,
     string FullPath,
+    long SizeBytes,
     string DestinationContainerId,
     IReadOnlyDictionary<string, string> ProfileValues,
-    string? Acl);
+    string? Acl,
+    bool UseMultipartUpload);
 
 public sealed class UploadPlanResult
 {
@@ -67,9 +69,21 @@ public sealed class DirectUploadPlanContext
 
     public string? DefaultAcl { get; init; }
 
-    public int MaxConcurrency { get; init; } = 4;
+    public int MaxConcurrency { get; init; } = 8;
 
     public int MaxRetryAttempts { get; init; } = 4;
+
+    public bool EnableMultipartUpload { get; init; } = true;
+
+    public long MultipartThresholdBytes { get; init; } = 2L * 1024 * 1024 * 1024;
+
+    public long MultipartChunkSizeBytes { get; init; } = 100L * 1024 * 1024;
+
+    public long MultipartMaxFileSizeBytes { get; init; } = 50L * 1024 * 1024 * 1024;
+
+    public TimeSpan MultipartPartTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    public int MultipartPartMaxRetryAttempts { get; init; } = 4;
 }
 
 public sealed record DirectUploadProgress(

@@ -82,7 +82,7 @@ public sealed class NetDocumentsApiClient
         var requestUri = BuildUri(relativeOrAbsolutePath);
         var stopwatch = Stopwatch.StartNew();
         using var response = retryOnThrottle
-            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, cancellationToken), cancellationToken)
+            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, null, cancellationToken), cancellationToken)
             : await SendOnceAsync(() =>
             {
                 var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -115,7 +115,7 @@ public sealed class NetDocumentsApiClient
         var requestUri = BuildUri(relativeOrAbsolutePath);
         var stopwatch = Stopwatch.StartNew();
         using var response = retryOnThrottle
-            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, cancellationToken), cancellationToken)
+            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, null, cancellationToken), cancellationToken)
             : await SendOnceAsync(() =>
             {
                 var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -152,9 +152,88 @@ public sealed class NetDocumentsApiClient
         return JsonDocument.Parse(responseContent);
     }
 
+    public Task<string> PostForStringAsync(
+        string relativeOrAbsolutePath,
+        HttpContent content,
+        CancellationToken cancellationToken = default,
+        bool retryOnThrottle = true,
+        IReadOnlyDictionary<string, string>? requestHeaders = null,
+        TimeSpan? requestTimeout = null)
+    {
+        return SendForStringAsync(
+            HttpMethod.Post,
+            relativeOrAbsolutePath,
+            content,
+            cancellationToken,
+            retryOnThrottle,
+            requestHeaders,
+            requestTimeout);
+    }
+
+    public Task<string> PutForStringAsync(
+        string relativeOrAbsolutePath,
+        HttpContent content,
+        CancellationToken cancellationToken = default,
+        bool retryOnThrottle = true,
+        IReadOnlyDictionary<string, string>? requestHeaders = null,
+        TimeSpan? requestTimeout = null)
+    {
+        return SendForStringAsync(
+            HttpMethod.Put,
+            relativeOrAbsolutePath,
+            content,
+            cancellationToken,
+            retryOnThrottle,
+            requestHeaders,
+            requestTimeout);
+    }
+
+    private async Task<string> SendForStringAsync(
+        HttpMethod method,
+        string relativeOrAbsolutePath,
+        HttpContent content,
+        CancellationToken cancellationToken,
+        bool retryOnThrottle,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        TimeSpan? requestTimeout)
+    {
+        var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
+        using var response = retryOnThrottle
+            ? await SendWithRetryAsync(
+                await BuildBufferedRequestFactoryAsync(method, requestUri, content, requestHeaders, cancellationToken),
+                cancellationToken,
+                requestTimeout)
+            : await SendOnceAsync(() =>
+            {
+                var request = new HttpRequestMessage(method, requestUri)
+                {
+                    Content = content
+                };
+                request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                AddRequestHeaders(request, requestHeaders);
+                return request;
+            }, cancellationToken, requestTimeout);
+        stopwatch.Stop();
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            LogHttpFailure(method.Method, relativeOrAbsolutePath, requestUri, response, responseContent);
+            throw new InvalidOperationException(
+                $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
+        }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method={method.Method} path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+
+        return responseContent;
+    }
+
     private async Task<HttpResponseMessage> SendWithRetryAsync(
         Func<HttpRequestMessage> requestFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         const int maxAttempts = 4;
         var delay = TimeSpan.FromMilliseconds(500);
@@ -162,7 +241,7 @@ public sealed class NetDocumentsApiClient
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             var request = requestFactory();
-            var response = await _client.SendAsync(request, cancellationToken);
+            var response = await SendRequestAsync(request, cancellationToken, requestTimeout);
             if (!ShouldRetry(response.StatusCode) || attempt == maxAttempts)
             {
                 return response;
@@ -232,6 +311,7 @@ public sealed class NetDocumentsApiClient
         HttpMethod method,
         Uri requestUri,
         HttpContent content,
+        IReadOnlyDictionary<string, string>? requestHeaders,
         CancellationToken cancellationToken)
     {
         var bytes = await content.ReadAsByteArrayAsync(cancellationToken);
@@ -250,16 +330,48 @@ public sealed class NetDocumentsApiClient
 
             request.Content = requestContent;
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            AddRequestHeaders(request, requestHeaders);
             return request;
         };
     }
 
     private async Task<HttpResponseMessage> SendOnceAsync(
         Func<HttpRequestMessage> requestFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         var request = requestFactory();
-        return await _client.SendAsync(request, cancellationToken);
+        return await SendRequestAsync(request, cancellationToken, requestTimeout);
+    }
+
+    private async Task<HttpResponseMessage> SendRequestAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout)
+    {
+        if (requestTimeout is null || requestTimeout <= TimeSpan.Zero)
+        {
+            return await _client.SendAsync(request, cancellationToken);
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(requestTimeout.Value);
+        return await _client.SendAsync(request, timeoutCts.Token);
+    }
+
+    private static void AddRequestHeaders(
+        HttpRequestMessage request,
+        IReadOnlyDictionary<string, string>? requestHeaders)
+    {
+        if (requestHeaders is null)
+        {
+            return;
+        }
+
+        foreach (var header in requestHeaders)
+        {
+            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
     }
 
     private static bool ShouldRetry(HttpStatusCode statusCode)

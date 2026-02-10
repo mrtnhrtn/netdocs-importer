@@ -7,7 +7,8 @@ public static class DirectUploadIssueUtilities
     public static bool IsSkippedFileIssue(DirectUploadIssue issue)
     {
         return string.Equals(issue.Code, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(issue.Code, "MISSING_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase);
+               string.Equals(issue.Code, "MISSING_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(issue.Code, "MISSING_EXTENSION_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string BuildSkippedFilesSummary(IReadOnlyList<DirectUploadIssue> issues, int maxInline = 3)

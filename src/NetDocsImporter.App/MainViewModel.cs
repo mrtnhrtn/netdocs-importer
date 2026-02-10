@@ -33,7 +33,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _currentJobSourceRoot = string.Empty;
     private string _currentJobState = "Ready";
     private JobSummaryView? _selectedRecentJob;
-    private int _maxConcurrency = 4;
+    private int _maxConcurrency = 8;
     private int _delayBetweenStarts = 250;
     private bool _isImportRunning;
     private bool _isImportPaused;
