@@ -6,23 +6,9 @@
              mc:Ignorable="d"
              d:DesignHeight="500" d:DesignWidth="700">
     <StackPanel>
-        <TextBlock Text="ndImport" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Execution mode" Foreground="#555555" />
-        <ComboBox Margin="0,2,0,8"
-                  ItemsSource="{Binding ImportExecutionModeOptions}"
-                  SelectedItem="{Binding SelectedImportExecutionMode}" />
+        <TextBlock Text="Direct Upload" Style="{StaticResource SectionTitle}" />
 
-        <StackPanel Margin="0,0,0,8">
-            <StackPanel.Style>
-                <Style TargetType="StackPanel">
-                    <Setter Property="Visibility" Value="Collapsed" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsNdImportCsvMode}" Value="True">
-                            <Setter Property="Visibility" Value="Visible" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </StackPanel.Style>
+        <StackPanel Margin="0,0,0,8" Visibility="Collapsed">
             <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                 <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
                 <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanLaunchNdImport}" />
@@ -69,16 +55,6 @@
         </StackPanel>
 
         <StackPanel>
-            <StackPanel.Style>
-                <Style TargetType="StackPanel">
-                    <Setter Property="Visibility" Value="Collapsed" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsDirectApiMode}" Value="True">
-                            <Setter Property="Visibility" Value="Visible" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </StackPanel.Style>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                 <Button Content="Refresh Direct Upload Plan" Width="190" Margin="0,0,6,0" Click="OnRefreshDirectUploadPlan" Style="{StaticResource SecondaryButton}" />
                 <Button Content="Run Direct Upload" Width="130" Click="OnRunDirectUpload" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanRunDirectUpload}" />

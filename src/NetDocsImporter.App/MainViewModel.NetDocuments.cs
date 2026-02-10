@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -54,6 +55,7 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
+                OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
             }
@@ -76,6 +78,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            InvalidateTargetBrowserContext("repository-changed");
             _refreshedCabinetSchemaThisSession.Clear();
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
@@ -89,6 +92,7 @@ public sealed partial class MainViewModel
             FilterCabinetsByRepository();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
@@ -106,6 +110,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            InvalidateTargetBrowserContext("cabinet-changed");
             _refreshedCabinetSchemaThisSession.Clear();
             _targetProfileCache.Clear();
             _workspaceLookupContext = null;
@@ -122,11 +127,13 @@ public sealed partial class MainViewModel
             SyncNdImportCabinetFromSelectedCabinetId();
             OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+            OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
             _ = RefreshReviewScopeNetDocumentsAsync();
             _ = LoadNetDocumentsTargetContainersAsync();
+            _ = RefreshRecentTargetsAfterContextChangeAsync();
         }
     }
 
@@ -226,6 +233,7 @@ public sealed partial class MainViewModel
 
         try
         {
+            InvalidateTargetBrowserContext("connect-and-sync");
             _refreshedCabinetSchemaThisSession.Clear();
             var auth = RequireAuthService();
             var sync = RequireSyncService();
@@ -244,6 +252,7 @@ public sealed partial class MainViewModel
                 await SyncNetDocumentsAttributesAsync();
             }
             await LoadNetDocumentsTargetContainersAsync();
+            await RefreshRecentTargetsAfterConnectAsync();
 
             await RefreshReviewScopeNetDocumentsAsync();
 
@@ -254,6 +263,33 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             StatusText = $"NetDocuments connect failed: {ex.Message}";
+        }
+    }
+
+    private async Task RefreshRecentTargetsAfterConnectAsync()
+    {
+        try
+        {
+            await RefreshRecentTargetsAsync();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"ND-CACHE recent post-connect refresh failed: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshRecentTargetsAfterContextChangeAsync()
+    {
+        try
+        {
+            if (CanPickNetDocumentsTarget)
+            {
+                await RefreshRecentTargetsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"ND-CACHE recent post-context refresh failed: {ex.Message}");
         }
     }
 

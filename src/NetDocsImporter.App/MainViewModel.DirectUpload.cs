@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -100,16 +101,47 @@ public sealed partial class MainViewModel
             DirectUploadStatus = "Building direct upload plan...";
 
             var service = RequireDirectUploadService();
-            var context = BuildDirectUploadPlanContext();
+            var context = BuildDirectUploadPlanContext(allowCreateFolders: false);
             var plan = await service.BuildPlanAsync(CurrentJobId, _selectedNetDocumentsTarget, context);
             SetDirectUploadPlan(plan);
 
             var errorCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Error);
             var warningCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Warning);
-            var createdFolders = plan.Folders.Count(f => f.CreatedDuringPlanning);
+            var infoCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Info);
+            var plannedFolderCreates = plan.PlannedFolderCreates;
+            var skippedSummary = DirectUploadIssueUtilities.BuildSkippedFilesSummary(plan.Issues, maxInline: 3);
+            var firstBlockingIssue = plan.Issues.FirstOrDefault(i => i.Severity == DirectUploadIssueSeverity.Error);
 
-            DirectUploadStatus =
-                $"Plan ready: files={plan.Files.Count:N0}, folders={plan.Folders.Count:N0}, created={createdFolders:N0}, errors={errorCount:N0}, warnings={warningCount:N0}.";
+            if (errorCount > 0)
+            {
+                DirectUploadStatus =
+                    $"Plan blocked: requested={plan.TotalRequestedFiles:N0}, planned={plan.PlannedFiles:N0}, skipped={plan.SkippedFiles:N0}, folders={plan.Folders.Count:N0}, wouldCreate={plannedFolderCreates:N0}, errors={errorCount:N0}, warnings={warningCount:N0}, info={infoCount:N0}.";
+
+                if (firstBlockingIssue is not null)
+                {
+                    var blockerContext = string.IsNullOrWhiteSpace(firstBlockingIssue.RelativePath)
+                        ? firstBlockingIssue.Message
+                        : $"{firstBlockingIssue.Message} ({firstBlockingIssue.RelativePath})";
+                    DirectUploadStatus = $"{DirectUploadStatus} Blocker: {blockerContext}";
+                }
+            }
+            else if (plan.PlannedFiles == 0)
+            {
+                DirectUploadStatus =
+                    $"No uploadable files remain after preflight. requested={plan.TotalRequestedFiles:N0}, planned={plan.PlannedFiles:N0}, skipped={plan.SkippedFiles:N0}, errors={errorCount:N0}, warnings={warningCount:N0}, info={infoCount:N0}.";
+            }
+            else
+            {
+                DirectUploadStatus =
+                    $"Plan ready: requested={plan.TotalRequestedFiles:N0}, planned={plan.PlannedFiles:N0}, skipped={plan.SkippedFiles:N0}, folders={plan.Folders.Count:N0}, wouldCreate={plannedFolderCreates:N0}, errors={errorCount:N0}, warnings={warningCount:N0}, info={infoCount:N0}.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(skippedSummary))
+            {
+                DirectUploadStatus = $"{DirectUploadStatus} {skippedSummary}";
+            }
+
+            Trace.WriteLine($"ND-DIRECT preflight status '{DirectUploadStatus}'.");
         }
         catch (Exception ex)
         {
@@ -169,19 +201,52 @@ public sealed partial class MainViewModel
         {
             IsDirectUploadBusy = true;
             StatusText = "Running direct upload...";
-            var context = BuildDirectUploadPlanContext();
             var service = RequireDirectUploadService();
+            DirectUploadStatus = "Materializing direct upload plan...";
+            var executionContext = BuildDirectUploadPlanContext(allowCreateFolders: true);
+            var currentJobId = CurrentJobId;
+            if (string.IsNullOrWhiteSpace(currentJobId))
+            {
+                StatusText = "Direct upload plan is unavailable.";
+                return;
+            }
+
+            var executionPlan = await service.BuildPlanAsync(currentJobId, _selectedNetDocumentsTarget!, executionContext);
+            SetDirectUploadPlan(executionPlan);
+
+            if (!executionPlan.CanUpload || executionPlan.Files.Count == 0)
+            {
+                StatusText = "Direct upload blocked during execution plan materialization. Resolve reported issues and try again.";
+                return;
+            }
+
             var progress = new Progress<DirectUploadProgress>(p =>
             {
                 DirectUploadStatus = $"Uploading {p.CompletedFiles:N0}/{p.TotalFiles:N0}: {p.CurrentRelativePath}";
             });
 
-            var result = await service.UploadAsync(_directUploadPlan, context, progress);
-            var reportPath = await WriteDirectUploadReportAsync(result);
+            var result = await service.UploadAsync(executionPlan, executionContext, progress);
+            var reportPath = await WriteDirectUploadReportAsync(executionPlan, result);
 
             StatusText =
-                $"Direct upload complete. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}";
-            NdImportSessions.Insert(0, new NdImportSessionView(DateTime.Now, "DirectUpload", Path.GetFileName(reportPath)));
+                $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}";
+
+            var runStatus = result.FailedFiles > 0 || result.SkippedFiles > 0 ? "DirectUpload Partial" : "DirectUpload";
+            NdImportSessions.Insert(0, new NdImportSessionView(
+                DateTime.Now,
+                runStatus,
+                $"Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (Skipped {result.SkippedFiles:N0}), Created {result.CreatedFolders:N0}, Failed {result.FailedFiles:N0}, report {Path.GetFileName(reportPath)}"));
+
+            foreach (var skippedIssue in executionPlan.Issues.Where(DirectUploadIssueUtilities.IsSkippedFileIssue))
+            {
+                var reason = string.Equals(skippedIssue.Code, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase)
+                    ? "0KB file skipped"
+                    : "Missing file skipped";
+                NdImportSessions.Insert(0, new NdImportSessionView(
+                    DateTime.Now,
+                    "DirectUpload Skip",
+                    $"{result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} complete; skipped {result.SkippedFiles:N0}; {reason}: {skippedIssue.RelativePath ?? string.Empty}"));
+            }
         }
         catch (Exception ex)
         {
@@ -193,19 +258,19 @@ public sealed partial class MainViewModel
         }
     }
 
-    private DirectUploadPlanContext BuildDirectUploadPlanContext()
+    private DirectUploadPlanContext BuildDirectUploadPlanContext(bool allowCreateFolders)
     {
         return new DirectUploadPlanContext
         {
             CabinetId = SelectedNetDocumentsCabinetId,
             RepositoryId = SelectedNetDocumentsRepositoryId,
             EffectiveProfileDefaults = EffectiveProfileDefaults,
-            AllowCreateFolders = true,
+            AllowCreateFolders = allowCreateFolders,
             RequireAcl = false
         };
     }
 
-    private async Task<string> WriteDirectUploadReportAsync(DirectUploadRunResult result)
+    private async Task<string> WriteDirectUploadReportAsync(UploadPlanResult plan, DirectUploadRunResult result)
     {
         Directory.CreateDirectory(_paths.ReportsDirectory);
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
@@ -224,6 +289,30 @@ public sealed partial class MainViewModel
                 file.Succeeded ? "Succeeded" : "Failed",
                 file.HttpStatus.ToString(CultureInfo.InvariantCulture),
                 EscapeCsv(file.Message)
+            }));
+        }
+
+        foreach (var createdFolder in plan.Folders.Where(f => f.CreatedDuringPlanning))
+        {
+            lines.Add(string.Join(",", new[]
+            {
+                EscapeCsv(createdFolder.RelativePath),
+                "FolderCreated",
+                "200",
+                EscapeCsv("Folder created during execution plan materialization.")
+            }));
+        }
+
+        foreach (var skipped in plan.Issues.Where(i =>
+                     string.Equals(i.Code, "ZERO_BYTE_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(i.Code, "MISSING_FILE_SKIPPED", StringComparison.OrdinalIgnoreCase)))
+        {
+            lines.Add(string.Join(",", new[]
+            {
+                EscapeCsv(skipped.RelativePath ?? string.Empty),
+                "Skipped",
+                "0",
+                EscapeCsv(skipped.Message)
             }));
         }
 

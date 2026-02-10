@@ -454,11 +454,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
+      "projectUniqueName": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
       "projectName": "NetDocsImporter.App",
-      "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
+      "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\NetDocsImporter.App.csproj",
       "packagesPath": "C:\\Users\\mrtnh\\.nuget\\packages\\",
-      "outputPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.App\\obj\\",
+      "outputPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.App\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\mrtnh\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -476,11 +476,11 @@
             "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj": {
               "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj"
             },
-            "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
-              "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+            "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
+              "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
             },
-            "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj": {
-              "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj"
+            "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj": {
+              "projectPath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj"
             }
           }
         }

@@ -80,6 +80,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 Folders = Array.Empty<UploadPlanFolderEntry>(),
                 Files = Array.Empty<UploadPlanFileEntry>(),
                 Issues = issues,
+                PlannedFolderCreates = 0,
                 CanUpload = false
             };
         }
@@ -113,7 +114,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         var createCount = 0;
         Trace.WriteLine(
-            $"ND-DIRECT preflight start files={files.Count} uniqueFolders={uniqueRelativeFolders.Count} targetType={target.Type} targetId='{target.Id}'.");
+            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} start files={files.Count} uniqueFolders={uniqueRelativeFolders.Count} targetType={target.Type} targetId='{target.Id}' allowCreate={context.AllowCreateFolders}.");
 
         foreach (var relativeFolderPath in uniqueRelativeFolders)
         {
@@ -137,16 +138,40 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         createCount = folderEntries.Values.Count(f => f.CreatedDuringPlanning);
-        Trace.WriteLine(
-            $"ND-DIRECT preflight folders resolved={resolvedFolders.Count} created={createCount} issues={issues.Count}.");
+        if (context.AllowCreateFolders)
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT execution-plan folders resolved={resolvedFolders.Count} created={createCount} issues={issues.Count}.");
+        }
+        else
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT preflight dry-run folders resolved={resolvedFolders.Count} planned-folder-creates={createCount} issues={issues.Count}.");
+        }
 
         var zeroByteCount = 0;
+        var missingFileCount = 0;
+        var skippedCount = 0;
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (!File.Exists(file.FullPath))
+            {
+                missingFileCount++;
+                skippedCount++;
+                Trace.WriteLine(
+                    $"ND-DIRECT preflight file skipped reason='missing-file' relativePath='{file.RelativePath}' fullPath='{file.FullPath}'.");
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Info,
+                    "MISSING_FILE_SKIPPED",
+                    "File not found on disk; skipped from upload.",
+                    file.RelativePath));
+                continue;
+            }
+
             var sizeBytes = file.SizeBytes;
-            if (sizeBytes <= 0 && File.Exists(file.FullPath))
+            if (sizeBytes <= 0)
             {
                 try
                 {
@@ -161,12 +186,13 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             if (sizeBytes <= 0)
             {
                 zeroByteCount++;
+                skippedCount++;
                 Trace.WriteLine(
-                    $"ND-DIRECT preflight zero-byte detected relativePath='{file.RelativePath}' fullPath='{file.FullPath}'.");
+                    $"ND-DIRECT preflight file skipped reason='zero-byte' relativePath='{file.RelativePath}' fullPath='{file.FullPath}'.");
                 issues.Add(new DirectUploadIssue(
-                    DirectUploadIssueSeverity.Error,
-                    "ZERO_BYTE_FILE",
-                    "File is zero bytes and cannot be uploaded.",
+                    DirectUploadIssueSeverity.Info,
+                    "ZERO_BYTE_FILE_SKIPPED",
+                    "File is zero bytes and was skipped from upload.",
                     file.RelativePath));
                 continue;
             }
@@ -216,7 +242,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         Trace.WriteLine(
-            $"ND-DIRECT preflight files planned={fileEntries.Count} zeroByte={zeroByteCount} issues={issues.Count}.");
+            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} files requested={files.Count} planned={fileEntries.Count} skipped={skippedCount} zeroByte={zeroByteCount} missing={missingFileCount} planned-folder-creates={createCount} issues={issues.Count}.");
 
         var canUpload = fileEntries.Count > 0 && issues.All(i => i.Severity != DirectUploadIssueSeverity.Error);
         return new UploadPlanResult
@@ -224,6 +250,10 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             Folders = folderEntries.Values.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList(),
             Files = fileEntries,
             Issues = issues,
+            TotalRequestedFiles = files.Count,
+            PlannedFiles = fileEntries.Count,
+            SkippedFiles = skippedCount,
+            PlannedFolderCreates = createCount,
             CanUpload = canUpload
         };
     }
@@ -264,6 +294,10 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return new DirectUploadRunResult
         {
             Files = results,
+            TotalRequestedFiles = plan.TotalRequestedFiles,
+            PlannedFiles = plan.PlannedFiles,
+            SkippedFiles = plan.SkippedFiles,
+            CreatedFolders = context.AllowCreateFolders ? plan.PlannedFolderCreates : 0,
             SucceededFiles = results.Count(r => r.Succeeded),
             FailedFiles = results.Count(r => !r.Succeeded)
         };
@@ -488,6 +522,27 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     $"Unable to verify existing folders for '{currentPath}'. Folder creation is blocked until folder listing queries return a recognized shape.",
                     currentPath));
                 return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(childContainerId) && !allowCreateFolders && lookup.QueryReliable)
+            {
+                created = true;
+                var plannedName = NormalizeCreatedFolderName(segment);
+                childContainerId = $"planned:{Uri.EscapeDataString(currentPath)}";
+                if (!folderChildrenCache.TryGetValue(currentContainerId, out var cachedChildren))
+                {
+                    cachedChildren = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    folderChildrenCache[currentContainerId] = cachedChildren;
+                }
+
+                cachedChildren[NormalizeFolderName(plannedName)] = childContainerId;
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Info,
+                    "FOLDER_CREATE_PLANNED",
+                    $"Folder '{currentPath}' does not exist and would be created during upload execution.",
+                    currentPath));
+                Trace.WriteLine(
+                    $"ND-DIRECT preflight dry-run planned-folder-create parent='{currentContainerId}' segment='{segment}' path='{currentPath}'.");
             }
 
             if (string.IsNullOrWhiteSpace(childContainerId) && allowCreateFolders && lookup.QueryReliable)

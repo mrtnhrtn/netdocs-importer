@@ -40,6 +40,14 @@ public sealed class UploadPlanResult
 
     public IReadOnlyList<DirectUploadIssue> Issues { get; init; } = Array.Empty<DirectUploadIssue>();
 
+    public int TotalRequestedFiles { get; init; }
+
+    public int PlannedFiles { get; init; }
+
+    public int SkippedFiles { get; init; }
+
+    public int PlannedFolderCreates { get; init; }
+
     public bool CanUpload { get; init; }
 }
 
@@ -72,6 +80,14 @@ public sealed record DirectUploadFileResult(
 public sealed class DirectUploadRunResult
 {
     public IReadOnlyList<DirectUploadFileResult> Files { get; init; } = Array.Empty<DirectUploadFileResult>();
+
+    public int TotalRequestedFiles { get; init; }
+
+    public int PlannedFiles { get; init; }
+
+    public int SkippedFiles { get; init; }
+
+    public int CreatedFolders { get; init; }
 
     public int SucceededFiles { get; init; }
 

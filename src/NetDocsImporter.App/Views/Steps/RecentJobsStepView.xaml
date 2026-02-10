@@ -19,5 +19,16 @@
                 </GridView>
             </ListView.View>
         </ListView>
+
+        <TextBlock Text="Recent Runs" Style="{StaticResource SectionTitle}" Margin="0,10,0,0" />
+        <ListView ItemsSource="{Binding NdImportSessions}" Height="200">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Started" Width="130" DisplayMemberBinding="{Binding StartedDisplay}" />
+                    <GridViewColumn Header="Status" Width="140" DisplayMemberBinding="{Binding StatusDisplay}" />
+                    <GridViewColumn Header="Details" Width="420" DisplayMemberBinding="{Binding Details}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
     </StackPanel>
 </UserControl>

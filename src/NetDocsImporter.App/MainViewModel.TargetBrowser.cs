@@ -56,6 +56,10 @@ public sealed partial class MainViewModel
     private CancellationTokenSource? _workspaceSearchCts;
     private bool _hasLoadedRecentTargets;
     private bool _hasLoadedFavoriteTargets;
+    private bool _isAutoSelectingTarget;
+    private CancellationTokenSource? _autoTargetSelectionCts;
+    private long _targetBrowserContextVersion;
+    private bool _isWorkspaceLookupAvailable = true;
 
     public ObservableCollection<NetDocumentsTargetContainerView> NetDocumentsTargetContainers => _netDocumentsTargetContainers;
 
@@ -74,13 +78,39 @@ public sealed partial class MainViewModel
     public NetDocumentsTargetItemView? SelectedRecentTarget
     {
         get => _selectedRecentTarget;
-        set => SetField(ref _selectedRecentTarget, value);
+        set
+        {
+            if (!SetField(ref _selectedRecentTarget, value))
+            {
+                return;
+            }
+
+            if (value is null || _isAutoSelectingTarget)
+            {
+                return;
+            }
+
+            _ = AutoCommitRecentTargetSelectionAsync(value);
+        }
     }
 
     public NetDocumentsTargetItemView? SelectedFavoriteTarget
     {
         get => _selectedFavoriteTarget;
-        set => SetField(ref _selectedFavoriteTarget, value);
+        set
+        {
+            if (!SetField(ref _selectedFavoriteTarget, value))
+            {
+                return;
+            }
+
+            if (value is null || _isAutoSelectingTarget)
+            {
+                return;
+            }
+
+            _ = AutoCommitFavoriteTargetSelectionAsync(value);
+        }
     }
 
     public NetDocumentsWorkspaceTargetResultView? SelectedWorkspaceSearchTarget
@@ -91,6 +121,13 @@ public sealed partial class MainViewModel
             if (SetField(ref _selectedWorkspaceSearchTarget, value))
             {
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+
+                if (value is null || _isAutoSelectingTarget)
+                {
+                    return;
+                }
+
+                _ = AutoCommitWorkspaceTargetSelectionAsync(value);
             }
         }
     }
@@ -243,8 +280,12 @@ public sealed partial class MainViewModel
     public bool CanUseSelectedBrowseNode => SelectedBrowseNode is not null;
 
     public bool CanUseWorkspaceSearchSelection =>
-        CanPickNetDocumentsTarget &&
+        CanSearchWorkspaceTargets &&
         SelectedWorkspaceSearchTarget is not null;
+
+    public bool CanSearchWorkspaceTargets =>
+        CanPickNetDocumentsTarget &&
+        _isWorkspaceLookupAvailable;
 
     public bool IsSelectedTargetFavorite
     {
@@ -263,6 +304,7 @@ public sealed partial class MainViewModel
 
     public async Task LoadNetDocumentsTargetContainersAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             UpdateOnUi(() =>
@@ -283,9 +325,19 @@ public sealed partial class MainViewModel
         try
         {
             await LoadTargetBrowserAsync();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='LoadNetDocumentsTargetContainersAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             var sync = RequireSyncService();
-            var supportedTargets = await sync.GetSupportedTargetContainersAsync(SelectedNetDocumentsCabinetId);
+            var supportedTargets = await sync.GetSupportedTargetContainersAsync(snapshot.CabinetId);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='GetSupportedTargetContainersAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             var mapped = supportedTargets
                 .Select(t => new NetDocumentsTargetContainerView(t.Id, t.Name, t.Type.ToString(), t.ParentWorkspaceId))
                 .OrderBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -302,7 +354,12 @@ public sealed partial class MainViewModel
 
             if (_selectedNetDocumentsTarget is not null)
             {
-                var path = await sync.ResolveTargetPathAsync(SelectedNetDocumentsCabinetId, _selectedNetDocumentsTarget.Id);
+                var path = await sync.ResolveTargetPathAsync(snapshot.CabinetId, _selectedNetDocumentsTarget.Id);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='ResolveTargetPathAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     SelectedNetDocumentsTargetPath = path;
@@ -322,6 +379,7 @@ public sealed partial class MainViewModel
 
     public async Task LoadTargetBrowserAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -329,7 +387,13 @@ public sealed partial class MainViewModel
 
         if (_workspaceLookupContext is null)
         {
-            _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync();
+            _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(snapshot.RepositoryId, snapshot.CabinetId);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='ResolveWorkspaceLookupContextAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
+            ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
         }
 
         await EnsureTargetBrowserTabLoadedAsync(SelectedTargetBrowserTab);
@@ -337,6 +401,7 @@ public sealed partial class MainViewModel
 
     public async Task EnsureTargetBrowserTabLoadedAsync(NdTargetBrowserTab tab)
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -356,6 +421,19 @@ public sealed partial class MainViewModel
                     await RefreshFavoriteTargetsAsync();
                 }
                 break;
+            case NdTargetBrowserTab.GoToWorkspace:
+                if (_workspaceLookupContext is null)
+                {
+                    _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(snapshot.RepositoryId, snapshot.CabinetId);
+                    if (!IsTargetBrowserContextCurrent(snapshot))
+                    {
+                        Trace.WriteLine($"ND-BROWSER stale-drop op='EnsureTargetBrowserTabLoadedAsync.GoToWorkspace' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                        return;
+                    }
+
+                    ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
+                }
+                break;
             default:
                 break;
         }
@@ -363,6 +441,7 @@ public sealed partial class MainViewModel
 
     public async Task RefreshRecentTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -373,18 +452,23 @@ public sealed partial class MainViewModel
             return;
         }
 
+        var userKey = GetNetDocumentsUserCacheKey();
+        var serviceKey = GetNetDocumentsServiceKey();
+        var cabinetScope = snapshot.CabinetId;
         IsLoadingRecentTargets = true;
         try
         {
-            var userKey = GetNetDocumentsUserCacheKey();
-            var serviceKey = GetNetDocumentsServiceKey();
-            var cabinetScope = SelectedNetDocumentsCabinetId;
             await _jobStore.InitializeAsync();
 
             var cachedRecords = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
                 userKey,
                 serviceKey,
                 cabinetScope);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.cache' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             if (cachedRecords.Count > 0 &&
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
@@ -409,6 +493,11 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.LastUsedUtc)
                     .First())
                 .ToList();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.server' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             Trace.WriteLine($"ND-CACHE recent source=server count={serverItems.Count}");
             _localRecentTargets = serverItems.ToList();
 
@@ -417,6 +506,11 @@ public sealed partial class MainViewModel
                 .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.LastUsedUtc, syncedUtc))
                 .ToList();
             await _jobStore.ReplaceNetDocumentsRecentWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.persist' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             UpdateOnUi(() =>
             {
@@ -434,9 +528,14 @@ public sealed partial class MainViewModel
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
-                    GetNetDocumentsUserCacheKey(),
-                    GetNetDocumentsServiceKey(),
-                    SelectedNetDocumentsCabinetId);
+                    userKey,
+                    serviceKey,
+                    cabinetScope);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.fallback' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 var cachedItems = fallback.Select(ToRecentItem).ToList();
                 _localRecentTargets = cachedItems.ToList();
                 UpdateOnUi(() =>
@@ -470,6 +569,7 @@ public sealed partial class MainViewModel
 
     public async Task RefreshFavoriteTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -480,18 +580,23 @@ public sealed partial class MainViewModel
             return;
         }
 
+        var userKey = GetNetDocumentsUserCacheKey();
+        var serviceKey = GetNetDocumentsServiceKey();
+        var cabinetScope = snapshot.CabinetId;
         IsLoadingFavoriteTargets = true;
         try
         {
-            var userKey = GetNetDocumentsUserCacheKey();
-            var serviceKey = GetNetDocumentsServiceKey();
-            var cabinetScope = SelectedNetDocumentsCabinetId;
             await _jobStore.InitializeAsync();
 
             var cachedRecords = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
                 userKey,
                 serviceKey,
                 cabinetScope);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.cache' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             if (cachedRecords.Count > 0 &&
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
@@ -516,6 +621,11 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.PinnedUtc)
                     .First())
                 .ToList();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.server' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             Trace.WriteLine($"ND-CACHE favorites source=server count={serverItems.Count}");
             _localFavoriteTargets = serverItems.ToList();
 
@@ -524,6 +634,11 @@ public sealed partial class MainViewModel
                 .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.PinnedUtc, syncedUtc))
                 .ToList();
             await _jobStore.ReplaceNetDocumentsFavoriteWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.persist' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             UpdateOnUi(() =>
             {
@@ -541,9 +656,14 @@ public sealed partial class MainViewModel
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
-                    GetNetDocumentsUserCacheKey(),
-                    GetNetDocumentsServiceKey(),
-                    SelectedNetDocumentsCabinetId);
+                    userKey,
+                    serviceKey,
+                    cabinetScope);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.fallback' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 var cachedItems = fallback.Select(ToFavoriteItem).ToList();
                 _localFavoriteTargets = cachedItems.ToList();
                 UpdateOnUi(() =>
@@ -582,8 +702,16 @@ public sealed partial class MainViewModel
 
     public async Task SearchWorkspaceTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
+            return;
+        }
+
+        if (!CanSearchWorkspaceTargets)
+        {
+            WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";
+            TargetBrowserMessage = WorkspaceLookupStatus;
             return;
         }
 
@@ -609,8 +737,12 @@ public sealed partial class MainViewModel
         try
         {
             var resolved = await SearchWorkspaceTargetsInternalAsync(query, token);
-            if (token.IsCancellationRequested)
+            if (token.IsCancellationRequested || !IsTargetBrowserContextCurrent(snapshot))
             {
+                if (!token.IsCancellationRequested)
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='SearchWorkspaceTargetsAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                }
                 return;
             }
 
@@ -670,29 +802,10 @@ public sealed partial class MainViewModel
             }
         }
 
-        await SetSelectedTargetAsync(SelectedWorkspaceSearchTarget.Selection, SelectedWorkspaceSearchTarget.PathDisplay);
-        await SyncSelectedTargetProfileSnapshotAsync();
-        await RefreshReviewScopeNetDocumentsAsync();
-        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
-
-        if (_workspaceLookupContext is not null &&
-            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey) &&
-            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ChildKey))
-        {
-            try
-            {
-                await RequireSyncService().UpdateRecentLookupSelectionAsync(
-                    _workspaceLookupContext.RepositoryId,
-                    _workspaceLookupContext.ChildAttrNum,
-                    _workspaceLookupContext.ChildKey,
-                    _workspaceLookupContext.ParentAttrNum,
-                    _workspaceLookupContext.ParentKey);
-            }
-            catch
-            {
-                // Ignore optional recent-update failures.
-            }
-        }
+        await CommitSelectedTargetAsync(
+            SelectedWorkspaceSearchTarget.Selection,
+            SelectedWorkspaceSearchTarget.PathDisplay,
+            _workspaceLookupContext);
     }
 
     public async Task LoadBrowseRootsAsync()
@@ -763,7 +876,7 @@ public sealed partial class MainViewModel
 
         var selection = CloneSelection(SelectedRecentTarget.Selection);
         selection.SourceFlow = NdTargetSourceFlow.Recent;
-        await SetSelectedTargetAsync(selection, SelectedRecentTarget.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedRecentTarget.PathDisplay);
     }
 
     public async Task SelectTargetFromFavoriteAsync()
@@ -776,7 +889,7 @@ public sealed partial class MainViewModel
 
         var selection = CloneSelection(SelectedFavoriteTarget.Selection);
         selection.SourceFlow = NdTargetSourceFlow.Favorite;
-        await SetSelectedTargetAsync(selection, SelectedFavoriteTarget.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedFavoriteTarget.PathDisplay);
     }
 
     public Task SearchWorkspaceParentsAsync() => SearchWorkspaceTargetsAsync();
@@ -789,11 +902,19 @@ public sealed partial class MainViewModel
     private async Task<List<NetDocumentsWorkspaceTargetResultView>> SearchWorkspaceTargetsInternalAsync(string query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = CaptureTargetBrowserContextSnapshot();
+        if (!CanSearchWorkspaceTargets)
+        {
+            Trace.WriteLine($"ND-SEARCH skipped reason='workspace lookup unavailable' repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+            return new List<NetDocumentsWorkspaceTargetResultView>();
+        }
         var results = new List<NetDocumentsWorkspaceTargetResultView>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sync = RequireSyncService();
-        Trace.WriteLine($"ND-SEARCH start repo='{SelectedNetDocumentsRepositoryId}', cabinet='{SelectedNetDocumentsCabinetId}', query='{query}'.");
-        var fallbackWorkspaces = await sync.SearchWorkspacesAsync(SelectedNetDocumentsCabinetId, query, 50, cancellationToken);
+        var repositoryId = snapshot.RepositoryId;
+        var cabinetId = snapshot.CabinetId;
+        Trace.WriteLine($"ND-SEARCH start repo='{repositoryId}', cabinet='{cabinetId}', query='{query}', ctxVersion={snapshot.Version}.");
+        var fallbackWorkspaces = await sync.SearchWorkspacesAsync(cabinetId, query, 50, cancellationToken);
         Trace.WriteLine($"ND-SEARCH api-fallback-candidates={fallbackWorkspaces.Count}");
         foreach (var item in fallbackWorkspaces)
         {
@@ -821,7 +942,13 @@ public sealed partial class MainViewModel
         }
         Trace.WriteLine($"ND-SEARCH api-objects-kept={results.Count}");
 
-        _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(cancellationToken);
+        _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(repositoryId, cabinetId, cancellationToken);
+        if (!IsTargetBrowserContextCurrent(snapshot))
+        {
+            Trace.WriteLine($"ND-BROWSER stale-drop op='SearchWorkspaceTargetsInternalAsync.ResolveWorkspaceLookupContextAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+            return new List<NetDocumentsWorkspaceTargetResultView>();
+        }
+        ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
         if (_workspaceLookupContext is not null)
         {
             Trace.WriteLine(
@@ -1432,6 +1559,148 @@ public sealed partial class MainViewModel
         QueueSettingsSave();
     }
 
+    private async Task CommitSelectedTargetAsync(
+        NdTargetSelection selection,
+        string? pathDisplay,
+        WorkspaceLookupContext? contextOverride = null)
+    {
+        await SetSelectedTargetAsync(selection, pathDisplay);
+        await SyncSelectedTargetProfileSnapshotAsync();
+        await RefreshReviewScopeNetDocumentsAsync();
+        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
+
+        var context = contextOverride ?? _workspaceLookupContext;
+        if (selection.Type != NdTargetType.Workspace ||
+            context is null ||
+            string.IsNullOrWhiteSpace(context.ParentKey) ||
+            string.IsNullOrWhiteSpace(context.ChildKey))
+        {
+            return;
+        }
+
+        try
+        {
+            await RequireSyncService().UpdateRecentLookupSelectionAsync(
+                context.RepositoryId,
+                context.ChildAttrNum,
+                context.ChildKey,
+                context.ParentAttrNum,
+                context.ParentKey);
+        }
+        catch
+        {
+            // Ignore optional recent-update failures.
+        }
+    }
+
+    private async Task AutoCommitRecentTargetSelectionAsync(NetDocumentsTargetItemView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            var selection = CloneSelection(selected.Selection);
+            selection.SourceFlow = NdTargetSourceFlow.Recent;
+            await CommitSelectedTargetAsync(selection, selected.PathDisplay);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private async Task AutoCommitFavoriteTargetSelectionAsync(NetDocumentsTargetItemView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            var selection = CloneSelection(selected.Selection);
+            selection.SourceFlow = NdTargetSourceFlow.Favorite;
+            await CommitSelectedTargetAsync(selection, selected.PathDisplay);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private async Task AutoCommitWorkspaceTargetSelectionAsync(NetDocumentsWorkspaceTargetResultView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            if (_workspaceLookupContext is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(selected.ParentKey))
+                {
+                    _workspaceLookupContext.ParentKey = selected.ParentKey;
+                }
+
+                if (!string.IsNullOrWhiteSpace(selected.ChildKey))
+                {
+                    _workspaceLookupContext.ChildKey = selected.ChildKey;
+                }
+            }
+
+            await CommitSelectedTargetAsync(selected.Selection, selected.PathDisplay, _workspaceLookupContext);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private CancellationTokenSource BeginAutoTargetSelection()
+    {
+        _autoTargetSelectionCts?.Cancel();
+        _autoTargetSelectionCts?.Dispose();
+        _autoTargetSelectionCts = new CancellationTokenSource();
+        _isAutoSelectingTarget = true;
+        return _autoTargetSelectionCts;
+    }
+
+    private void EndAutoTargetSelection(CancellationTokenSource cts)
+    {
+        if (!ReferenceEquals(_autoTargetSelectionCts, cts))
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _isAutoSelectingTarget = false;
+        _autoTargetSelectionCts = null;
+        cts.Dispose();
+    }
+
     private async Task SyncSelectedTargetProfileSnapshotAsync()
     {
         if (_selectedNetDocumentsTarget is null)
@@ -1566,24 +1835,35 @@ public sealed partial class MainViewModel
 
     private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) || string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId))
+        return await ResolveWorkspaceLookupContextAsync(
+            SelectedNetDocumentsRepositoryId,
+            SelectedNetDocumentsCabinetId,
+            cancellationToken);
+    }
+
+    private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(
+        string repositoryId,
+        string cabinetId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || string.IsNullOrWhiteSpace(cabinetId))
         {
             return null;
         }
 
         await _jobStore.InitializeAsync(cancellationToken);
-        var attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+        var attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
         if (attributes.Count == 0)
         {
             try
             {
                 Trace.WriteLine(
-                    $"ND-SEARCH lookup-context bootstrap: syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                    $"ND-SEARCH lookup-context bootstrap: syncing attributes for repo='{repositoryId}' cabinet='{cabinetId}'.");
                 await RequireSyncService().SyncCabinetAttributesAsync(
-                    SelectedNetDocumentsCabinetId,
-                    SelectedNetDocumentsRepositoryId,
+                    cabinetId,
+                    repositoryId,
                     cancellationToken);
-                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
                 Trace.WriteLine($"ND-SEARCH lookup-context bootstrap: synced attributes count={attributes.Count}.");
             }
             catch (Exception ex)
@@ -1592,7 +1872,7 @@ public sealed partial class MainViewModel
             }
         }
         var selectedCabinet = _netDocumentsCabinets
-            .FirstOrDefault(c => string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(c => string.Equals(c.CabinetId, cabinetId, StringComparison.OrdinalIgnoreCase));
 
         var workspaceAttrNum = selectedCabinet?.WorkspaceAttributeNum;
         var workspaceAttrName = selectedCabinet?.WorkspacePluralName ?? string.Empty;
@@ -1606,12 +1886,12 @@ public sealed partial class MainViewModel
             try
             {
                 Trace.WriteLine(
-                    $"ND-SEARCH lookup-context refresh: no lookup flags found; re-syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                    $"ND-SEARCH lookup-context refresh: no lookup flags found; re-syncing attributes for repo='{repositoryId}' cabinet='{cabinetId}'.");
                 await RequireSyncService().SyncCabinetAttributesAsync(
-                    SelectedNetDocumentsCabinetId,
-                    SelectedNetDocumentsRepositoryId,
+                    cabinetId,
+                    repositoryId,
                     cancellationToken);
-                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
                 lookupAttributes = attributes.Where(a => a.IsLookup).ToList();
                 Trace.WriteLine($"ND-SEARCH lookup-context refresh: lookup attributes after re-sync={lookupAttributes.Count}.");
             }
@@ -1700,8 +1980,8 @@ public sealed partial class MainViewModel
 
             return new WorkspaceLookupContext
             {
-                RepositoryId = SelectedNetDocumentsRepositoryId,
-                CabinetId = SelectedNetDocumentsCabinetId,
+                RepositoryId = repositoryId,
+                CabinetId = cabinetId,
                 WorkspaceEnabled = true,
                 WorkspaceAttrNum = workspaceAttrNum.Value,
                 WorkspaceAttrName = workspaceAttrName,
@@ -1792,8 +2072,8 @@ public sealed partial class MainViewModel
 
         return new WorkspaceLookupContext
         {
-            RepositoryId = SelectedNetDocumentsRepositoryId,
-            CabinetId = SelectedNetDocumentsCabinetId,
+            RepositoryId = repositoryId,
+            CabinetId = cabinetId,
             WorkspaceEnabled = true,
             WorkspaceAttrNum = workspaceAttrNum.Value,
             WorkspaceAttrName = workspaceAttrName,
@@ -1806,6 +2086,54 @@ public sealed partial class MainViewModel
             ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
             ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
         };
+    }
+
+    private (long Version, string RepositoryId, string CabinetId) CaptureTargetBrowserContextSnapshot()
+    {
+        return (
+            _targetBrowserContextVersion,
+            SelectedNetDocumentsRepositoryId ?? string.Empty,
+            SelectedNetDocumentsCabinetId ?? string.Empty);
+    }
+
+    private bool IsTargetBrowserContextCurrent((long Version, string RepositoryId, string CabinetId) snapshot)
+    {
+        return snapshot.Version == _targetBrowserContextVersion &&
+               string.Equals(snapshot.RepositoryId, SelectedNetDocumentsRepositoryId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(snapshot.CabinetId, SelectedNetDocumentsCabinetId ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void InvalidateTargetBrowserContext(string reason)
+    {
+        _targetBrowserContextVersion++;
+        _workspaceSearchCts?.Cancel();
+        _workspaceSearchCts?.Dispose();
+        _workspaceSearchCts = null;
+        _workspaceLookupContext = null;
+        _isWorkspaceLookupAvailable = true;
+        Trace.WriteLine($"ND-BROWSER context-reset reason='{reason}' version={_targetBrowserContextVersion} repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+        OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+        OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+    }
+
+    private void ApplyWorkspaceLookupAvailability(WorkspaceLookupContext? context)
+    {
+        _isWorkspaceLookupAvailable = context is not null;
+        OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+        OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+
+        if (!_isWorkspaceLookupAvailable)
+        {
+            WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";
+            if (SelectedTargetBrowserTab == NdTargetBrowserTab.GoToWorkspace)
+            {
+                TargetBrowserMessage = WorkspaceLookupStatus;
+            }
+        }
+        else if (WorkspaceLookupStatus.Contains("workspace search is disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            WorkspaceLookupStatus = string.Empty;
+        }
     }
 
     private static int NameContains(string? name, string term)

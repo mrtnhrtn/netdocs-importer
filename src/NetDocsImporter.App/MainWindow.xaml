@@ -192,7 +192,13 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#F8FAFC" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8">
-                <ListBox ItemsSource="{Binding Steps}" SelectedItem="{Binding CurrentStep, Mode=TwoWay}" BorderThickness="0" Background="Transparent">
+                <ListBox ItemsSource="{Binding Steps}"
+                         SelectedItem="{Binding CurrentStep, Mode=TwoWay}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         HorizontalContentAlignment="Stretch">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Padding" Value="4" />
@@ -209,13 +215,13 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type local:StepItem}">
                             <StackPanel>
-                                <StackPanel Orientation="Horizontal">
-                                    <Border Width="22" Height="22" Background="#E1E7EF" CornerRadius="11" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Border Width="22" Height="22" Background="#E1E7EF" CornerRadius="11" Margin="0,0,8,0" VerticalAlignment="Top">
                                         <TextBlock Text="{Binding Number}" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold" />
                                     </Border>
-                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
                                 </StackPanel>
-                                <TextBlock Text="{Binding Subtitle}" Foreground="#667085" TextWrapping="Wrap" Margin="30,2,0,0" />
+                                <TextBlock Text="{Binding Subtitle}" Foreground="#667085" TextWrapping="Wrap" TextAlignment="Center" Margin="0,2,0,0" />
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -231,9 +237,6 @@
                         <DataTemplate x:Key="ReviewScopeTemplate">
                             <steps:ReviewScopeStepView />
                         </DataTemplate>
-                        <DataTemplate x:Key="NdImportConfigTemplate">
-                            <steps:NdImportConfigStepView />
-                        </DataTemplate>
                         <DataTemplate x:Key="RecentJobsTemplate">
                             <steps:RecentJobsStepView />
                         </DataTemplate>
@@ -247,9 +250,6 @@
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.ReviewScope}">
                                     <Setter Property="ContentTemplate" Value="{StaticResource ReviewScopeTemplate}" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.NdImportConfig}">
-                                    <Setter Property="ContentTemplate" Value="{StaticResource NdImportConfigTemplate}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding CurrentStep.Key}" Value="{x:Static local:StepKey.RecentJobs}">
                                     <Setter Property="ContentTemplate" Value="{StaticResource RecentJobsTemplate}" />

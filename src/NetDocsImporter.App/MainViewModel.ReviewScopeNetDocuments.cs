@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Text;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 
@@ -33,6 +34,34 @@ public sealed partial class MainViewModel
     public string ReviewTargetContainerType => _jobContext.TargetContainerType;
 
     public string ReviewTargetPath => _jobContext.TargetPath;
+
+    public string ReviewTargetBreadcrumbDisplay
+    {
+        get
+        {
+            var repository = string.IsNullOrWhiteSpace(ReviewTargetRepository) ? "--" : ReviewTargetRepository;
+            var cabinet = string.IsNullOrWhiteSpace(ReviewTargetCabinet) ? "--" : ReviewTargetCabinet;
+            var path = string.IsNullOrWhiteSpace(ReviewTargetPath) ? "--" : ReviewTargetPath;
+
+            var builder = new StringBuilder();
+            builder.Append('[').Append(repository).Append("] - [")
+                .Append(cabinet).Append("] - [")
+                .Append(path).Append(']');
+
+            if (_workspaceLookupContext is not null &&
+                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey) &&
+                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ChildKey))
+            {
+                builder.Append(" [")
+                    .Append(_workspaceLookupContext.ParentKey)
+                    .Append('\\')
+                    .Append(_workspaceLookupContext.ChildKey)
+                    .Append(']');
+            }
+
+            return builder.ToString();
+        }
+    }
 
     public string ReviewProfileLastSyncDisplay =>
         _jobContext.NetDocumentsProfileContext?.LastSyncUtc?.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) ?? "--";
@@ -152,6 +181,7 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(ReviewTargetContainerName));
         OnPropertyChanged(nameof(ReviewTargetContainerType));
         OnPropertyChanged(nameof(ReviewTargetPath));
+        OnPropertyChanged(nameof(ReviewTargetBreadcrumbDisplay));
         OnPropertyChanged(nameof(ReviewProfileLastSyncDisplay));
         OnPropertyChanged(nameof(ReviewProfileAttributeCountDisplay));
         OnPropertyChanged(nameof(ReviewProfileLookupCountDisplay));

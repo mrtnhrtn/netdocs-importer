@@ -642,9 +642,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _showLegacyScopeExplorer = false;
 
         Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Login & choose your NetDocuments location to pre-fill profiling attributes", this));
-        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Review & scope", "Select folder and review for issues", this));
-        Steps.Add(new StepItem(3, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
-        Steps.Add(new StepItem(4, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and review upload readiness", this));
+        Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();
@@ -745,6 +744,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             }
             await RefreshReviewScopeNetDocumentsAsync();
             await RefreshPreExportWarningsAsync();
+            if (IsDirectApiMode)
+            {
+                _ = RefreshDirectUploadPreflightAsync();
+            }
         }
     }
 
@@ -1219,7 +1222,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         _ndImportDateFormat = NormalizeNdImportDateFormat(_settings.NdImportDateFormat);
         OnPropertyChanged(nameof(NdImportDateFormat));
-        _selectedImportExecutionMode = ParseImportExecutionMode(_settings.ImportExecutionMode);
+        _selectedImportExecutionMode = ImportExecutionMode.DirectApi;
         OnPropertyChanged(nameof(SelectedImportExecutionMode));
         OnPropertyChanged(nameof(IsNdImportCsvMode));
         OnPropertyChanged(nameof(IsDirectApiMode));
