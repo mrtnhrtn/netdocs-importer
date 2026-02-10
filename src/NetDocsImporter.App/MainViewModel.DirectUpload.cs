@@ -17,6 +17,8 @@ public sealed partial class MainViewModel
     private UploadPlanResult? _directUploadPlan;
     private bool _isDirectUploadBusy;
     private string _directUploadStatus = "Direct upload mode is available as preview.";
+    private double _directUploadProgressPercent;
+    private string? _lastDirectUploadLogPath;
 
     public IReadOnlyList<ImportExecutionMode> ImportExecutionModeOptions => _importExecutionModeOptions;
 
@@ -66,6 +68,16 @@ public sealed partial class MainViewModel
         private set => SetField(ref _directUploadStatus, value);
     }
 
+    public double DirectUploadProgressPercent
+    {
+        get => _directUploadProgressPercent;
+        private set => SetField(ref _directUploadProgressPercent, value);
+    }
+
+    public string DirectUploadProgressPercentDisplay => $"{DirectUploadProgressPercent:0.##}%";
+
+    public bool CanExportDirectUploadLog => !string.IsNullOrWhiteSpace(_lastDirectUploadLogPath) && File.Exists(_lastDirectUploadLogPath);
+
     public bool CanRunDirectUpload =>
         IsDirectApiMode &&
         !IsDirectUploadBusy &&
@@ -98,6 +110,8 @@ public sealed partial class MainViewModel
         try
         {
             IsDirectUploadBusy = true;
+            DirectUploadProgressPercent = 0;
+            OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
             DirectUploadStatus = "Building direct upload plan...";
 
             var service = RequireDirectUploadService();
@@ -200,6 +214,8 @@ public sealed partial class MainViewModel
         try
         {
             IsDirectUploadBusy = true;
+            DirectUploadProgressPercent = 0;
+            OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
             StatusText = "Running direct upload...";
             var service = RequireDirectUploadService();
             DirectUploadStatus = "Materializing direct upload plan...";
@@ -222,20 +238,33 @@ public sealed partial class MainViewModel
 
             var progress = new Progress<DirectUploadProgress>(p =>
             {
-                DirectUploadStatus = $"Uploading {p.CompletedFiles:N0}/{p.TotalFiles:N0}: {p.CurrentRelativePath}";
+                var percent = p.PercentComplete;
+                if (percent <= 0 && p.TotalFiles > 0)
+                {
+                    percent = Math.Round((double)p.CompletedFiles / p.TotalFiles * 100d, 2);
+                }
+
+                DirectUploadProgressPercent = percent;
+                OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
+                DirectUploadStatus = $"Uploading {p.CompletedFiles:N0}/{p.TotalFiles:N0} ({percent:0.##}%): {p.CurrentRelativePath}";
             });
 
             var result = await service.UploadAsync(executionPlan, executionContext, progress);
             var reportPath = await WriteDirectUploadReportAsync(executionPlan, result);
+            var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath);
+            _lastDirectUploadLogPath = runLogPath;
+            OnPropertyChanged(nameof(CanExportDirectUploadLog));
+            DirectUploadProgressPercent = 100;
+            OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
 
             StatusText =
-                $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}";
+                $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}, resumed {result.ResumedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}. Run log: {runLogPath}";
 
             var runStatus = result.FailedFiles > 0 || result.SkippedFiles > 0 ? "DirectUpload Partial" : "DirectUpload";
             NdImportSessions.Insert(0, new NdImportSessionView(
                 DateTime.Now,
                 runStatus,
-                $"Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (Skipped {result.SkippedFiles:N0}), Created {result.CreatedFolders:N0}, Failed {result.FailedFiles:N0}, report {Path.GetFileName(reportPath)}"));
+                $"Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (Skipped {result.SkippedFiles:N0}, Resumed {result.ResumedFiles:N0}), Created {result.CreatedFolders:N0}, Failed {result.FailedFiles:N0}, report {Path.GetFileName(reportPath)}"));
 
             foreach (var skippedIssue in executionPlan.Issues.Where(DirectUploadIssueUtilities.IsSkippedFileIssue))
             {
@@ -262,11 +291,14 @@ public sealed partial class MainViewModel
     {
         return new DirectUploadPlanContext
         {
+            JobId = CurrentJobId ?? string.Empty,
             CabinetId = SelectedNetDocumentsCabinetId,
             RepositoryId = SelectedNetDocumentsRepositoryId,
             EffectiveProfileDefaults = EffectiveProfileDefaults,
             AllowCreateFolders = allowCreateFolders,
-            RequireAcl = false
+            RequireAcl = false,
+            MaxConcurrency = Math.Clamp(MaxConcurrency, 1, 8),
+            MaxRetryAttempts = 4
         };
     }
 
@@ -318,6 +350,80 @@ public sealed partial class MainViewModel
 
         await File.WriteAllLinesAsync(reportPath, lines, new UTF8Encoding(false));
         return reportPath;
+    }
+
+    private async Task<string> WriteDirectUploadRunLogAsync(
+        UploadPlanResult plan,
+        DirectUploadRunResult result,
+        string reportPath)
+    {
+        Directory.CreateDirectory(_paths.ReportsDirectory);
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+        var job = CurrentJobId ?? "unknown";
+        var logPath = Path.Combine(_paths.ReportsDirectory, $"directupload-{job}-{timestamp}-runlog.txt");
+
+        var builder = new StringBuilder();
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("|                 NetDocs Importer Run Log                  |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine($" Started: {DateTime.Now:g}");
+        builder.AppendLine($" Job Id: {job}");
+        builder.AppendLine($" Target: {SelectedNetDocumentsTargetName}");
+        builder.AppendLine($" Requested: {result.TotalRequestedFiles:N0}");
+        builder.AppendLine($" Planned: {result.PlannedFiles:N0}");
+        builder.AppendLine($" Uploaded: {result.SucceededFiles:N0}");
+        builder.AppendLine($" Failed: {result.FailedFiles:N0}");
+        builder.AppendLine($" Skipped: {result.SkippedFiles:N0}");
+        builder.AppendLine($" Resumed: {result.ResumedFiles:N0}");
+        builder.AppendLine($" CreatedFolders: {result.CreatedFolders:N0}");
+        builder.AppendLine($" CSV Report: {reportPath}");
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("| File Outcomes                                              |");
+        builder.AppendLine("+------------------------------------------------------------+");
+
+        foreach (var file in result.Files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
+        {
+            var status = file.Succeeded ? "OK" : "FAIL";
+            builder.AppendLine($" [{status}] {file.RelativePath}");
+            builder.AppendLine($"       http={file.HttpStatus} message={file.Message}");
+        }
+
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("| Planned Folder Mutations                                   |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        foreach (var folder in plan.Folders.Where(f => f.CreatedDuringPlanning))
+        {
+            builder.AppendLine($" [CREATE] {folder.RelativePath} -> {folder.ContainerId}");
+        }
+
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("| Preflight Issues                                           |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        foreach (var issue in plan.Issues)
+        {
+            builder.AppendLine($" [{issue.Severity}] {issue.Code} :: {issue.Message} :: {issue.RelativePath}");
+        }
+
+        await File.WriteAllTextAsync(logPath, builder.ToString(), new UTF8Encoding(false));
+        return logPath;
+    }
+
+    public async Task ExportLastDirectUploadLogAsync(string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(_lastDirectUploadLogPath) || !File.Exists(_lastDirectUploadLogPath))
+        {
+            throw new InvalidOperationException("No direct upload run log is available to export.");
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrWhiteSpace(destinationDirectory))
+        {
+            Directory.CreateDirectory(destinationDirectory);
+        }
+
+        await using var sourceStream = File.OpenRead(_lastDirectUploadLogPath);
+        await using var destinationStream = File.Create(destinationPath);
+        await sourceStream.CopyToAsync(destinationStream);
     }
 
     private void SetDirectUploadPlan(UploadPlanResult? plan)

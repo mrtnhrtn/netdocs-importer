@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Linq;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.NetDocs;
@@ -75,17 +76,22 @@ public sealed class NetDocumentsApiClient
     public async Task PostAsync(
         string relativeOrAbsolutePath,
         HttpContent content,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool retryOnThrottle = true)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
         var stopwatch = Stopwatch.StartNew();
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
-        {
-            Content = content
-        };
-        request.Headers.TryAddWithoutValidation("Accept", "application/json");
-
-        using var response = await _client.SendAsync(request, cancellationToken);
+        using var response = retryOnThrottle
+            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, cancellationToken), cancellationToken)
+            : await SendOnceAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+                {
+                    Content = content
+                };
+                request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                return request;
+            }, cancellationToken);
         stopwatch.Stop();
         var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
@@ -103,17 +109,22 @@ public sealed class NetDocumentsApiClient
     public async Task<JsonDocument?> PostJsonAsync(
         string relativeOrAbsolutePath,
         HttpContent content,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool retryOnThrottle = true)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
         var stopwatch = Stopwatch.StartNew();
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
-        {
-            Content = content
-        };
-        request.Headers.TryAddWithoutValidation("Accept", "application/json");
-
-        using var response = await _client.SendAsync(request, cancellationToken);
+        using var response = retryOnThrottle
+            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, cancellationToken), cancellationToken)
+            : await SendOnceAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+                {
+                    Content = content
+                };
+                request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                return request;
+            }, cancellationToken);
         stopwatch.Stop();
         var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
@@ -152,13 +163,18 @@ public sealed class NetDocumentsApiClient
         {
             var request = requestFactory();
             var response = await _client.SendAsync(request, cancellationToken);
-            if (response.StatusCode != (HttpStatusCode)429 || attempt == maxAttempts)
+            if (!ShouldRetry(response.StatusCode) || attempt == maxAttempts)
             {
                 return response;
             }
 
             var retryAfter = response.Headers.RetryAfter?.Delta ?? delay;
-            Trace.WriteLine($"ND-HTTP throttled status=429 attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0}");
+            var apiCost = TryReadFirstHeaderValue(response, "X-ND-API-Cost") ??
+                          TryReadFirstHeaderValue(response, "X-API-Cost");
+            var remaining = TryReadFirstHeaderValue(response, "X-ND-API-Remaining") ??
+                            TryReadFirstHeaderValue(response, "X-RateLimit-Remaining");
+            Trace.WriteLine(
+                $"ND-HTTP retry status={(int)response.StatusCode} attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0} apiCost='{apiCost ?? string.Empty}' remaining='{remaining ?? string.Empty}'");
             response.Dispose();
             await Task.Delay(retryAfter, cancellationToken);
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
@@ -193,8 +209,12 @@ public sealed class NetDocumentsApiClient
     {
         var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
         var snippet = BuildSnippet(body);
+        var apiCost = TryReadFirstHeaderValue(response, "X-ND-API-Cost") ??
+                      TryReadFirstHeaderValue(response, "X-API-Cost");
+        var remaining = TryReadFirstHeaderValue(response, "X-ND-API-Remaining") ??
+                        TryReadFirstHeaderValue(response, "X-RateLimit-Remaining");
         Trace.WriteLine(
-            $"ND-HTTP error method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' snippet='{snippet}'");
+            $"ND-HTTP error method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' apiCost='{apiCost ?? string.Empty}' remaining='{remaining ?? string.Empty}' snippet='{snippet}'");
     }
 
     private static string BuildSnippet(string text)
@@ -206,5 +226,59 @@ public sealed class NetDocumentsApiClient
 
         var snippet = text.Length > 240 ? text[..240] : text;
         return SensitiveDataRedactor.RedactBearerTokens(snippet);
+    }
+
+    private static async Task<Func<HttpRequestMessage>> BuildBufferedRequestFactoryAsync(
+        HttpMethod method,
+        Uri requestUri,
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        var bytes = await content.ReadAsByteArrayAsync(cancellationToken);
+        var headers = content.Headers
+            .Select(header => new KeyValuePair<string, IReadOnlyList<string>>(header.Key, header.Value.ToList()))
+            .ToList();
+
+        return () =>
+        {
+            var request = new HttpRequestMessage(method, requestUri);
+            var requestContent = new ByteArrayContent(bytes);
+            foreach (var header in headers)
+            {
+                requestContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            request.Content = requestContent;
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            return request;
+        };
+    }
+
+    private async Task<HttpResponseMessage> SendOnceAsync(
+        Func<HttpRequestMessage> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        var request = requestFactory();
+        return await _client.SendAsync(request, cancellationToken);
+    }
+
+    private static bool ShouldRetry(HttpStatusCode statusCode)
+    {
+        return statusCode == (HttpStatusCode)429 ||
+               statusCode == HttpStatusCode.RequestTimeout ||
+               statusCode == HttpStatusCode.InternalServerError ||
+               statusCode == HttpStatusCode.BadGateway ||
+               statusCode == HttpStatusCode.ServiceUnavailable ||
+               statusCode == HttpStatusCode.GatewayTimeout;
+    }
+
+    private static string? TryReadFirstHeaderValue(HttpResponseMessage response, string headerName)
+    {
+        if (!response.Headers.TryGetValues(headerName, out var values))
+        {
+            return null;
+        }
+
+        return values.FirstOrDefault();
     }
 }

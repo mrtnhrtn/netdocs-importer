@@ -142,6 +142,13 @@
                                     Style="{StaticResource PrimaryButton}"
                                     IsEnabled="{Binding CanRunDirectUpload}" />
                         </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6" VerticalAlignment="Center">
+                            <ProgressBar Width="280"
+                                         Height="12"
+                                         Maximum="100"
+                                         Value="{Binding DirectUploadProgressPercent}" />
+                            <TextBlock Text="{Binding DirectUploadProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
                         <TextBlock Text="{Binding DirectUploadStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
                         <TextBlock Text="Preflight Issues" Foreground="#555555" />
                         <DataGrid ItemsSource="{Binding DirectUploadPreflightIssues}"

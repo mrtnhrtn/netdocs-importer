@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+using System.Linq;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 
@@ -13,6 +16,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 {
     private static readonly Regex StatusCodeRegex = new(@"\((?<status>\d{3})\s", RegexOptions.Compiled);
     private static readonly Regex LegacyWorkspaceIdRegex = new(@"^\d{4}-\d{4}-\d{4}$", RegexOptions.Compiled);
+    private const int DefaultMaxUploadConcurrency = 4;
+    private const int MaxUploadConcurrency = 8;
+    private const int DefaultMaxUploadAttempts = 4;
 
     private readonly NetDocumentsApiClient _apiClient;
     private readonly JobStore _jobStore;
@@ -47,6 +53,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         string Name,
         string ExtensionOrType,
         string FailureReason);
+
+    private readonly record struct UploadWorkItem(
+        UploadPlanFileEntry File,
+        string TransferId,
+        int Attempt);
 
     public async Task<UploadPlanResult> BuildPlanAsync(
         string jobId,
@@ -270,37 +281,309 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         var files = plan.Files;
-        var results = new List<DirectUploadFileResult>(files.Count);
+        var totalFiles = files.Count;
+        if (totalFiles == 0)
+        {
+            return new DirectUploadRunResult
+            {
+                Files = Array.Empty<DirectUploadFileResult>(),
+                TotalRequestedFiles = plan.TotalRequestedFiles,
+                PlannedFiles = plan.PlannedFiles,
+                SkippedFiles = plan.SkippedFiles,
+                CreatedFolders = context.AllowCreateFolders ? plan.PlannedFolderCreates : 0,
+                SucceededFiles = 0,
+                FailedFiles = 0,
+                ResumedFiles = 0
+            };
+        }
+
+        var maxConcurrency = Math.Clamp(
+            context.MaxConcurrency <= 0 ? DefaultMaxUploadConcurrency : context.MaxConcurrency,
+            1,
+            MaxUploadConcurrency);
+        var maxAttempts = Math.Clamp(
+            context.MaxRetryAttempts <= 0 ? DefaultMaxUploadAttempts : context.MaxRetryAttempts,
+            1,
+            8);
+        var initialConcurrency = Math.Min(DefaultMaxUploadConcurrency, maxConcurrency);
+        var throttle = new AdaptiveUploadController(1, maxConcurrency, initialConcurrency);
+
+        var transferStates = !string.IsNullOrWhiteSpace(context.JobId)
+            ? await _jobStore.GetTransferStatesByFileAsync(context.JobId, cancellationToken)
+            : new Dictionary<string, TransferState>(StringComparer.OrdinalIgnoreCase);
+
+        var resultsByFileId = new ConcurrentDictionary<string, DirectUploadFileResult>(StringComparer.OrdinalIgnoreCase);
+        var pending = new List<UploadWorkItem>(files.Count);
         var completed = 0;
+        var resumedFiles = 0;
 
         foreach (var file in files)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(new DirectUploadProgress(completed, files.Count, file.RelativePath));
-
-            if (!File.Exists(file.FullPath))
+            if (transferStates.TryGetValue(file.FileId, out var state) &&
+                string.Equals(state.Status, "Succeeded", StringComparison.OrdinalIgnoreCase))
             {
-                results.Add(new DirectUploadFileResult(file.RelativePath, false, 0, "File not found on disk."));
-                completed++;
+                resultsByFileId[file.FileId] = new DirectUploadFileResult(
+                    file.RelativePath,
+                    true,
+                    200,
+                    "Already uploaded in a previous run (resumed).");
+                resumedFiles++;
+                var resumedCompleted = Interlocked.Increment(ref completed);
+                progress?.Report(new DirectUploadProgress(
+                    resumedCompleted,
+                    totalFiles,
+                    file.RelativePath,
+                    ComputePercent(resumedCompleted, totalFiles)));
                 continue;
             }
 
-            var uploadResult = await TryUploadFileAsync(file, context, cancellationToken);
-            results.Add(uploadResult);
-            completed++;
-            progress?.Report(new DirectUploadProgress(completed, files.Count, file.RelativePath));
+            var transferId = transferStates.TryGetValue(file.FileId, out var existing)
+                ? existing.TransferId
+                : Guid.NewGuid().ToString("N");
+            var attempt = transferStates.TryGetValue(file.FileId, out var existingState)
+                ? Math.Clamp(existingState.Attempt + 1, 1, maxAttempts)
+                : 1;
+            pending.Add(new UploadWorkItem(file, transferId, attempt));
         }
+
+        if (pending.Count > 0)
+        {
+            var channel = Channel.CreateBounded<UploadWorkItem>(new BoundedChannelOptions(maxConcurrency * 2)
+            {
+                FullMode = BoundedChannelFullMode.Wait
+            });
+
+            var writer = channel.Writer;
+            var reader = channel.Reader;
+
+            var queueTask = Task.Run(async () =>
+            {
+                foreach (var item in pending)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await UpsertQueuedTransferAsync(context, item, cancellationToken);
+                    await writer.WriteAsync(item, cancellationToken);
+                }
+
+                writer.TryComplete();
+            }, cancellationToken);
+
+            var workers = Enumerable.Range(0, maxConcurrency)
+                .Select(workerId => Task.Run(() =>
+                    UploadWorkerLoopAsync(
+                        workerId,
+                        reader,
+                        context,
+                        maxAttempts,
+                        totalFiles,
+                        throttle,
+                        resultsByFileId,
+                        progress,
+                        () => Interlocked.Increment(ref completed),
+                        cancellationToken), cancellationToken))
+                .ToArray();
+
+            await Task.WhenAll(workers.Append(queueTask));
+        }
+
+        var ordered = files
+            .Select(file => resultsByFileId.TryGetValue(file.FileId, out var result)
+                ? result
+                : new DirectUploadFileResult(file.RelativePath, false, 0, "Upload did not produce a result."))
+            .ToList();
 
         return new DirectUploadRunResult
         {
-            Files = results,
+            Files = ordered,
             TotalRequestedFiles = plan.TotalRequestedFiles,
             PlannedFiles = plan.PlannedFiles,
             SkippedFiles = plan.SkippedFiles,
             CreatedFolders = context.AllowCreateFolders ? plan.PlannedFolderCreates : 0,
-            SucceededFiles = results.Count(r => r.Succeeded),
-            FailedFiles = results.Count(r => !r.Succeeded)
+            SucceededFiles = ordered.Count(r => r.Succeeded),
+            FailedFiles = ordered.Count(r => !r.Succeeded),
+            ResumedFiles = resumedFiles
         };
+    }
+
+    private async Task UploadWorkerLoopAsync(
+        int workerId,
+        ChannelReader<UploadWorkItem> reader,
+        DirectUploadPlanContext context,
+        int maxAttempts,
+        int totalFiles,
+        AdaptiveUploadController throttle,
+        ConcurrentDictionary<string, DirectUploadFileResult> resultsByFileId,
+        IProgress<DirectUploadProgress>? progress,
+        Func<int> incrementCompleted,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var workItem in reader.ReadAllAsync(cancellationToken))
+        {
+            var attempt = workItem.Attempt;
+            while (attempt <= maxAttempts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await throttle.WaitForSlotAsync(workerId, cancellationToken);
+                var startedUtc = DateTime.UtcNow;
+                await UpdateRunningTransferAsync(context, workItem.TransferId, attempt, workerId, startedUtc, cancellationToken);
+
+                var stopwatch = Stopwatch.StartNew();
+                DirectUploadFileResult uploadResult;
+                try
+                {
+                    uploadResult = await TryUploadFileAsync(workItem.File, context, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    uploadResult = new DirectUploadFileResult(workItem.File.RelativePath, false, 0, ex.Message);
+                }
+                finally
+                {
+                    stopwatch.Stop();
+                }
+
+                var statusCode = uploadResult.HttpStatus;
+                var succeeded = uploadResult.Succeeded;
+                var retryAfter = throttle.RegisterOutcome(statusCode, succeeded);
+                await UpdateFinishedTransferAsync(
+                    context,
+                    workItem.TransferId,
+                    succeeded ? "Succeeded" : "Failed",
+                    stopwatch.ElapsedMilliseconds,
+                    uploadResult.Message,
+                    statusCode <= 0 ? null : statusCode,
+                    cancellationToken);
+
+                if (succeeded)
+                {
+                    resultsByFileId[workItem.File.FileId] = uploadResult;
+                    var completed = incrementCompleted();
+                    progress?.Report(new DirectUploadProgress(
+                        completed,
+                        totalFiles,
+                        workItem.File.RelativePath,
+                        ComputePercent(completed, totalFiles)));
+                    break;
+                }
+
+                var transientFailure = IsTransientUploadStatus(statusCode);
+                if (!transientFailure || attempt >= maxAttempts)
+                {
+                    resultsByFileId[workItem.File.FileId] = uploadResult;
+                    var completed = incrementCompleted();
+                    progress?.Report(new DirectUploadProgress(
+                        completed,
+                        totalFiles,
+                        workItem.File.RelativePath,
+                        ComputePercent(completed, totalFiles)));
+                    break;
+                }
+
+                attempt++;
+                var retryItem = new UploadWorkItem(workItem.File, workItem.TransferId, attempt);
+                await UpsertQueuedTransferAsync(context, retryItem, cancellationToken);
+                var retryDelay = retryAfter > TimeSpan.Zero
+                    ? retryAfter
+                    : TimeSpan.FromMilliseconds(500 * attempt);
+                Trace.WriteLine(
+                    $"ND-DIRECT upload retry relativePath='{workItem.File.RelativePath}' attempt={attempt}/{maxAttempts} delayMs={retryDelay.TotalMilliseconds:F0} status={statusCode}.");
+                await Task.Delay(retryDelay, cancellationToken);
+            }
+        }
+    }
+
+    private async Task UpsertQueuedTransferAsync(
+        DirectUploadPlanContext context,
+        UploadWorkItem item,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(context.JobId))
+        {
+            return;
+        }
+
+        await _jobStore.UpsertTransferQueuedAsync(
+            new TransferRecord(
+                item.TransferId,
+                context.JobId,
+                item.File.FileId,
+                item.Attempt,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null),
+            cancellationToken);
+    }
+
+    private async Task UpdateRunningTransferAsync(
+        DirectUploadPlanContext context,
+        string transferId,
+        int attempt,
+        int workerId,
+        DateTime startedUtc,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(context.JobId))
+        {
+            return;
+        }
+
+        await _jobStore.UpdateTransferRunningAsync(
+            transferId,
+            attempt,
+            startedUtc,
+            workerId,
+            cancellationToken);
+    }
+
+    private async Task UpdateFinishedTransferAsync(
+        DirectUploadPlanContext context,
+        string transferId,
+        string status,
+        long durationMs,
+        string? error,
+        int? httpStatus,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(context.JobId))
+        {
+            return;
+        }
+
+        var snippet = string.IsNullOrWhiteSpace(error)
+            ? null
+            : (error.Length > 256 ? error[..256] : error);
+
+        await _jobStore.UpdateTransferFinishedAsync(
+            transferId,
+            status,
+            DateTime.UtcNow,
+            durationMs,
+            status == "Succeeded" ? null : error,
+            httpStatus,
+            snippet,
+            null,
+            cancellationToken);
+    }
+
+    private static bool IsTransientUploadStatus(int statusCode)
+    {
+        return statusCode is 408 or 429 or 500 or 502 or 503 or 504;
+    }
+
+    private static double ComputePercent(int completed, int total)
+    {
+        if (total <= 0)
+        {
+            return 0;
+        }
+
+        return Math.Round((double)completed / total * 100d, 2);
     }
 
     private async Task<DirectUploadFileResult> TryUploadFileAsync(
@@ -357,7 +640,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     multipart.Add(new StringContent(file.Acl, Encoding.UTF8), "acl");
                 }
 
-                await _apiClient.PostAsync(candidate.Path, multipart, cancellationToken);
+                await _apiClient.PostAsync(candidate.Path, multipart, cancellationToken, retryOnThrottle: false);
                 Trace.WriteLine(
                     $"ND-DIRECT upload success endpoint='{candidate.Path}' relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
                 return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");

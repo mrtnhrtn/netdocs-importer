@@ -17,4 +17,12 @@ public partial class RecentJobsStepView : System.Windows.Controls.UserControl
             main.OnLoadRecentJobs(sender, e);
         }
     }
+
+    public void OnExportDirectUploadLog(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnExportDirectUploadLog(sender, e);
+        }
+    }
 }

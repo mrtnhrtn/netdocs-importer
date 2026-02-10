@@ -53,6 +53,8 @@ public sealed class UploadPlanResult
 
 public sealed class DirectUploadPlanContext
 {
+    public string JobId { get; init; } = string.Empty;
+
     public string CabinetId { get; init; } = string.Empty;
 
     public string RepositoryId { get; init; } = string.Empty;
@@ -64,12 +66,17 @@ public sealed class DirectUploadPlanContext
     public bool RequireAcl { get; init; }
 
     public string? DefaultAcl { get; init; }
+
+    public int MaxConcurrency { get; init; } = 4;
+
+    public int MaxRetryAttempts { get; init; } = 4;
 }
 
 public sealed record DirectUploadProgress(
     int CompletedFiles,
     int TotalFiles,
-    string CurrentRelativePath);
+    string CurrentRelativePath,
+    double PercentComplete = 0);
 
 public sealed record DirectUploadFileResult(
     string RelativePath,
@@ -92,6 +99,8 @@ public sealed class DirectUploadRunResult
     public int SucceededFiles { get; init; }
 
     public int FailedFiles { get; init; }
+
+    public int ResumedFiles { get; init; }
 }
 
 public interface IDestinationFolderResolver

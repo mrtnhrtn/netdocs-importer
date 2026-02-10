@@ -43,6 +43,22 @@ public partial class MainWindow : Window
         await _viewModel.LoadRecentJobsAsync();
     }
 
+    public async void OnExportDirectUploadLog(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            FileName = $"directupload-runlog-{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ExportLastDirectUploadLogAsync(dialog.FileName);
+    }
+
     public async void OnStartImport(object sender, RoutedEventArgs e)
     {
         await _viewModel.StartImportAsync();
