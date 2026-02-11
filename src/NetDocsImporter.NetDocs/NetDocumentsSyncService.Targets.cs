@@ -6,6 +6,9 @@ using NetDocsImporter.Core;
 
 namespace NetDocsImporter.NetDocs;
 
+/// <summary>
+/// Provides target browsing, lookup resolution, and target profile snapshot operations for NetDocuments containers.
+/// </summary>
 public sealed partial class NetDocumentsSyncService
 {
     private enum TargetDefaultsSource
@@ -20,6 +23,12 @@ public sealed partial class NetDocumentsSyncService
         EffectiveProfileDefaults Defaults,
         TargetDefaultsSource Source);
 
+    /// <summary>
+    /// Retrieves supported destination container selections for a cabinet.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier used to scope target discovery.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Container selections ordered by type and display name.</returns>
     public async Task<IReadOnlyList<NdTargetSelection>> GetSupportedTargetContainersAsync(
         string cabinetId,
         CancellationToken cancellationToken = default)
@@ -77,6 +86,13 @@ public sealed partial class NetDocumentsSyncService
             .ToList();
     }
 
+    /// <summary>
+    /// Gets recent targets for the current user, optionally filtered by cabinet.
+    /// </summary>
+    /// <param name="cabinetId">Optional cabinet identifier filter.</param>
+    /// <param name="bypassCache"><see langword="true"/> to request server-side cache bypass when supported.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Recent target entries in server-defined order.</returns>
     public async Task<IReadOnlyList<NdTargetRecentItem>> GetRecentTargetsAsync(
         string? cabinetId = null,
         bool bypassCache = false,
@@ -85,6 +101,13 @@ public sealed partial class NetDocumentsSyncService
         return await GetWorkspaceListAsync("/v1/User/wsRecent", cabinetId, bypassCache, parseFavoriteShape: false, cancellationToken);
     }
 
+    /// <summary>
+    /// Gets favorite targets for the current user, optionally filtered by cabinet.
+    /// </summary>
+    /// <param name="cabinetId">Optional cabinet identifier filter.</param>
+    /// <param name="bypassCache"><see langword="true"/> to request server-side cache bypass when supported.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Favorite target entries mapped to favorite-specific view models.</returns>
     public async Task<IReadOnlyList<NdTargetFavoriteItem>> GetFavoriteTargetsAsync(
         string? cabinetId = null,
         bool bypassCache = false,
@@ -101,6 +124,14 @@ public sealed partial class NetDocumentsSyncService
             .ToList();
     }
 
+    /// <summary>
+    /// Searches workspace targets using the active tenant search behavior.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier used to scope the search.</param>
+    /// <param name="query">Search text entered by the user.</param>
+    /// <param name="top">Maximum number of results to return.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Workspace search results ordered by workspace name.</returns>
     public async Task<IReadOnlyList<NdWorkspaceSearchResult>> SearchWorkspacesAsync(
         string cabinetId,
         string query,
@@ -149,6 +180,16 @@ public sealed partial class NetDocumentsSyncService
             .ToList();
     }
 
+    /// <summary>
+    /// Searches lookup values for a specific attribute.
+    /// </summary>
+    /// <param name="repositoryId">Repository identifier that owns the attribute.</param>
+    /// <param name="attrNum">Lookup attribute number.</param>
+    /// <param name="term">Search term; when empty recent values are requested.</param>
+    /// <param name="top">Maximum number of values to return.</param>
+    /// <param name="extendedFiltering"><see langword="true"/> to request extended NetDocuments filtering options.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Matching lookup values.</returns>
     public async Task<IReadOnlyList<NdLookupValueItem>> SearchLookupValuesAsync(
         string repositoryId,
         int attrNum,
@@ -218,6 +259,17 @@ public sealed partial class NetDocumentsSyncService
         return Array.Empty<NdLookupValueItem>();
     }
 
+    /// <summary>
+    /// Retrieves child lookup values for a parent key in a parent-child lookup.
+    /// </summary>
+    /// <param name="repositoryId">Repository identifier that owns the attributes.</param>
+    /// <param name="childAttrNum">Child lookup attribute number.</param>
+    /// <param name="parentKey">Selected parent lookup key.</param>
+    /// <param name="term">Optional child search term.</param>
+    /// <param name="top">Maximum number of values to return.</param>
+    /// <param name="includeUnfilteredFallback"><see langword="true"/> to retry without filter when filtered endpoints return no rows.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Matching child lookup values.</returns>
     public async Task<IReadOnlyList<NdLookupValueItem>> GetChildLookupValuesAsync(
         string repositoryId,
         int childAttrNum,
@@ -298,6 +350,15 @@ public sealed partial class NetDocumentsSyncService
         return ParseLookupRows(baseDocument.RootElement);
     }
 
+    /// <summary>
+    /// Retrieves recent child lookup values for a selected parent key.
+    /// </summary>
+    /// <param name="repositoryId">Repository identifier that owns the attributes.</param>
+    /// <param name="childAttrNum">Child lookup attribute number.</param>
+    /// <param name="parentKey">Selected parent lookup key.</param>
+    /// <param name="top">Maximum number of values to return.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Recent child lookup values.</returns>
     public async Task<IReadOnlyList<NdLookupValueItem>> GetRecentChildLookupValuesAsync(
         string repositoryId,
         int childAttrNum,
@@ -318,6 +379,15 @@ public sealed partial class NetDocumentsSyncService
         return ParseLookupRows(document.RootElement);
     }
 
+    /// <summary>
+    /// Updates server-side "recent lookup" ordering after the user selects a lookup key.
+    /// </summary>
+    /// <param name="repositoryId">Repository identifier that owns the lookup attribute.</param>
+    /// <param name="attrNum">Selected lookup attribute number.</param>
+    /// <param name="key">Selected lookup key.</param>
+    /// <param name="parentAttrNum">Optional parent attribute number for parent-child lookup updates.</param>
+    /// <param name="parentKey">Optional parent lookup key for parent-child lookup updates.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
     public async Task UpdateRecentLookupSelectionAsync(
         string repositoryId,
         int attrNum,
@@ -348,6 +418,14 @@ public sealed partial class NetDocumentsSyncService
         await _apiClient.PostAsync($"/v1/attributes/{escapedRepository}", content, cancellationToken);
     }
 
+    /// <summary>
+    /// Resolves a workspace environment identifier from parent and child lookup keys.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier that owns the workspace profile.</param>
+    /// <param name="parentKey">Parent lookup key (for example client key).</param>
+    /// <param name="childKey">Child lookup key (for example matter key).</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Resolved environment identifier when available; otherwise <see langword="null"/>.</returns>
     public async Task<string?> ResolveWorkspaceEnvIdAsync(
         string cabinetId,
         string parentKey,
@@ -402,6 +480,12 @@ public sealed partial class NetDocumentsSyncService
         return normalized;
     }
 
+    /// <summary>
+    /// Retrieves container metadata by environment identifier.
+    /// </summary>
+    /// <param name="envId">Container environment identifier.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Container node details, or <see langword="null"/> when input is empty.</returns>
     public async Task<NdContainerNode?> GetContainerInfoAsync(
         string envId,
         CancellationToken cancellationToken = default)
@@ -425,6 +509,12 @@ public sealed partial class NetDocumentsSyncService
         return ParseContainerNode(root);
     }
 
+    /// <summary>
+    /// Retrieves a displayable ancestry breadcrumb for a container.
+    /// </summary>
+    /// <param name="envId">Container environment identifier.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Resolved ancestry text, or an empty string when unavailable.</returns>
     public async Task<string> GetContainerAncestryAsync(
         string envId,
         CancellationToken cancellationToken = default)
@@ -444,6 +534,14 @@ public sealed partial class NetDocumentsSyncService
         return labels.Count == 0 ? string.Empty : string.Join(" / ", labels);
     }
 
+    /// <summary>
+    /// Retrieves child containers under a parent container or workspace.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier used for API scoping.</param>
+    /// <param name="parentContainerId">Optional parent container identifier.</param>
+    /// <param name="workspaceId">Optional workspace identifier used when no explicit parent is selected.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Child container nodes sorted for target-browser presentation.</returns>
     public async Task<IReadOnlyList<NdContainerNode>> GetContainerChildrenAsync(
         string cabinetId,
         string? parentContainerId = null,
@@ -528,6 +626,13 @@ public sealed partial class NetDocumentsSyncService
             .ToList();
     }
 
+    /// <summary>
+    /// Resolves a human-readable path for a selected target container.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier for legacy endpoint fallback.</param>
+    /// <param name="targetId">Container identifier to resolve.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Display path when available; otherwise the raw target identifier.</returns>
     public async Task<string> ResolveTargetPathAsync(
         string cabinetId,
         string targetId,
@@ -577,6 +682,15 @@ public sealed partial class NetDocumentsSyncService
         return targetId;
     }
 
+    /// <summary>
+    /// Builds a target profile snapshot containing profile attributes and resolved effective defaults.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier for metadata lookups.</param>
+    /// <param name="repositoryId">Repository identifier used when falling back to cached metadata.</param>
+    /// <param name="target">Selected target container.</param>
+    /// <param name="lookupContext">Optional workspace lookup context used to synthesize defaults when endpoints are unavailable.</param>
+    /// <param name="cancellationToken">Token used to cancel API/database work.</param>
+    /// <returns>Snapshot payload used by UI and export/upload pipelines.</returns>
     public async Task<NdTargetProfileSnapshot> GetTargetProfileSnapshotAsync(
         string cabinetId,
         string repositoryId,

@@ -81,3 +81,13 @@ c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.App.deps.json
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.App.runtimeconfig.json
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.App.dll
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.App.pdb
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.App.exe
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.App.deps.json
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.App.runtimeconfig.json
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.App.dll
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.App.pdb
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.App.exe
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.App.deps.json
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.App.runtimeconfig.json
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.App.dll
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.App.pdb

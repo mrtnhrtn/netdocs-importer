@@ -7,6 +7,9 @@ using Serilog;
 
 namespace NetDocsImporter.App;
 
+/// <summary>
+/// WPF application entry point responsible for startup composition, logging initialization, and global exception handling.
+/// </summary>
 public partial class App : System.Windows.Application
 {
     private string? _logFilePath;

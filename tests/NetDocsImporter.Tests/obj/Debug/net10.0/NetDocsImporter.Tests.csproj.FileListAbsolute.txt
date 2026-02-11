@@ -129,3 +129,11 @@ C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImp
 C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImporter.Data.pdb
 C:\dev\netdocs-importer\tests\NetDocsImporter.Tests\obj\Debug\net10.0\NetDocsImporter.Tests.sourcelink.json
 C:\Dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\System.Security.Cryptography.ProtectedData.dll
+C:\dev\netdocs-importer\.tmpbuild\testhost.dll
+C:\dev\netdocs-importer\.tmpbuild\xunit.abstractions.dll
+C:\dev\netdocs-importer\.tmpbuild\testhost.exe
+C:\dev\netdocs-importer\.tmpbuild\xunit.runner.visualstudio.testadapter.dll
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.deps.json
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.runtimeconfig.json
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.dll
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.pdb

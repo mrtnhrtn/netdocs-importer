@@ -1,0 +1,17 @@
+#!/bin/sh
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+
+if [ -z "$branch" ]; then
+  echo "Blocked: detached HEAD is not allowed for normal commit workflow."
+  echo "Create or switch to a feature branch first (feature/<task>)."
+  exit 1
+fi
+
+if [ "$branch" = "main" ]; then
+  echo "Blocked: commits on 'main' are not allowed."
+  echo "Switch or create a feature branch first (feature/<task>)."
+  exit 1
+fi
+
+exit 0

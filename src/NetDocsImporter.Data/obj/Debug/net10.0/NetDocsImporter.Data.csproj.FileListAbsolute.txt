@@ -17,3 +17,9 @@ c:\Dev\netdocs-importer\artifacts\appcheck\NetDocsImporter.Data.pdb
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.Data.deps.json
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.Data.dll
 c:\Dev\netdocs-importer\artifacts\verify\app\NetDocsImporter.Data.pdb
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.Data.deps.json
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.Data.dll
+C:\Dev\netdocs-importer\.tmpappout\NetDocsImporter.Data.pdb
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Data.deps.json
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Data.dll
+C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Data.pdb

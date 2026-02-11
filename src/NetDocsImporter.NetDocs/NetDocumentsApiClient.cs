@@ -6,12 +6,23 @@ using NetDocsImporter.Core;
 
 namespace NetDocsImporter.NetDocs;
 
+/// <summary>
+/// Wraps HTTP calls to NetDocuments APIs with authentication, retry-on-throttle, and trace logging.
+/// </summary>
 public sealed class NetDocumentsApiClient
 {
     private readonly HttpClient _client;
     private readonly Func<NetDocumentsAuthContext> _authContextAccessor;
     private readonly Func<string> _apiBaseUrlAccessor;
 
+    /// <summary>
+    /// Initializes a NetDocuments API client instance.
+    /// </summary>
+    /// <param name="authService">Authentication service used to attach bearer tokens.</param>
+    /// <param name="authContextAccessor">Accessor for the active OAuth client context.</param>
+    /// <param name="apiBaseUrlAccessor">Accessor for the active NetDocuments API base URL.</param>
+    /// <param name="innerHandler">Optional inner HTTP handler, primarily for tests.</param>
+    /// <exception cref="ArgumentNullException">Thrown when a required accessor is null.</exception>
     public NetDocumentsApiClient(
         INetDocumentsAuthService authService,
         Func<NetDocumentsAuthContext> authContextAccessor,
@@ -29,6 +40,13 @@ public sealed class NetDocumentsApiClient
         _client = new HttpClient(handler, disposeHandler: true);
     }
 
+    /// <summary>
+    /// Executes a GET request and parses the response body as JSON.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <returns>The parsed JSON document.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the response is non-success or not JSON.</exception>
     public async Task<JsonDocument> GetJsonAsync(string relativeOrAbsolutePath, CancellationToken cancellationToken = default)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
@@ -64,6 +82,13 @@ public sealed class NetDocumentsApiClient
         return JsonDocument.Parse(content);
     }
 
+    /// <summary>
+    /// Executes a GET request and deserializes JSON into a typed model.
+    /// </summary>
+    /// <typeparam name="T">Target CLR type for deserialization.</typeparam>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <returns>The deserialized model instance, or <see langword="null"/> when payload is empty.</returns>
     public async Task<T?> GetJsonAsync<T>(string relativeOrAbsolutePath, CancellationToken cancellationToken = default)
     {
         using var document = await GetJsonAsync(relativeOrAbsolutePath, cancellationToken);
@@ -73,6 +98,15 @@ public sealed class NetDocumentsApiClient
         });
     }
 
+    /// <summary>
+    /// Executes a POST request and requires a success status code.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="content">HTTP payload to send.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <param name="retryOnThrottle"><see langword="true"/> to retry transient/throttle responses.</param>
+    /// <returns>A task that completes when the request succeeds.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the request fails.</exception>
     public async Task PostAsync(
         string relativeOrAbsolutePath,
         HttpContent content,
@@ -106,6 +140,15 @@ public sealed class NetDocumentsApiClient
             $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
     }
 
+    /// <summary>
+    /// Executes a POST request and parses a JSON response when present.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="content">HTTP payload to send.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <param name="retryOnThrottle"><see langword="true"/> to retry transient/throttle responses.</param>
+    /// <returns>Parsed JSON response, or <see langword="null"/> when no JSON payload is returned.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the request fails.</exception>
     public async Task<JsonDocument?> PostJsonAsync(
         string relativeOrAbsolutePath,
         HttpContent content,
@@ -152,6 +195,16 @@ public sealed class NetDocumentsApiClient
         return JsonDocument.Parse(responseContent);
     }
 
+    /// <summary>
+    /// Executes a POST request and returns the raw response body as text.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="content">HTTP payload to send.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <param name="retryOnThrottle"><see langword="true"/> to retry transient/throttle responses.</param>
+    /// <param name="requestHeaders">Optional additional request headers.</param>
+    /// <param name="requestTimeout">Optional per-request timeout override.</param>
+    /// <returns>Raw response body.</returns>
     public Task<string> PostForStringAsync(
         string relativeOrAbsolutePath,
         HttpContent content,
@@ -170,6 +223,16 @@ public sealed class NetDocumentsApiClient
             requestTimeout);
     }
 
+    /// <summary>
+    /// Executes a PUT request and returns the raw response body as text.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="content">HTTP payload to send.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <param name="retryOnThrottle"><see langword="true"/> to retry transient/throttle responses.</param>
+    /// <param name="requestHeaders">Optional additional request headers.</param>
+    /// <param name="requestTimeout">Optional per-request timeout override.</param>
+    /// <returns>Raw response body.</returns>
     public Task<string> PutForStringAsync(
         string relativeOrAbsolutePath,
         HttpContent content,

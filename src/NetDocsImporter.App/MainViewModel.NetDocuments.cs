@@ -9,6 +9,9 @@ using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
+/// <summary>
+/// Hosts NetDocuments connection, metadata synchronization, and cabinet selection state used by the UI.
+/// </summary>
 public sealed partial class MainViewModel
 {
     private readonly ObservableCollection<NetDocumentsRepositoryView> _netDocumentsRepositories = new();
@@ -30,18 +33,33 @@ public sealed partial class MainViewModel
     private string _netDocumentsCurrentUserId = string.Empty;
     private NetDocumentsSyncedAttributeView? _selectedSyncedAttribute;
 
+    /// <summary>
+    /// Gets the repositories available in the connected NetDocuments region.
+    /// </summary>
     public ObservableCollection<NetDocumentsRepositoryView> NetDocumentsRepositories => _netDocumentsRepositories;
 
+    /// <summary>
+    /// Gets the cabinets visible for the selected repository.
+    /// </summary>
     public ObservableCollection<NetDocumentsCabinetView> NetDocumentsCabinets => _netDocumentsCabinets;
 
+    /// <summary>
+    /// Gets synced cabinet profile attributes available for lookup preview and profile-aware operations.
+    /// </summary>
     public ObservableCollection<NetDocumentsSyncedAttributeView> SyncedAttributes => _syncedAttributes;
 
+    /// <summary>
+    /// Gets the currently connected NetDocuments user display string.
+    /// </summary>
     public string NetDocumentsConnectedUser
     {
         get => _netDocumentsConnectedUser;
         private set => SetField(ref _netDocumentsConnectedUser, value);
     }
 
+    /// <summary>
+    /// Gets a value indicating whether an authenticated NetDocuments session is active.
+    /// </summary>
     public bool IsNetDocumentsConnected
     {
         get => _isNetDocumentsConnected;
@@ -62,6 +80,9 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Gets or sets the selected repository identifier and refreshes repository-scoped target state.
+    /// </summary>
     public string SelectedNetDocumentsRepositoryId
     {
         get => _selectedNetDocumentsRepositoryId;
@@ -100,6 +121,9 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Gets or sets the selected cabinet identifier and refreshes cabinet-scoped target and metadata state.
+    /// </summary>
     public string SelectedNetDocumentsCabinetId
     {
         get => _selectedNetDocumentsCabinetId;
@@ -137,10 +161,19 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Gets the selected cabinet display name.
+    /// </summary>
     public string SelectedNetDocumentsCabinetName => _selectedNetDocumentsCabinetName;
 
+    /// <summary>
+    /// Gets the repository lock for the active job, if one has been established.
+    /// </summary>
     public string CurrentJobRepositoryId => _currentJobRepositoryId;
 
+    /// <summary>
+    /// Gets or sets the selected synced attribute for lookup-value preview.
+    /// </summary>
     public NetDocumentsSyncedAttributeView? SelectedSyncedAttribute
     {
         get => _selectedSyncedAttribute;
@@ -153,13 +186,22 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Gets a value indicating whether cabinet synchronization can run.
+    /// </summary>
     public bool CanSyncNetDocumentsCabinets => IsNetDocumentsConnected;
 
+    /// <summary>
+    /// Gets a value indicating whether attribute synchronization can run for the current repository and cabinet.
+    /// </summary>
     public bool CanSyncNetDocumentsAttributes =>
         IsNetDocumentsConnected &&
         !string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) &&
         !string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId);
 
+    /// <summary>
+    /// Gets a value indicating whether lookup values can be viewed for the selected attribute.
+    /// </summary>
     public bool CanViewLookupValues => SelectedSyncedAttribute?.IsLookup == true;
 
     private void InitializeNetDocumentsIntegration()
@@ -223,6 +265,10 @@ public sealed partial class MainViewModel
                string.Equals(_currentJobRepositoryId, repositoryId, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Starts interactive sign-in and synchronizes cabinets, attributes, and target-browser caches for the current region.
+    /// </summary>
+    /// <returns>A task that completes when connection bootstrap finishes.</returns>
     public async Task ConnectAndSyncNetDocumentsAsync()
     {
         if (!CanConnectToNetDocuments)
@@ -293,6 +339,10 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Saves developer bootstrap OAuth settings into the local secure profile store for the selected region.
+    /// </summary>
+    /// <returns>A task that completes when profile persistence and state refresh are done.</returns>
     public async Task SaveNetDocumentsOAuthProfileAsync()
     {
         if (!IsDeveloperMode)
@@ -348,6 +398,10 @@ public sealed partial class MainViewModel
         StatusText = $"Developer OAuth profile saved for {SelectedNetDocumentsRegion}.";
     }
 
+    /// <summary>
+    /// Attempts to rehydrate a previous authenticated NetDocuments session without prompting the user.
+    /// </summary>
+    /// <returns>A task that completes after session restoration is attempted.</returns>
     public async Task TryRestoreNetDocumentsSessionAsync()
     {
         try
@@ -413,6 +467,10 @@ public sealed partial class MainViewModel
         return true;
     }
 
+    /// <summary>
+    /// Synchronizes region cabinet metadata from NetDocuments and refreshes repository and target-browser state.
+    /// </summary>
+    /// <returns>A task that completes when synchronization and local refresh complete.</returns>
     public async Task SyncNetDocumentsCabinetsAsync()
     {
         if (!IsNetDocumentsConnected)
@@ -437,6 +495,10 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Synchronizes profile attributes for the selected cabinet and refreshes schema-dependent state.
+    /// </summary>
+    /// <returns>A task that completes when attribute sync and refresh operations finish.</returns>
     public async Task SyncNetDocumentsAttributesAsync()
     {
         if (!CanSyncNetDocumentsAttributes)
@@ -470,6 +532,10 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Loads cached repository and cabinet metadata for the selected region and rebinds current selections safely.
+    /// </summary>
+    /// <returns>A task that completes when metadata, schema, and target-browser state are refreshed.</returns>
     public async Task LoadNetDocumentsMetadataAsync()
     {
         await _jobStore.InitializeAsync();
@@ -495,17 +561,21 @@ public sealed partial class MainViewModel
 
         if (repositoryViews.Count > 0)
         {
-            if (string.IsNullOrWhiteSpace(_selectedNetDocumentsRepositoryId) ||
-                repositoryViews.All(r => !string.Equals(r.RepositoryId, _selectedNetDocumentsRepositoryId, StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) ||
+                repositoryViews.All(r => !string.Equals(r.RepositoryId, SelectedNetDocumentsRepositoryId, StringComparison.OrdinalIgnoreCase)))
             {
-                _selectedNetDocumentsRepositoryId = repositoryViews[0].RepositoryId;
-                OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
+                SelectedNetDocumentsRepositoryId = repositoryViews[0].RepositoryId;
+            }
+            else
+            {
+                OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+                OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             }
         }
-        else
+        else if (!string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId))
         {
-            _selectedNetDocumentsRepositoryId = string.Empty;
-            OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
+            SelectedNetDocumentsRepositoryId = string.Empty;
         }
 
         _refreshedCabinetSchemaThisSession.Clear();
@@ -547,23 +617,41 @@ public sealed partial class MainViewModel
 
                 if (_netDocumentsCabinets.Count == 0)
                 {
-                    _selectedNetDocumentsCabinetId = string.Empty;
-                    _selectedNetDocumentsCabinetName = string.Empty;
-                    _refreshedCabinetSchemaThisSession.Clear();
-                    OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
-                    OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+                    if (!string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId))
+                    {
+                        SelectedNetDocumentsCabinetId = string.Empty;
+                    }
+                    else
+                    {
+                        _selectedNetDocumentsCabinetName = string.Empty;
+                        _refreshedCabinetSchemaThisSession.Clear();
+                        OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+                        OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+                        OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+                        OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+                    }
                     return;
                 }
 
-                if (_netDocumentsCabinets.All(c => !string.Equals(c.CabinetId, _selectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase)))
+                if (_netDocumentsCabinets.All(c => !string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase)))
                 {
-                    _selectedNetDocumentsCabinetId = _netDocumentsCabinets[0].CabinetId;
-                    _selectedNetDocumentsCabinetName = _netDocumentsCabinets[0].CabinetName;
-                    _refreshedCabinetSchemaThisSession.Clear();
-                    OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
-                    OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
-                    SyncNdImportCabinetFromSelectedCabinetId();
+                    SelectedNetDocumentsCabinetId = _netDocumentsCabinets[0].CabinetId;
+                    return;
                 }
+
+                var selectedCabinet = _netDocumentsCabinets.FirstOrDefault(c =>
+                    string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+                var selectedCabinetName = selectedCabinet?.CabinetName ?? string.Empty;
+                if (!string.Equals(_selectedNetDocumentsCabinetName, selectedCabinetName, StringComparison.Ordinal))
+                {
+                    _selectedNetDocumentsCabinetName = selectedCabinetName;
+                    OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+                }
+
+                SyncNdImportCabinetFromSelectedCabinetId();
+                OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
+                OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+                OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             });
         });
     }
@@ -686,6 +774,10 @@ public sealed partial class MainViewModel
         ResolveProfileFieldHints();
     }
 
+    /// <summary>
+    /// Displays a preview dialog of lookup values for the currently selected synced attribute.
+    /// </summary>
+    /// <returns>A task that completes when lookup values are loaded and the dialog is shown.</returns>
     public async Task ViewSelectedLookupValuesAsync()
     {
         if (SelectedSyncedAttribute is null || !SelectedSyncedAttribute.IsLookup)
@@ -720,21 +812,48 @@ public sealed partial class MainViewModel
     }
 }
 
+/// <summary>
+/// View model row representing a NetDocuments repository option.
+/// </summary>
 public sealed class NetDocumentsRepositoryView
 {
+    /// <summary>
+    /// Initializes a repository view model row.
+    /// </summary>
+    /// <param name="repositoryId">Stable NetDocuments repository identifier.</param>
+    /// <param name="repositoryName">Repository display name.</param>
     public NetDocumentsRepositoryView(string repositoryId, string repositoryName)
     {
         RepositoryId = repositoryId;
         RepositoryName = string.IsNullOrWhiteSpace(repositoryName) ? repositoryId : repositoryName;
     }
 
+    /// <summary>
+    /// Gets the repository identifier.
+    /// </summary>
     public string RepositoryId { get; }
 
+    /// <summary>
+    /// Gets the repository display name.
+    /// </summary>
     public string RepositoryName { get; }
 }
 
+/// <summary>
+/// View model row representing a NetDocuments cabinet option and related workspace capabilities.
+/// </summary>
 public sealed class NetDocumentsCabinetView
 {
+    /// <summary>
+    /// Initializes a cabinet view model row.
+    /// </summary>
+    /// <param name="cabinetId">Stable cabinet identifier.</param>
+    /// <param name="repositoryId">Owning repository identifier.</param>
+    /// <param name="cabinetName">Cabinet display name.</param>
+    /// <param name="description">Cabinet description text.</param>
+    /// <param name="workspaceAttributeNum">Workspace attribute number when workspaces are configured.</param>
+    /// <param name="workspacePluralName">Workspace plural name supplied by NetDocuments.</param>
+    /// <param name="allowFileInWorkspaces">Flag that indicates whether filing to workspaces is enabled.</param>
     public NetDocumentsCabinetView(
         string cabinetId,
         string repositoryId,
@@ -753,23 +872,57 @@ public sealed class NetDocumentsCabinetView
         AllowFileInWorkspaces = allowFileInWorkspaces;
     }
 
+    /// <summary>
+    /// Gets the cabinet identifier.
+    /// </summary>
     public string CabinetId { get; }
 
+    /// <summary>
+    /// Gets the owning repository identifier.
+    /// </summary>
     public string RepositoryId { get; }
 
+    /// <summary>
+    /// Gets the cabinet display name.
+    /// </summary>
     public string CabinetName { get; }
 
+    /// <summary>
+    /// Gets the cabinet description.
+    /// </summary>
     public string Description { get; }
 
+    /// <summary>
+    /// Gets the workspace attribute number when workspace support is enabled.
+    /// </summary>
     public int? WorkspaceAttributeNum { get; }
 
+    /// <summary>
+    /// Gets the workspace plural display name from NetDocuments.
+    /// </summary>
     public string WorkspacePluralName { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether items may be filed directly in workspaces.
+    /// </summary>
     public bool? AllowFileInWorkspaces { get; }
 }
 
+/// <summary>
+/// View model row representing a synced profile attribute for the selected cabinet.
+/// </summary>
 public sealed class NetDocumentsSyncedAttributeView
 {
+    /// <summary>
+    /// Initializes a synced-attribute row.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier the attribute belongs to.</param>
+    /// <param name="attributeNum">Attribute number in the cabinet schema.</param>
+    /// <param name="name">Attribute display name.</param>
+    /// <param name="dataType">Underlying NetDocuments data type.</param>
+    /// <param name="isLookup">Indicates whether this attribute is lookup-backed.</param>
+    /// <param name="isMultiValue">Indicates whether this attribute supports multiple values.</param>
+    /// <param name="parentAttributeNum">Parent attribute number for child lookup attributes.</param>
     public NetDocumentsSyncedAttributeView(
         string cabinetId,
         int attributeNum,
@@ -788,20 +941,44 @@ public sealed class NetDocumentsSyncedAttributeView
         ParentAttributeNum = parentAttributeNum;
     }
 
+    /// <summary>
+    /// Gets the cabinet identifier this attribute belongs to.
+    /// </summary>
     public string CabinetId { get; }
 
+    /// <summary>
+    /// Gets the numeric attribute identifier.
+    /// </summary>
     public int AttributeNum { get; }
 
+    /// <summary>
+    /// Gets the attribute display name.
+    /// </summary>
     public string Name { get; }
 
+    /// <summary>
+    /// Gets the source data type.
+    /// </summary>
     public string DataType { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether this attribute uses a lookup table.
+    /// </summary>
     public bool IsLookup { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether this attribute accepts multiple values.
+    /// </summary>
     public bool IsMultiValue { get; }
 
+    /// <summary>
+    /// Gets the parent attribute number when this is a child lookup attribute.
+    /// </summary>
     public int? ParentAttributeNum { get; }
 
+    /// <summary>
+    /// Gets a concise display string used in UI lists to describe lookup/multi-value behavior.
+    /// </summary>
     public string TypeDisplay =>
         IsLookup
             ? IsMultiValue ? "Lookup (multi)" : "Lookup"
