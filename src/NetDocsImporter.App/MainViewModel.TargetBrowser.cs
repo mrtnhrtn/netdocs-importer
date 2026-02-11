@@ -237,7 +237,33 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            OnPropertyChanged(nameof(SelectedTargetBrowserTabIndex));
             _ = EnsureTargetBrowserTabLoadedAsync(value);
+        }
+    }
+
+    public int SelectedTargetBrowserTabIndex
+    {
+        get => SelectedTargetBrowserTab switch
+        {
+            NdTargetBrowserTab.Recent => 0,
+            NdTargetBrowserTab.Favorites => 1,
+            NdTargetBrowserTab.GoToWorkspace => 2,
+            _ => 0
+        };
+        set
+        {
+            var tab = value switch
+            {
+                1 => NdTargetBrowserTab.Favorites,
+                2 => NdTargetBrowserTab.GoToWorkspace,
+                _ => NdTargetBrowserTab.Recent
+            };
+
+            if (SelectedTargetBrowserTab != tab)
+            {
+                SelectedTargetBrowserTab = tab;
+            }
         }
     }
 

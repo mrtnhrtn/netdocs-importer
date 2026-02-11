@@ -96,7 +96,7 @@
                 </StackPanel>
 
                 <TabControl Margin="0,4,0,8"
-                            SelectionChanged="OnTargetBrowserTabSelectionChanged">
+                            SelectedIndex="{Binding SelectedTargetBrowserTabIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
                     <TabItem Header="Recent">
                         <StackPanel Margin="4">
                             <TextBlock Text="Loading recent workspaces..."
