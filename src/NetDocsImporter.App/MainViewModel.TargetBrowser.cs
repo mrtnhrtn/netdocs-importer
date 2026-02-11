@@ -13,6 +13,7 @@ namespace NetDocsImporter.App;
 public sealed partial class MainViewModel
 {
     private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string CabinetRootNodeTypeRaw = "CabinetRoot";
     private const int WorkspaceSearchMaxResults = 8;
     private const int WorkspaceSearchMaxParentCandidates = 4;
     private const int WorkspaceSearchMaxChildCandidatesPerParent = 2;
@@ -31,6 +32,7 @@ public sealed partial class MainViewModel
     private readonly HashSet<string> _locallyUnpinnedFavoriteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetDocumentsWorkspaceTargetResultView?> _workspaceLookupPairCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _workspaceLookupInvalidPairCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _browseExpansionScopeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly NdTargetChildrenMemoryCache _browseChildrenCache = new(BrowseChildrenCacheTtl);
 
     private List<NdTargetRecentItem> _localRecentTargets = new();
@@ -857,17 +859,36 @@ public sealed partial class MainViewModel
         node.ChildrenLoadState = NdChildrenLoadState.Loading;
         try
         {
-            var children = await _browseChildrenCache.GetOrLoadAsync(
-                GetNetDocumentsServiceKey(),
-                SelectedNetDocumentsRepositoryId,
-                SelectedNetDocumentsCabinetId,
-                node.Id,
-                async cancellationToken =>
-                    await RequireSyncService().GetContainerChildrenAsync(
-                        SelectedNetDocumentsCabinetId,
-                        parentContainerId: node.Id,
-                        workspaceId: node.SupportedType == NdTargetType.Workspace ? node.Id : null,
-                        cancellationToken: cancellationToken));
+            var sync = RequireSyncService();
+            IReadOnlyList<NdContainerNode> children;
+            if (IsCabinetRootBrowseNode(node))
+            {
+                children = await _browseChildrenCache.GetOrLoadAsync(
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsRepositoryId,
+                    SelectedNetDocumentsCabinetId,
+                    node.Id,
+                    async cancellationToken =>
+                        await sync.GetCabinetTopLevelFoldersAsync(
+                            SelectedNetDocumentsCabinetId,
+                            cancellationToken));
+            }
+            else
+            {
+                var scopeId = await ResolveBrowseExpansionScopeIdAsync(node);
+                var cacheKey = string.IsNullOrWhiteSpace(scopeId) ? node.Id : scopeId;
+                children = await _browseChildrenCache.GetOrLoadAsync(
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsRepositoryId,
+                    SelectedNetDocumentsCabinetId,
+                    cacheKey,
+                    async cancellationToken =>
+                        await sync.GetContainerChildrenAsync(
+                            SelectedNetDocumentsCabinetId,
+                            parentContainerId: scopeId,
+                            workspaceId: node.SupportedType == NdTargetType.Workspace ? scopeId : null,
+                            cancellationToken: cancellationToken));
+            }
 
             var mapped = children
                 .Select(child => new NetDocumentsBrowseNodeView(
@@ -885,6 +906,48 @@ public sealed partial class MainViewModel
             TargetBrowserMessage = $"Failed loading children for '{node.Name}': {ex.Message}";
             StatusText = TargetBrowserMessage;
         }
+    }
+
+    private bool IsCabinetRootBrowseNode(NetDocumentsBrowseNodeView node)
+    {
+        return string.Equals(node.TypeRaw, CabinetRootNodeTypeRaw, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<string> ResolveBrowseExpansionScopeIdAsync(NetDocumentsBrowseNodeView node)
+    {
+        if (string.IsNullOrWhiteSpace(node.Id))
+        {
+            return string.Empty;
+        }
+
+        if (node.SupportedType is not NdTargetType.Workspace and not NdTargetType.Folder)
+        {
+            return node.Id;
+        }
+
+        var cacheKey = $"{GetNetDocumentsServiceKey()}:{SelectedNetDocumentsRepositoryId}:{SelectedNetDocumentsCabinetId}:{node.Id}";
+        if (_browseExpansionScopeCache.TryGetValue(cacheKey, out var cached) &&
+            !string.IsNullOrWhiteSpace(cached))
+        {
+            return cached;
+        }
+
+        var resolved = node.Id;
+        try
+        {
+            resolved = await RequireSyncService().ResolveContainerIdForBrowseAsync(node.Id);
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                resolved = node.Id;
+            }
+        }
+        catch
+        {
+            resolved = node.Id;
+        }
+
+        _browseExpansionScopeCache[cacheKey] = resolved;
+        return resolved;
     }
 
     public async Task SelectTargetFromRecentAsync()
@@ -1442,6 +1505,13 @@ public sealed partial class MainViewModel
             NdTargetBrowserTab.GoToWorkspace => BuildBrowseRootsFromWorkspaceSearchTargets(),
             _ => Array.Empty<NetDocumentsBrowseNodeView>()
         };
+        var cabinetRoot = BuildCabinetRootBrowseNode();
+        if (cabinetRoot is not null)
+        {
+            roots = new[] { cabinetRoot }
+                .Concat(roots)
+                .ToList();
+        }
 
         UpdateOnUi(() =>
         {
@@ -1491,6 +1561,40 @@ public sealed partial class MainViewModel
                     metadata: $"{item.TypeDisplay} \u00B7 {item.Source}{keyContext}");
             })
             .ToList();
+    }
+
+    private NetDocumentsBrowseNodeView? BuildCabinetRootBrowseNode()
+    {
+        if (!CanPickNetDocumentsTarget)
+        {
+            return null;
+        }
+
+        var selectedCabinet = _netDocumentsCabinets
+            .FirstOrDefault(c => string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+        var cabinetName = string.IsNullOrWhiteSpace(selectedCabinet?.CabinetName)
+            ? SelectedNetDocumentsCabinetId
+            : selectedCabinet!.CabinetName;
+        var node = new NdContainerNode
+        {
+            Id = $"cabinet-root:{SelectedNetDocumentsCabinetId}",
+            Name = cabinetName,
+            TypeRaw = CabinetRootNodeTypeRaw,
+            Extension = string.Empty,
+            ParentId = string.Empty,
+            ParentWorkspaceId = null,
+            PathDisplay = cabinetName,
+            SupportedType = null,
+            IsSelectable = false,
+            UnsupportedReason = "Expand to browse top-level cabinet folders.",
+            HasChildren = true,
+            ChildrenLoadState = NdChildrenLoadState.NotLoaded
+        };
+
+        return new NetDocumentsBrowseNodeView(
+            node,
+            sourceFlow: NdTargetSourceFlow.Browse,
+            metadata: "Cabinet \u00B7 Top-level folders");
     }
 
     private static NdContainerNode CreateBrowseNodeFromSelection(NdTargetSelection selection, string pathDisplay)
@@ -2230,6 +2334,7 @@ public sealed partial class MainViewModel
     {
         _targetBrowserContextVersion++;
         _browseChildrenCache.InvalidateAll();
+        _browseExpansionScopeCache.Clear();
         _workspaceSearchCts?.Cancel();
         _workspaceSearchCts?.Dispose();
         _workspaceSearchCts = null;

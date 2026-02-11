@@ -552,44 +552,57 @@ public sealed partial class NetDocumentsSyncService
         var searchScopeId = !string.IsNullOrWhiteSpace(parentContainerId)
             ? parentContainerId
             : workspaceId;
+        string? resolvedSearchScopeId = null;
         if (!string.IsNullOrWhiteSpace(searchScopeId))
         {
             try
             {
-                foreach (var extension in new[] { "ndws", "ndflt", "ndfld" })
+                resolvedSearchScopeId = await ResolveContainerIdForBrowseAsync(searchScopeId, cancellationToken);
+                var searchScopeCandidates = new List<string>();
+                AddSearchScopeCandidate(searchScopeCandidates, resolvedSearchScopeId);
+                AddSearchScopeCandidate(searchScopeCandidates, searchScopeId);
+                foreach (var candidate in BuildContainerIdCandidates(searchScopeId, NormalizeWorkspaceEnvId(searchScopeId)))
                 {
-                    var items = await SearchTargetSelectionsByExtensionAsync(
-                        cabinetId,
-                        extension,
-                        null,
-                        cancellationToken,
-                        top: 200,
-                        containerId: searchScopeId);
-                    foreach (var item in items)
-                    {
-                        results.Add(new NdContainerNode
-                        {
-                            Id = item.Id,
-                            Name = item.Name,
-                            TypeRaw = item.Type.ToString(),
-                            ParentId = parentContainerId ?? string.Empty,
-                            ParentWorkspaceId = item.ParentWorkspaceId,
-                            PathDisplay = string.Empty,
-                            SupportedType = item.Type,
-                            IsSelectable = true,
-                            UnsupportedReason = string.Empty,
-                            HasChildren = item.Type != NdTargetType.WorkspaceFilter,
-                            ChildrenLoadState = NdChildrenLoadState.NotLoaded
-                        });
-                    }
+                    AddSearchScopeCandidate(searchScopeCandidates, candidate);
                 }
 
-                if (results.Count > 0)
+                foreach (var scopeCandidate in searchScopeCandidates)
                 {
-                    return results
-                        .OrderByDescending(node => node.IsSelectable)
-                        .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
-                        .ToList();
+                    foreach (var extension in new[] { "ndws", "ndflt", "ndfld" })
+                    {
+                        var items = await SearchTargetSelectionsByExtensionAsync(
+                            cabinetId,
+                            extension,
+                            null,
+                            cancellationToken,
+                            top: 200,
+                            containerId: scopeCandidate);
+                        foreach (var item in items)
+                        {
+                            results.Add(new NdContainerNode
+                            {
+                                Id = item.Id,
+                                Name = item.Name,
+                                TypeRaw = item.Type.ToString(),
+                                ParentId = parentContainerId ?? string.Empty,
+                                ParentWorkspaceId = item.ParentWorkspaceId,
+                                PathDisplay = string.Empty,
+                                SupportedType = item.Type,
+                                IsSelectable = true,
+                                UnsupportedReason = string.Empty,
+                                HasChildren = item.Type != NdTargetType.WorkspaceFilter,
+                                ChildrenLoadState = NdChildrenLoadState.NotLoaded
+                            });
+                        }
+                    }
+
+                    if (results.Count > 0)
+                    {
+                        return results
+                            .OrderByDescending(node => node.IsSelectable)
+                            .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                    }
                 }
             }
             catch
@@ -598,14 +611,20 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
-        foreach (var path in BuildChildrenEndpointCandidates(cabinetId, parentContainerId, workspaceId))
+        var fallbackParentId = !string.IsNullOrWhiteSpace(parentContainerId)
+            ? resolvedSearchScopeId ?? parentContainerId
+            : parentContainerId;
+        var fallbackWorkspaceId = !string.IsNullOrWhiteSpace(workspaceId)
+            ? resolvedSearchScopeId ?? workspaceId
+            : workspaceId;
+        foreach (var path in BuildChildrenEndpointCandidates(cabinetId, fallbackParentId, fallbackWorkspaceId))
         {
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
                 var nodes = await ParseContainerChildrenAsync(
                     document.RootElement,
-                    parentContainerId,
+                    fallbackParentId,
                     cancellationToken);
                 if (nodes.Count > 0)
                 {
@@ -623,6 +642,107 @@ public sealed partial class NetDocumentsSyncService
             .OrderByDescending(node => node.IsSelectable)
             .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>
+    /// Retrieves top-level cabinet folders for tree root expansion.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier used for API scoping.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Top-level folder/workspace nodes sorted for target-browser presentation.</returns>
+    public async Task<IReadOnlyList<NdContainerNode>> GetCabinetTopLevelFoldersAsync(
+        string cabinetId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(cabinetId))
+        {
+            return Array.Empty<NdContainerNode>();
+        }
+
+        var results = new List<NdContainerNode>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in BuildCabinetTopLevelFoldersEndpointCandidates(cabinetId))
+        {
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var parsed = await ParseContainerChildrenAsync(document.RootElement, null, cancellationToken);
+                foreach (var node in parsed)
+                {
+                    if (node.SupportedType == NdTargetType.WorkspaceFilter)
+                    {
+                        continue;
+                    }
+
+                    if (seen.Add(node.Id))
+                    {
+                        results.Add(node);
+                    }
+                }
+
+                if (results.Count > 0)
+                {
+                    break;
+                }
+            }
+            catch
+            {
+                // Continue to endpoint fallback.
+            }
+        }
+
+        return results
+            .OrderByDescending(node => node.IsSelectable)
+            .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Resolves a container identifier to a browse-friendly identifier accepted by v2 container-search endpoints.
+    /// </summary>
+    /// <param name="containerId">Raw container identifier from recent/favorite/workspace rows.</param>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>Resolved container identifier when possible; otherwise the original identifier.</returns>
+    public async Task<string> ResolveContainerIdForBrowseAsync(
+        string containerId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return string.Empty;
+        }
+
+        var candidates = new List<string>();
+        AddSearchScopeCandidate(candidates, containerId);
+        foreach (var candidate in BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId)))
+        {
+            AddSearchScopeCandidate(candidates, candidate);
+        }
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var encoded = EncodeContainerIdForPath(candidate);
+                using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info", cancellationToken);
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object &&
+                    TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+                    dataNode.ValueKind == JsonValueKind.Object)
+                {
+                    root = dataNode;
+                }
+
+                var resolved = ReadString(root, "id", "containerId", "workspaceId", "folderId", "envId", "environmentId");
+                return string.IsNullOrWhiteSpace(resolved) ? candidate : resolved;
+            }
+            catch
+            {
+                // Continue candidate fallback.
+            }
+        }
+
+        return containerId.Trim();
     }
 
     private async Task<List<NdContainerNode>> ParseContainerChildrenAsync(
@@ -1410,7 +1530,11 @@ public sealed partial class NetDocumentsSyncService
 
         if (root.ValueKind == JsonValueKind.Object)
         {
-            foreach (var name in new[] { "children", "list", "items", "results", "data", "value", "folders", "records", "documents" })
+            foreach (var name in new[]
+                     {
+                         "children", "list", "items", "results", "data", "value", "folders", "records", "documents",
+                         "standardList", "customList", "locations", "rows"
+                     })
             {
                 if (!TryGetPropertyIgnoreCase(root, name, out var child))
                 {
@@ -1713,6 +1837,27 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return Array.Empty<JsonElement>();
+    }
+
+    private static IEnumerable<string> BuildCabinetTopLevelFoldersEndpointCandidates(string cabinetId)
+    {
+        var escaped = Uri.EscapeDataString(cabinetId);
+        yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly,ValidateWorkspaces";
+        yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly";
+        yield return $"/v1/Cabinet/{escaped}/folders";
+    }
+
+    private static void AddSearchScopeCandidate(ICollection<string> candidates, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        if (!candidates.Any(existing => string.Equals(existing, value, StringComparison.OrdinalIgnoreCase)))
+        {
+            candidates.Add(value);
+        }
     }
 
     private static string? NormalizeWorkspaceEnvId(string? rawValue)

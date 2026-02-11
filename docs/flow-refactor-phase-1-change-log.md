@@ -15,7 +15,9 @@
   - `Workspace Filter`
   - `Folder`
 - Step 1 selector now includes an expandable tree for Recent, Favorites, and Go to Workspace results:
-  - Expanding a workspace lazy-loads child folders and workspace filters.
+  - A cabinet-root node is always shown at the top of the tree and expands to top-level cabinet folders.
+  - Expanding workspace/folder nodes lazy-loads child folders and workspace filters.
+  - Recent and Favorite entries participate in the same expandable tree behavior as Go to Workspace entries.
   - Selecting a child folder/filter commits the same target contract used by Direct API upload.
 - Unsupported target types are blocked with:
   - `Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.`
@@ -29,7 +31,15 @@
 - Cache is invalidated when repository or cabinet changes.
 - Workspace child container expansion uses a 10-minute in-memory cache keyed by service + repository + cabinet + parent container id.
 - Child-container cache is invalidated when target-browser context resets (for example repository/cabinet/region/auth changes).
+- Browse expansion resolves container ids per context and caches them in-memory so Recents/Favorites rows can expand even when the row id differs from v2 container-search scope format.
 - Saved settings persist selected target and serialized effective defaults.
+
+## API Endpoint Strategy
+- The target browser is now **v2-first** where endpoint capability is equivalent:
+  - Child browsing/search: `v2/search` with cabinet-scoped container queries.
+  - Container metadata/path: `v2/container/{id}/info` and `v2/container/{id}/ancestry`.
+  - Cabinet root folders: `v2/cabinet/{id}/folders`.
+- v1 endpoints remain as compatibility fallback only when a tenant does not provide equivalent v2 behavior.
 
 ## Validation Guard
 - The target picker filters to supported types.

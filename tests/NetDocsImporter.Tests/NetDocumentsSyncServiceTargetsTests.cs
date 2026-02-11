@@ -117,6 +117,184 @@ public class NetDocumentsSyncServiceTargetsTests
         }
     }
 
+    [Fact]
+    public async Task GetContainerChildrenAsync_ResolvesContainerScopeBeforeSearchingChildren()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (string.Equals(path, "/v2/container/3437-5615-8479/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": ":AU2:o:w:m:v:^W200423132232851.nev",
+                            "description": "Demo Workspace",
+                            "extension": "ndws"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("container=:AU2:o:w:m:v:^W200423132232851.nev", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (query.Contains("ndfld", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return JsonResponse(HttpStatusCode.OK, """
+                            {
+                              "standardList": [
+                                {
+                                  "standardAttributes": {
+                                    "id": "FLD-200",
+                                    "description": "Correspondence",
+                                    "Ext": "ndfld",
+                                    "workspaceId": ":AU2:o:w:m:v:^W200423132232851.nev"
+                                  }
+                                }
+                              ]
+                            }
+                            """);
+                    }
+
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                if (string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync(
+                "NG-CAB",
+                parentContainerId: "3437-5615-8479",
+                workspaceId: "3437-5615-8479");
+
+            var folder = Assert.Single(nodes);
+            Assert.Equal("FLD-200", folder.Id);
+            Assert.Equal(NdTargetType.Folder, folder.SupportedType);
+
+            Assert.Contains(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/container/3437-5615-8479/info", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                       Uri.UnescapeDataString(uri.Query).Contains("container=:AU2:o:w:m:v:^W200423132232851.nev", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetCabinetTopLevelFoldersAsync_UsesV2AndSkipsFilters()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                if (string.Equals(request.RequestUri.AbsolutePath, "/v2/cabinet/NG-CAB/folders", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "ROOT-WS",
+                                "description": "Top Workspace",
+                                "Ext": "ndws"
+                              }
+                            },
+                            {
+                              "standardAttributes": {
+                                "id": "ROOT-FOLDER",
+                                "description": "Top Folder",
+                                "Ext": "ndfld"
+                              }
+                            },
+                            {
+                              "standardAttributes": {
+                                "id": "ROOT-FILTER",
+                                "description": "Top Filter",
+                                "Ext": "ndflt"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetCabinetTopLevelFoldersAsync("NG-CAB");
+
+            Assert.Equal(2, nodes.Count);
+            Assert.Contains(nodes, n => n.Id == "ROOT-WS" && n.SupportedType == NdTargetType.Workspace);
+            Assert.Contains(nodes, n => n.Id == "ROOT-FOLDER" && n.SupportedType == NdTargetType.Folder);
+            Assert.DoesNotContain(nodes, n => n.SupportedType == NdTargetType.WorkspaceFilter);
+            Assert.Contains(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/cabinet/NG-CAB/folders", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
     private static NetDocumentsSyncService CreateSyncService(HttpMessageHandler handler, string dbPath)
     {
         var apiClient = new NetDocumentsApiClient(

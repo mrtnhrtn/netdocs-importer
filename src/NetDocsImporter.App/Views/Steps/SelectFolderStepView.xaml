@@ -244,7 +244,7 @@
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
-                        <TextBlock Text="Expand a workspace node to lazy-load folders and filters."
+                        <TextBlock Text="Expand cabinet/workspace/folder nodes to lazy-load child folders and filters."
                                    Foreground="#666666"
                                    Margin="0,6,0,0" />
                     </StackPanel>
