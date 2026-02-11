@@ -105,4 +105,40 @@ public class NetDocumentsTargetBrowserLogicTests
         Assert.Equal("wf1", recentsRoundTrip[0].Selection.Id);
         Assert.Equal("f9", favoritesRoundTrip[0].Selection.Id);
     }
+
+    [Fact]
+    public void ResolveIconDescriptor_UsesExpectedFolderAndFilterIcons()
+    {
+        var folder = NdTargetBrowserLogic.ResolveIconDescriptor(NdTargetType.Folder);
+        var filter = NdTargetBrowserLogic.ResolveIconDescriptor(NdTargetType.WorkspaceFilter);
+
+        Assert.Equal("\uE8B7", folder.Glyph);
+        Assert.Equal("#D69E2E", folder.ColorHex);
+        Assert.Equal("\uE71C", filter.Glyph);
+        Assert.Equal("#2B6CB0", filter.ColorHex);
+    }
+
+    [Fact]
+    public void CreateSelectionFromContainerNode_PreservesTypeAndIdentifiers()
+    {
+        var node = new NdContainerNode
+        {
+            Id = "ndflt!123",
+            Name = "Open Items",
+            TypeRaw = "ndflt",
+            Extension = "ndflt",
+            ParentWorkspaceId = "ndws!55",
+            SupportedType = NdTargetType.WorkspaceFilter,
+            IsSelectable = true
+        };
+
+        var selection = NdTargetBrowserLogic.CreateSelectionFromContainerNode(node, NdTargetSourceFlow.Browse);
+
+        Assert.Equal(NdTargetType.WorkspaceFilter, selection.Type);
+        Assert.Equal("ndflt!123", selection.Id);
+        Assert.Equal("Open Items", selection.Name);
+        Assert.Equal("ndws!55", selection.ParentWorkspaceId);
+        Assert.Equal("ndflt", selection.Extension);
+        Assert.Equal(NdTargetSourceFlow.Browse, selection.SourceFlow);
+    }
 }
