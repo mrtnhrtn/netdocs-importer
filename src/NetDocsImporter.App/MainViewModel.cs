@@ -2478,7 +2478,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     private void UpdateOnUi(Action action)
     {
-        if (_uiContext is null)
+        if (_uiContext is null || ReferenceEquals(SynchronizationContext.Current, _uiContext))
         {
             action();
             return;
