@@ -181,6 +181,39 @@
 
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
+                        <TextBlock Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <TreeView ItemsSource="{Binding BrowseRootNodes}"
+                                  Height="220"
+                                  SelectedItemChanged="OnBrowseSelectionChanged">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem">
+                                    <EventSetter Event="Expanded" Handler="OnBrowseNodeExpanded" />
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                   Text="{Binding IconGlyph}"
+                                                   Foreground="{Binding IconColorHex}"
+                                                   Margin="0,0,6,0"
+                                                   VerticalAlignment="Center" />
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Metadata}" Foreground="#666666" FontSize="11" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                        <TextBlock Text="Expand a workspace node to lazy-load folders and filters."
+                                   Foreground="#666666"
+                                   Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
                         <TextBlock Text="Selected Target" FontWeight="Bold" FontSize="16" Margin="0,0,0,6" />
                         <TextBlock Text="{Binding SelectedNetDocumentsTargetName, StringFormat=Name: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding SelectedNetDocumentsTargetTypeDisplay, StringFormat=Type: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" />

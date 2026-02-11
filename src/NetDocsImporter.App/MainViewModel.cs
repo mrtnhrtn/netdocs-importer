@@ -410,6 +410,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _netDocumentsRegion, value))
             {
+                InvalidateTargetBrowserContext("region-changed");
                 _refreshedCabinetSchemaThisSession.Clear();
                 var settings = GetOrCreateNetDocumentsSettings();
                 NetDocumentsRegionDefaults.EnsureDefaults(settings);

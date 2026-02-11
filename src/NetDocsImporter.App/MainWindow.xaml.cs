@@ -348,6 +348,27 @@ public partial class MainWindow : Window
         await _viewModel.UseSelectedWorkspaceSearchTargetAsync();
     }
 
+    public async void OnBrowseNodeExpanded(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not TreeViewItem { DataContext: NetDocumentsBrowseNodeView node })
+        {
+            return;
+        }
+
+        await _viewModel.ExpandBrowseNodeAsync(node);
+    }
+
+    public async void OnBrowseSelectionChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is not NetDocumentsBrowseNodeView node || node.IsPlaceholder)
+        {
+            return;
+        }
+
+        _viewModel.SelectedBrowseNode = node;
+        await _viewModel.SelectTargetFromBrowseNodeAsync();
+    }
+
     public async void OnSelectTargetFromRecent(object sender, RoutedEventArgs e)
     {
         await _viewModel.SelectTargetFromRecentAsync();

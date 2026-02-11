@@ -18,6 +18,7 @@ public sealed partial class MainViewModel
     private const int WorkspaceSearchMaxChildCandidatesPerParent = 2;
     private const int WorkspaceSearchMaxResolveAttempts = 8;
     private static readonly TimeSpan WorkspaceCacheTtl = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan BrowseChildrenCacheTtl = TimeSpan.FromMinutes(10);
 
     private readonly ObservableCollection<NetDocumentsTargetContainerView> _netDocumentsTargetContainers = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _recentTargets = new();
@@ -30,6 +31,7 @@ public sealed partial class MainViewModel
     private readonly HashSet<string> _locallyUnpinnedFavoriteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetDocumentsWorkspaceTargetResultView?> _workspaceLookupPairCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _workspaceLookupInvalidPairCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly NdTargetChildrenMemoryCache _browseChildrenCache = new(BrowseChildrenCacheTtl);
 
     private List<NdTargetRecentItem> _localRecentTargets = new();
     private List<NdTargetFavoriteItem> _localFavoriteTargets = new();
@@ -315,6 +317,7 @@ public sealed partial class MainViewModel
                 _workspaceSearchTargets.Clear();
                 SelectedWorkspaceSearchTarget = null;
                 _browseRootNodes.Clear();
+                SelectedBrowseNode = null;
             });
             _hasLoadedRecentTargets = false;
             _hasLoadedFavoriteTargets = false;
@@ -374,6 +377,10 @@ public sealed partial class MainViewModel
         finally
         {
             IsTargetBrowserBusy = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
@@ -437,6 +444,8 @@ public sealed partial class MainViewModel
             default:
                 break;
         }
+
+        RefreshBrowseRootsForSelectedTab();
     }
 
     public async Task RefreshRecentTargetsAsync()
@@ -564,6 +573,10 @@ public sealed partial class MainViewModel
         finally
         {
             IsLoadingRecentTargets = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
@@ -692,6 +705,10 @@ public sealed partial class MainViewModel
         finally
         {
             IsLoadingFavoriteTargets = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
@@ -712,6 +729,7 @@ public sealed partial class MainViewModel
         {
             WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";
             TargetBrowserMessage = WorkspaceLookupStatus;
+            RefreshBrowseRootsForSelectedTab();
             return;
         }
 
@@ -725,6 +743,7 @@ public sealed partial class MainViewModel
                 _workspaceSearchTargets.Clear();
                 SelectedWorkspaceSearchTarget = null;
             });
+            RefreshBrowseRootsForSelectedTab();
             return;
         }
 
@@ -777,6 +796,10 @@ public sealed partial class MainViewModel
         finally
         {
             IsTargetBrowserBusy = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
@@ -815,26 +838,8 @@ public sealed partial class MainViewModel
             return;
         }
 
-        try
-        {
-            var roots = await RequireSyncService().GetContainerChildrenAsync(SelectedNetDocumentsCabinetId);
-            var mapped = roots.Select(node => new NetDocumentsBrowseNodeView(node)).ToList();
-            UpdateOnUi(() =>
-            {
-                _browseRootNodes.Clear();
-                foreach (var node in mapped)
-                {
-                    _browseRootNodes.Add(node);
-                }
-            });
-
-            Trace.WriteLine($"NetDocuments target browser: browse roots loaded count={mapped.Count}");
-        }
-        catch (Exception ex)
-        {
-            TargetBrowserMessage = $"Browse root load failed: {ex.Message}";
-            StatusText = TargetBrowserMessage;
-        }
+        RefreshBrowseRootsForSelectedTab();
+        await Task.CompletedTask;
     }
 
     public async Task ExpandBrowseNodeAsync(NetDocumentsBrowseNodeView? node)
@@ -852,8 +857,23 @@ public sealed partial class MainViewModel
         node.ChildrenLoadState = NdChildrenLoadState.Loading;
         try
         {
-            var children = await RequireSyncService().GetContainerChildrenAsync(SelectedNetDocumentsCabinetId, parentContainerId: node.Id);
-            var mapped = children.Select(child => new NetDocumentsBrowseNodeView(child)).ToList();
+            var children = await _browseChildrenCache.GetOrLoadAsync(
+                GetNetDocumentsServiceKey(),
+                SelectedNetDocumentsRepositoryId,
+                SelectedNetDocumentsCabinetId,
+                node.Id,
+                async cancellationToken =>
+                    await RequireSyncService().GetContainerChildrenAsync(
+                        SelectedNetDocumentsCabinetId,
+                        parentContainerId: node.Id,
+                        cancellationToken: cancellationToken));
+
+            var mapped = children
+                .Select(child => new NetDocumentsBrowseNodeView(
+                    child,
+                    sourceFlow: node.SourceFlow,
+                    metadata: BuildBrowseChildMetadata(child)))
+                .ToList();
             node.ReplaceChildren(mapped);
             node.ChildrenLoadState = NdChildrenLoadState.Loaded;
             Trace.WriteLine($"NetDocuments target browser: expanded node id={node.Id} children={mapped.Count}");
@@ -1402,6 +1422,114 @@ public sealed partial class MainViewModel
         };
     }
 
+    private void RefreshBrowseRootsForSelectedTab()
+    {
+        if (!CanPickNetDocumentsTarget)
+        {
+            UpdateOnUi(() =>
+            {
+                _browseRootNodes.Clear();
+                SelectedBrowseNode = null;
+            });
+            return;
+        }
+
+        IReadOnlyList<NetDocumentsBrowseNodeView> roots = SelectedTargetBrowserTab switch
+        {
+            NdTargetBrowserTab.Recent => BuildBrowseRootsFromRecentTargets(),
+            NdTargetBrowserTab.Favorites => BuildBrowseRootsFromFavoriteTargets(),
+            NdTargetBrowserTab.GoToWorkspace => BuildBrowseRootsFromWorkspaceSearchTargets(),
+            _ => Array.Empty<NetDocumentsBrowseNodeView>()
+        };
+
+        UpdateOnUi(() =>
+        {
+            _browseRootNodes.Clear();
+            foreach (var root in roots)
+            {
+                _browseRootNodes.Add(root);
+            }
+
+            SelectedBrowseNode = null;
+        });
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromRecentTargets()
+    {
+        return _recentTargets
+            .Select(item =>
+                new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.Recent,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.SourceDisplay} \u00B7 {item.TimestampDisplay}"))
+            .ToList();
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromFavoriteTargets()
+    {
+        return _favoriteTargets
+            .Select(item =>
+                new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.Favorite,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.SourceDisplay} \u00B7 {item.TimestampDisplay}"))
+            .ToList();
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromWorkspaceSearchTargets()
+    {
+        return _workspaceSearchTargets
+            .Select(item =>
+            {
+                var keyContext = string.IsNullOrWhiteSpace(item.ParentKey) && string.IsNullOrWhiteSpace(item.ChildKey)
+                    ? string.Empty
+                    : $" \u00B7 {item.ParentKey}/{item.ChildKey}";
+                return new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.LookupWs,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.Source}{keyContext}");
+            })
+            .ToList();
+    }
+
+    private static NdContainerNode CreateBrowseNodeFromSelection(NdTargetSelection selection, string pathDisplay)
+    {
+        return new NdContainerNode
+        {
+            Id = selection.Id,
+            Name = string.IsNullOrWhiteSpace(selection.Name) ? selection.Id : selection.Name,
+            TypeRaw = string.IsNullOrWhiteSpace(selection.Extension) ? selection.Type.ToString() : selection.Extension,
+            Extension = selection.Extension,
+            ParentId = string.Empty,
+            ParentWorkspaceId = selection.ParentWorkspaceId,
+            PathDisplay = string.IsNullOrWhiteSpace(pathDisplay) ? selection.Name : pathDisplay,
+            SupportedType = selection.Type,
+            IsSelectable = true,
+            UnsupportedReason = string.Empty,
+            HasChildren = selection.Type != NdTargetType.WorkspaceFilter,
+            ChildrenLoadState = NdChildrenLoadState.NotLoaded
+        };
+    }
+
+    private static string BuildBrowseChildMetadata(NdContainerNode node)
+    {
+        var typeDisplay = node.SupportedType switch
+        {
+            NdTargetType.Workspace => "Workspace",
+            NdTargetType.WorkspaceFilter => "Workspace Filter",
+            NdTargetType.Folder => "Folder",
+            _ => "Container"
+        };
+
+        if (!string.IsNullOrWhiteSpace(node.PathDisplay) &&
+            !string.Equals(node.PathDisplay, node.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{typeDisplay} \u00B7 {node.PathDisplay}";
+        }
+
+        return typeDisplay;
+    }
+
     private static NdTargetType ParseTargetType(string raw)
     {
         return Enum.TryParse<NdTargetType>(raw, ignoreCase: true, out var parsed)
@@ -1427,17 +1555,11 @@ public sealed partial class MainViewModel
             return;
         }
 
-        var selection = new NdTargetSelection
-        {
-            Type = SelectedBrowseNode.SupportedType.Value,
-            Id = SelectedBrowseNode.Id,
-            Name = SelectedBrowseNode.Name,
-            ParentWorkspaceId = SelectedBrowseNode.ParentWorkspaceId,
-            Extension = SelectedBrowseNode.Extension,
-            SourceFlow = NdTargetSourceFlow.Browse
-        };
+        var selection = NdTargetBrowserLogic.CreateSelectionFromContainerNode(
+            SelectedBrowseNode.ToNodeModel(),
+            SelectedBrowseNode.SourceFlow);
 
-        await SetSelectedTargetAsync(selection, SelectedBrowseNode.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedBrowseNode.PathDisplay);
     }
 
     public async Task ToggleFavoriteForSelectedTargetAsync()
@@ -2106,11 +2228,17 @@ public sealed partial class MainViewModel
     private void InvalidateTargetBrowserContext(string reason)
     {
         _targetBrowserContextVersion++;
+        _browseChildrenCache.InvalidateAll();
         _workspaceSearchCts?.Cancel();
         _workspaceSearchCts?.Dispose();
         _workspaceSearchCts = null;
         _workspaceLookupContext = null;
         _isWorkspaceLookupAvailable = true;
+        UpdateOnUi(() =>
+        {
+            _browseRootNodes.Clear();
+            SelectedBrowseNode = null;
+        });
         Trace.WriteLine($"ND-BROWSER context-reset reason='{reason}' version={_targetBrowserContextVersion} repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
         OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
         OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
@@ -2352,7 +2480,10 @@ public sealed class NetDocumentsWorkspaceTargetResultView
 
 public sealed class NetDocumentsBrowseNodeView
 {
-    public NetDocumentsBrowseNodeView(NdContainerNode node)
+    public NetDocumentsBrowseNodeView(
+        NdContainerNode node,
+        NdTargetSourceFlow sourceFlow = NdTargetSourceFlow.Browse,
+        string metadata = "")
     {
         Id = node.Id;
         Name = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name;
@@ -2366,6 +2497,8 @@ public sealed class NetDocumentsBrowseNodeView
         UnsupportedReason = node.UnsupportedReason;
         HasChildren = node.HasChildren;
         ChildrenLoadState = node.ChildrenLoadState;
+        SourceFlow = sourceFlow;
+        Metadata = metadata ?? string.Empty;
 
         if (HasChildren)
         {
@@ -2383,6 +2516,8 @@ public sealed class NetDocumentsBrowseNodeView
         ParentId = string.Empty;
         PathDisplay = string.Empty;
         UnsupportedReason = string.Empty;
+        Metadata = string.Empty;
+        SourceFlow = NdTargetSourceFlow.Browse;
     }
 
     public string Id { get; }
@@ -2401,6 +2536,10 @@ public sealed class NetDocumentsBrowseNodeView
 
     public NdTargetType? SupportedType { get; }
 
+    public NdTargetSourceFlow SourceFlow { get; }
+
+    public string Metadata { get; }
+
     public bool IsSelectable { get; }
 
     public string UnsupportedReason { get; }
@@ -2412,6 +2551,10 @@ public sealed class NetDocumentsBrowseNodeView
     public ObservableCollection<NetDocumentsBrowseNodeView> Children { get; } = new();
 
     public NdChildrenLoadState ChildrenLoadState { get; set; }
+
+    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType).Glyph;
+
+    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType).ColorHex;
 
     public string TypeDisplay
     {
@@ -2441,6 +2584,25 @@ public sealed class NetDocumentsBrowseNodeView
         {
             Children.Add(node);
         }
+    }
+
+    public NdContainerNode ToNodeModel()
+    {
+        return new NdContainerNode
+        {
+            Id = Id,
+            Name = Name,
+            TypeRaw = TypeRaw,
+            Extension = Extension,
+            ParentId = ParentId,
+            ParentWorkspaceId = ParentWorkspaceId,
+            PathDisplay = PathDisplay,
+            SupportedType = SupportedType,
+            IsSelectable = IsSelectable,
+            UnsupportedReason = UnsupportedReason,
+            HasChildren = HasChildren,
+            ChildrenLoadState = ChildrenLoadState
+        };
     }
 }
 
