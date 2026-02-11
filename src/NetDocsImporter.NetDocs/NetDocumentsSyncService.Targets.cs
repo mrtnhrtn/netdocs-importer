@@ -603,11 +603,10 @@ public sealed partial class NetDocumentsSyncService
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var nodes = EnumerateArray(document.RootElement)
-                    .Select(ParseContainerNode)
-                    .Where(node => node is not null)
-                    .Select(node => node!)
-                    .ToList();
+                var nodes = await ParseContainerChildrenAsync(
+                    document.RootElement,
+                    parentContainerId,
+                    cancellationToken);
                 if (nodes.Count > 0)
                 {
                     results.AddRange(nodes);
@@ -624,6 +623,91 @@ public sealed partial class NetDocumentsSyncService
             .OrderByDescending(node => node.IsSelectable)
             .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private async Task<List<NdContainerNode>> ParseContainerChildrenAsync(
+        JsonElement root,
+        string? parentContainerId,
+        CancellationToken cancellationToken)
+    {
+        var nodes = new List<NdContainerNode>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in EnumerateContainerChildrenItems(root))
+        {
+            var parsed = ParseContainerNode(item);
+            if (parsed is null || string.IsNullOrWhiteSpace(parsed.Id))
+            {
+                continue;
+            }
+
+            if (parsed.SupportedType is null)
+            {
+                var hydrated = await TryHydrateContainerNodeAsync(parsed.Id, parentContainerId, cancellationToken);
+                if (hydrated is not null)
+                {
+                    parsed = hydrated;
+                }
+            }
+
+            if (parsed.SupportedType is null)
+            {
+                continue;
+            }
+
+            NormalizeContainerNodeForTree(parsed, parentContainerId);
+            if (seen.Add(parsed.Id))
+            {
+                nodes.Add(parsed);
+            }
+        }
+
+        return nodes;
+    }
+
+    private async Task<NdContainerNode?> TryHydrateContainerNodeAsync(
+        string containerId,
+        string? parentContainerId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hydrated = await GetContainerInfoAsync(containerId, cancellationToken);
+            if (hydrated is null || hydrated.SupportedType is null)
+            {
+                return null;
+            }
+
+            NormalizeContainerNodeForTree(hydrated, parentContainerId);
+            return hydrated;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void NormalizeContainerNodeForTree(NdContainerNode node, string? parentContainerId)
+    {
+        if (string.IsNullOrWhiteSpace(node.ParentId))
+        {
+            node.ParentId = parentContainerId ?? string.Empty;
+        }
+
+        node.IsSelectable = node.SupportedType.HasValue;
+        node.UnsupportedReason = NdTargetBrowserLogic.GetUnsupportedReason(node.SupportedType);
+        node.ChildrenLoadState = NdChildrenLoadState.NotLoaded;
+
+        if (node.SupportedType == NdTargetType.WorkspaceFilter)
+        {
+            node.HasChildren = false;
+            return;
+        }
+
+        if (node.SupportedType is NdTargetType.Workspace or NdTargetType.Folder && !node.HasChildren)
+        {
+            // Most legacy list endpoints omit hasChildren for folder/workspace rows.
+            node.HasChildren = true;
+        }
     }
 
     /// <summary>
@@ -1211,6 +1295,21 @@ public sealed partial class NetDocumentsSyncService
             var escapedParent = Uri.EscapeDataString(parentContainerId);
             yield return $"/v1/Container/{escapedParent}/children";
             yield return $"/v1/Containers/{escapedParent}/children";
+            yield return $"/v1/Folder/{escapedParent}/children";
+            yield return $"/v1/Folder/{escapedParent}";
+
+            if (!string.IsNullOrWhiteSpace(workspaceId))
+            {
+                var escapedWorkspace = Uri.EscapeDataString(workspaceId);
+                yield return $"/v1/Workspace/{escapedWorkspace}/children";
+                yield return $"/v1/Workspace/{escapedWorkspace}";
+            }
+            else
+            {
+                // Some tenants expose workspace rows by the same id format; try workspace endpoints as fallback.
+                yield return $"/v1/Workspace/{escapedParent}/children";
+                yield return $"/v1/Workspace/{escapedParent}";
+            }
             yield break;
         }
 
@@ -1218,8 +1317,44 @@ public sealed partial class NetDocumentsSyncService
         {
             var escapedWorkspaceId = Uri.EscapeDataString(workspaceId);
             yield return $"/v1/Workspace/{escapedWorkspaceId}/children";
+            yield return $"/v1/Workspace/{escapedWorkspaceId}";
             yield break;
         }
+    }
+
+    private static IEnumerable<JsonElement> EnumerateContainerChildrenItems(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return root.EnumerateArray();
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var name in new[] { "children", "list", "items", "results", "data", "value", "folders", "records", "documents" })
+            {
+                if (!TryGetPropertyIgnoreCase(root, name, out var child))
+                {
+                    continue;
+                }
+
+                if (child.ValueKind == JsonValueKind.Array)
+                {
+                    return child.EnumerateArray();
+                }
+
+                if (child.ValueKind == JsonValueKind.Object)
+                {
+                    var nested = EnumerateContainerChildrenItems(child).ToList();
+                    if (nested.Count > 0)
+                    {
+                        return nested;
+                    }
+                }
+            }
+        }
+
+        return Array.Empty<JsonElement>();
     }
 
     private static NdTargetRecentItem? ParseRecentItem(JsonElement element)

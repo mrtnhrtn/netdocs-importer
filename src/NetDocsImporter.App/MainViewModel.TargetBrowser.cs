@@ -866,6 +866,7 @@ public sealed partial class MainViewModel
                     await RequireSyncService().GetContainerChildrenAsync(
                         SelectedNetDocumentsCabinetId,
                         parentContainerId: node.Id,
+                        workspaceId: node.SupportedType == NdTargetType.Workspace ? node.Id : null,
                         cancellationToken: cancellationToken));
 
             var mapped = children
