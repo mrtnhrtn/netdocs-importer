@@ -14,6 +14,9 @@
   - `Workspace`
   - `Workspace Filter`
   - `Folder`
+- Step 1 selector now includes an expandable tree for Recent, Favorites, and Go to Workspace results:
+  - Expanding a workspace lazy-loads child folders and workspace filters.
+  - Selecting a child folder/filter commits the same target contract used by Direct API upload.
 - Unsupported target types are blocked with:
   - `Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.`
 - Target selection now syncs profile attributes and inherited/default values.
@@ -24,6 +27,8 @@
 ## Caching Behavior
 - Target profile metadata is cached per session by `targetType:targetId`.
 - Cache is invalidated when repository or cabinet changes.
+- Workspace child container expansion uses a 10-minute in-memory cache keyed by service + repository + cabinet + parent container id.
+- Child-container cache is invalidated when target-browser context resets (for example repository/cabinet/region/auth changes).
 - Saved settings persist selected target and serialized effective defaults.
 
 ## Validation Guard
