@@ -25,6 +25,7 @@ public sealed partial class MainViewModel
     private readonly ObservableCollection<NetDocumentsTargetItemView> _recentTargets = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _favoriteTargets = new();
     private readonly ObservableCollection<NetDocumentsWorkspaceTargetResultView> _workspaceSearchTargets = new();
+    private List<NetDocumentsWorkspaceTargetResultView> _workspaceTreeSearchTargets = new();
     private readonly ObservableCollection<NetDocumentsBrowseNodeView> _browseRootNodes = new();
     private readonly ObservableCollection<NetDocumentsTargetProfileAttributeView> _targetProfileAttributes = new();
     private readonly ObservableCollection<NetDocumentsEffectiveDefaultView> _effectiveProfileDefaultsRows = new();
@@ -771,6 +772,7 @@ public sealed partial class MainViewModel
         {
             WorkspaceLookupStatus = "Enter workspace search text.";
             TargetBrowserMessage = WorkspaceLookupStatus;
+            _workspaceTreeSearchTargets = new List<NetDocumentsWorkspaceTargetResultView>();
             UpdateOnUi(() =>
             {
                 _workspaceSearchTargets.Clear();
@@ -798,6 +800,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            _workspaceTreeSearchTargets = resolved.ToList();
             UpdateOnUi(() =>
             {
                 _workspaceSearchTargets.Clear();
@@ -813,6 +816,7 @@ public sealed partial class MainViewModel
                 ? "No workspaces matched your search."
                 : $"Workspace matches: {resolved.Count}.";
             TargetBrowserMessage = WorkspaceLookupStatus;
+            Trace.WriteLine($"ND-SEARCH tree-result-count={_workspaceTreeSearchTargets.Count}");
             Trace.WriteLine($"ND-SEARCH ui-result query='{query}' count={resolved.Count}");
             QueueSettingsSave();
         }
@@ -1543,6 +1547,9 @@ public sealed partial class MainViewModel
                 .Concat(roots)
                 .ToList();
         }
+        Trace.WriteLine(
+            $"ND-BROWSER roots-refresh tab={SelectedTargetBrowserTab} roots={roots.Count} " +
+            $"workspaceTree={_workspaceTreeSearchTargets.Count} recent={_recentTargets.Count} favorites={_favoriteTargets.Count}");
 
         UpdateOnUi(() =>
         {
@@ -1580,7 +1587,7 @@ public sealed partial class MainViewModel
 
     private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromWorkspaceSearchTargets()
     {
-        return _workspaceSearchTargets
+        return _workspaceTreeSearchTargets
             .Select(item =>
             {
                 var keyContext = string.IsNullOrWhiteSpace(item.ParentKey) && string.IsNullOrWhiteSpace(item.ChildKey)
@@ -2366,6 +2373,7 @@ public sealed partial class MainViewModel
         _targetBrowserContextVersion++;
         _browseChildrenCache.InvalidateAll();
         _browseExpansionScopeCache.Clear();
+        _workspaceTreeSearchTargets = new List<NetDocumentsWorkspaceTargetResultView>();
         _workspaceSearchCts?.Cancel();
         _workspaceSearchCts?.Dispose();
         _workspaceSearchCts = null;
