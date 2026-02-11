@@ -830,30 +830,71 @@ public sealed partial class NetDocumentsSyncService
         yield return $"/v1/Cabinet/{escaped}/folders";
     }
 
-    private static NdTargetSelection? ParseTargetSelection(JsonElement element)
+    private static NdTargetSelection? ParseTargetSelection(JsonElement element, string? defaultExtension = null)
     {
-        var id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId");
+        var source = SelectTargetSelectionSource(element);
+        var id = ReadString(source, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
+        }
+
         if (string.IsNullOrWhiteSpace(id))
         {
             return null;
         }
 
-        var extension = ReadExtensionValue(element);
+        var extension = ReadExtensionValue(source);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ReadExtensionValue(element);
+        }
+
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = defaultExtension ?? string.Empty;
+        }
+
         var rawType = string.IsNullOrWhiteSpace(extension)
-            ? ReadString(element, "type", "containerType", "kind", "extension", "ext")
+            ? ReadString(source, "type", "containerType", "kind", "extension", "ext")
             : extension;
-        var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, element.TryGetProperty("workspaceId", out _));
+        if (string.IsNullOrWhiteSpace(rawType))
+        {
+            rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
+        }
+
+        var hasWorkspaceIdHint =
+            TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
+            TryGetPropertyIgnoreCase(element, "workspaceId", out _);
+        var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint);
+        if (resolvedType is null && !string.IsNullOrWhiteSpace(defaultExtension))
+        {
+            resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(defaultExtension, hasWorkspaceIdHint);
+        }
+
         if (resolvedType is null)
         {
             return null;
         }
 
+        var name = ReadString(source, "name", "description", "label", "title");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = ReadString(element, "name", "description", "label", "title");
+        }
+
+        var parentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "parentId", "workspace");
+        if (string.IsNullOrWhiteSpace(parentWorkspaceId))
+        {
+            parentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "parentId", "workspace");
+        }
+
         return new NdTargetSelection
         {
             Id = id,
-            Name = ReadString(element, "name", "description", "label", "title"),
+            Name = name,
             Type = resolvedType.Value,
-            ParentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "parentId", "workspace"),
+            ParentWorkspaceId = parentWorkspaceId,
             Extension = extension,
             SourceFlow = NdTargetSourceFlow.Browse
         };
@@ -915,6 +956,44 @@ public sealed partial class NetDocumentsSyncService
             Extension = extension,
             SourceFlow = NdTargetSourceFlow.Browse
         };
+    }
+
+    private static JsonElement SelectTargetSelectionSource(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return element;
+        }
+
+        foreach (var propertyName in new[] { "standardAttributes", "attributes", "profile", "containerInfo", "container" })
+        {
+            if (TryGetPropertyIgnoreCase(element, propertyName, out var direct) && direct.ValueKind == JsonValueKind.Object)
+            {
+                return direct;
+            }
+        }
+
+        foreach (var propertyName in new[] { "data", "item", "result", "value" })
+        {
+            if (!TryGetPropertyIgnoreCase(element, propertyName, out var nestedContainer) ||
+                nestedContainer.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var nestedName in new[] { "standardAttributes", "attributes", "profile", "containerInfo", "container" })
+            {
+                if (TryGetPropertyIgnoreCase(nestedContainer, nestedName, out var nested) &&
+                    nested.ValueKind == JsonValueKind.Object)
+                {
+                    return nested;
+                }
+            }
+
+            return nestedContainer;
+        }
+
+        return element;
     }
 
     private async Task<List<NdProfileAttribute>> TryFetchTargetProfileAttributesAsync(
@@ -1401,18 +1480,59 @@ public sealed partial class NetDocumentsSyncService
 
     private static NdContainerNode? ParseContainerNode(JsonElement element)
     {
-        var id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId");
+        var source = SelectTargetSelectionSource(element);
+        var id = ReadString(source, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
+        }
+
         if (string.IsNullOrWhiteSpace(id))
         {
             return null;
         }
 
-        var extension = ReadExtensionValue(element);
+        var extension = ReadExtensionValue(source);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ReadExtensionValue(element);
+        }
+
         var rawType = string.IsNullOrWhiteSpace(extension)
-            ? ReadString(element, "type", "containerType", "kind", "extension", "ext")
+            ? ReadString(source, "type", "containerType", "kind", "extension", "ext")
             : extension;
-        var supportedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, element.TryGetProperty("workspaceId", out _));
-        var name = ReadString(element, "name", "description", "label", "title");
+        if (string.IsNullOrWhiteSpace(rawType))
+        {
+            rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
+        }
+
+        var hasWorkspaceIdHint =
+            TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
+            TryGetPropertyIgnoreCase(element, "workspaceId", out _);
+        var supportedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint);
+        var name = ReadString(source, "name", "description", "label", "title");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = ReadString(element, "name", "description", "label", "title");
+        }
+
+        var parentId = ReadString(source, "parentId");
+        if (string.IsNullOrWhiteSpace(parentId))
+        {
+            parentId = ReadString(element, "parentId");
+        }
+
+        var parentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "workspace");
+        if (string.IsNullOrWhiteSpace(parentWorkspaceId))
+        {
+            parentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "workspace");
+        }
+
+        var pathDisplay = ReadString(source, "path", "fullPath", "breadcrumb");
+        if (string.IsNullOrWhiteSpace(pathDisplay))
+        {
+            pathDisplay = ReadString(element, "path", "fullPath", "breadcrumb");
+        }
 
         return new NdContainerNode
         {
@@ -1420,13 +1540,14 @@ public sealed partial class NetDocumentsSyncService
             Name = string.IsNullOrWhiteSpace(name) ? id : name,
             TypeRaw = rawType,
             Extension = extension,
-            ParentId = ReadString(element, "parentId"),
-            ParentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "workspace"),
-            PathDisplay = ReadString(element, "path", "fullPath", "breadcrumb"),
+            ParentId = parentId,
+            ParentWorkspaceId = parentWorkspaceId,
+            PathDisplay = pathDisplay,
             SupportedType = supportedType,
             IsSelectable = supportedType.HasValue,
             UnsupportedReason = NdTargetBrowserLogic.GetUnsupportedReason(supportedType),
-            HasChildren = ReadBool(element, "hasChildren", "containsChildren", "canExpand"),
+            HasChildren = ReadBool(source, "hasChildren", "containsChildren", "canExpand") ||
+                          ReadBool(element, "hasChildren", "containsChildren", "canExpand"),
             ChildrenLoadState = NdChildrenLoadState.NotLoaded
         };
     }
@@ -1455,7 +1576,7 @@ public sealed partial class NetDocumentsSyncService
         if (!string.IsNullOrWhiteSpace(containerId))
         {
             candidates.Add($"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
-            candidates.Add($"/v2/search?container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
+            candidates.Add($"/v2/search?cabinets={escapedCabinet}&container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
         }
 
         var results = new List<NdTargetSelection>();
@@ -1468,7 +1589,7 @@ public sealed partial class NetDocumentsSyncService
                 var beforeCount = results.Count;
                 foreach (var item in EnumerateSearchItems(document.RootElement))
                 {
-                    var parsed = ParseTargetSelection(item);
+                    var parsed = ParseTargetSelection(item, extension);
                     if (parsed is null)
                     {
                         continue;
@@ -1511,11 +1632,29 @@ public sealed partial class NetDocumentsSyncService
 
         if (root.ValueKind == JsonValueKind.Object)
         {
-            foreach (var name in new[] { "items", "results", "data", "documents", "records", "value", "list" })
+            foreach (var name in new[]
+                     {
+                         "items", "results", "data", "documents", "records", "value", "list",
+                         "standardList", "customList", "locations", "rows", "searchResults", "hits"
+                     })
             {
-                if (TryGetPropertyIgnoreCase(root, name, out var child) && child.ValueKind == JsonValueKind.Array)
+                if (!TryGetPropertyIgnoreCase(root, name, out var child))
+                {
+                    continue;
+                }
+
+                if (child.ValueKind == JsonValueKind.Array)
                 {
                     return child.EnumerateArray();
+                }
+
+                if (child.ValueKind == JsonValueKind.Object)
+                {
+                    var nested = EnumerateSearchItems(child).ToList();
+                    if (nested.Count > 0)
+                    {
+                        return nested;
+                    }
                 }
             }
         }
@@ -1525,7 +1664,12 @@ public sealed partial class NetDocumentsSyncService
 
     private static bool IsExtensionMatch(JsonElement element, string extension)
     {
-        var ext = ReadString(element, "extension", "ext", "type", "containerType", "kind");
+        var ext = ReadExtensionValue(element);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            ext = ReadString(element, "type", "containerType", "kind");
+        }
+
         if (string.IsNullOrWhiteSpace(ext))
         {
             return true;
@@ -1768,14 +1912,33 @@ public sealed partial class NetDocumentsSyncService
 
         if (element.ValueKind == JsonValueKind.Object)
         {
-            foreach (var propertyName in new[] { "attributes", "Attributes", "profile", "Profile" })
+            foreach (var propertyName in new[]
+                     {
+                         "standardAttributes", "attributes", "profile", "containerInfo", "container",
+                         "data", "item", "result", "value"
+                     })
             {
-                if (element.TryGetProperty(propertyName, out var node) && node.ValueKind == JsonValueKind.Object)
+                if (TryGetPropertyIgnoreCase(element, propertyName, out var node) && node.ValueKind == JsonValueKind.Object)
                 {
                     extension = ReadString(node, "extension", "ext", "Ext", "type", "Type");
                     if (!string.IsNullOrWhiteSpace(extension))
                     {
                         return extension;
+                    }
+
+                    foreach (var nestedName in new[] { "standardAttributes", "attributes", "profile", "containerInfo", "container" })
+                    {
+                        if (!TryGetPropertyIgnoreCase(node, nestedName, out var nestedNode) ||
+                            nestedNode.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        extension = ReadString(nestedNode, "extension", "ext", "Ext", "type", "Type");
+                        if (!string.IsNullOrWhiteSpace(extension))
+                        {
+                            return extension;
+                        }
                     }
                 }
             }

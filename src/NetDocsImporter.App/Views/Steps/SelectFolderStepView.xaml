@@ -188,6 +188,12 @@
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem">
                                     <EventSetter Event="Expanded" Handler="OnBrowseNodeExpanded" />
+                                    <Setter Property="Foreground" Value="#1F2933" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Foreground" Value="#FFFFFF" />
+                                        </Trigger>
+                                    </Style.Triggers>
                                 </Style>
                             </TreeView.ItemContainerStyle>
                             <TreeView.ItemTemplate>
@@ -195,12 +201,44 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock FontFamily="Segoe MDL2 Assets"
                                                    Text="{Binding IconGlyph}"
-                                                   Foreground="{Binding IconColorHex}"
                                                    Margin="0,0,6,0"
-                                                   VerticalAlignment="Center" />
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{Binding IconColorHex}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                            <Setter Property="Foreground" Value="#FFFFFF" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <StackPanel>
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                            <TextBlock Text="{Binding Metadata}" Foreground="#666666" FontSize="11" />
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="#1F2933" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                                <Setter Property="Foreground" Value="#FFFFFF" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Metadata}" FontSize="11">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="#666666" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                                <Setter Property="Foreground" Value="#E5EDFF" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                         </StackPanel>
                                     </StackPanel>
                                 </HierarchicalDataTemplate>
