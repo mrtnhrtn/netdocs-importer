@@ -727,6 +727,11 @@ public sealed partial class MainViewModel
             return;
         }
 
+        if (SelectedTargetBrowserTab != NdTargetBrowserTab.GoToWorkspace)
+        {
+            SelectedTargetBrowserTab = NdTargetBrowserTab.GoToWorkspace;
+        }
+
         if (!CanSearchWorkspaceTargets)
         {
             WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";

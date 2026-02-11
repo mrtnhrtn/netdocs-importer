@@ -144,36 +144,9 @@
 
                     <TabItem Header="Go to Workspace">
                         <StackPanel Margin="4">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <TextBox Width="260"
-                                         Margin="0,0,6,0"
-                                         Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}"
-                                         IsEnabled="{Binding CanSearchWorkspaceTargets}" />
-                                <Button Content="Search"
-                                        Width="100"
-                                        Margin="0,0,6,0"
-                                        Click="OnSearchWorkspaceTargets"
-                                        IsEnabled="{Binding CanSearchWorkspaceTargets}"
-                                        Style="{StaticResource SecondaryButton}" />
-                            </StackPanel>
-                            <ListView ItemsSource="{Binding WorkspaceSearchTargets}"
-                                      SelectedItem="{Binding SelectedWorkspaceSearchTarget}"
-                                      Height="235"
-                                      Margin="0,0,0,6">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Workspace" Width="170" DisplayMemberBinding="{Binding Name}" />
-                                        <GridViewColumn Header="Type" Width="90" DisplayMemberBinding="{Binding TypeDisplay}" />
-                                        <GridViewColumn Header="Parent Key" Width="90" DisplayMemberBinding="{Binding ParentKey}" />
-                                        <GridViewColumn Header="Parent Name" Width="160" DisplayMemberBinding="{Binding ParentDescription}" />
-                                        <GridViewColumn Header="Child Key" Width="90" DisplayMemberBinding="{Binding ChildKey}" />
-                                        <GridViewColumn Header="Child Name" Width="160" DisplayMemberBinding="{Binding ChildDescription}" />
-                                        <GridViewColumn Header="Path" Width="240" DisplayMemberBinding="{Binding PathDisplay}" />
-                                        <GridViewColumn Header="Source" Width="70" DisplayMemberBinding="{Binding Source}" />
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                            <TextBlock Text="{Binding WorkspaceLookupStatus}" Foreground="#555555" Margin="0,0,0,4" TextWrapping="Wrap" />
+                            <TextBlock Text="Use the search controls in the tree panel to load workspace results."
+                                       Foreground="#555555"
+                                       TextWrapping="Wrap" />
                         </StackPanel>
                     </TabItem>
 
@@ -182,6 +155,22 @@
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBox Width="260"
+                                     Margin="0,0,6,0"
+                                     Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding CanSearchWorkspaceTargets}" />
+                            <Button Content="Search"
+                                    Width="100"
+                                    Margin="0,0,6,0"
+                                    Click="OnSearchWorkspaceTargets"
+                                    IsEnabled="{Binding CanSearchWorkspaceTargets}"
+                                    Style="{StaticResource SecondaryButton}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding WorkspaceLookupStatus}"
+                                   Foreground="#555555"
+                                   Margin="0,0,0,6"
+                                   TextWrapping="Wrap" />
                         <TreeView ItemsSource="{Binding BrowseRootNodes}"
                                   Height="220"
                                   SelectedItemChanged="OnBrowseSelectionChanged">
