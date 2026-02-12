@@ -292,6 +292,13 @@ public sealed partial class MainViewModel
 
     private DirectUploadPlanContext BuildDirectUploadPlanContext(bool allowCreateFolders)
     {
+        var netDocuments = GetOrCreateNetDocumentsSettings();
+        int? v1DocumentIndexPriority = netDocuments.DirectUploadV1DocumentIndexPriority;
+        if (!v1DocumentIndexPriority.HasValue || v1DocumentIndexPriority.Value <= 0)
+        {
+            v1DocumentIndexPriority = 400;
+        }
+
         return new DirectUploadPlanContext
         {
             JobId = CurrentJobId ?? string.Empty,
@@ -301,7 +308,8 @@ public sealed partial class MainViewModel
             AllowCreateFolders = allowCreateFolders,
             RequireAcl = false,
             MaxConcurrency = Math.Clamp(MaxConcurrency, 1, 8),
-            MaxRetryAttempts = 4
+            MaxRetryAttempts = 4,
+            V1DocumentIndexPriority = v1DocumentIndexPriority
         };
     }
 

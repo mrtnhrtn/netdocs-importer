@@ -98,6 +98,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly object _settingsSaveLock = new();
     private bool _settingsSavePending;
     private StepItem? _currentStep;
+    private bool _isSettingsOpen;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
@@ -373,6 +374,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         set => SetField(ref _currentStep, value);
     }
 
+    public bool IsSettingsOpen
+    {
+        get => _isSettingsOpen;
+        set => SetField(ref _isSettingsOpen, value);
+    }
+
+    public bool IsAuthenticationRequired => !IsNetDocumentsConnected;
+
+    public bool CanAccessMainFlow => IsNetDocumentsConnected;
+
     public string SchemaPath
     {
         get => _schemaPath;
@@ -642,7 +653,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
         _showLegacyScopeExplorer = false;
 
-        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Login & choose your NetDocuments location to pre-fill profiling attributes", this));
+        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Choose your NetDocuments upload destination", this));
         Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and review upload readiness", this));
         Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
 
@@ -1034,6 +1045,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             await LoadSchemaAsync(SchemaPath);
         }
+
+        if (!IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = true;
+            SetCurrentStep(StepKey.SelectFolder);
+            StatusText = CanConnectToNetDocuments
+                ? "Sign in to NetDocuments from Settings before continuing."
+                : "OAuth profile for this region is not installed. Contact administrator.";
+        }
     }
 
     public async Task ExportNdImportListAsync()
@@ -1190,7 +1210,42 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public Task ConnectToNetDocumentsAsync()
     {
-        return ConnectAndSyncNetDocumentsAsync();
+        return ConnectToNetDocumentsCoreAsync();
+    }
+
+    public void OpenSettings()
+    {
+        IsSettingsOpen = true;
+    }
+
+    public void CloseSettings()
+    {
+        if (IsAuthenticationRequired)
+        {
+            return;
+        }
+
+        IsSettingsOpen = false;
+    }
+
+    public void ToggleSettings()
+    {
+        if (IsSettingsOpen)
+        {
+            CloseSettings();
+            return;
+        }
+
+        OpenSettings();
+    }
+
+    private async Task ConnectToNetDocumentsCoreAsync()
+    {
+        await ConnectAndSyncNetDocumentsAsync();
+        if (IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = false;
+        }
     }
 
     private async Task LoadSettingsAsync()

@@ -35,7 +35,8 @@ dotnet test .\tests\NetDocsImporter.Tests\NetDocsImporter.Tests.csproj -c Debug
 ## User Flow
 
 1. **NetDocuments Upload Target**
-   - Connect to NetDocuments.
+   - Open **Settings** (gear icon) and connect to NetDocuments.
+   - If no active NetDocuments session exists at startup, the app requires sign-in before workflow steps are enabled.
    - Select repository/cabinet.
    - Choose target from Recent/Favorites/Go To Workspace (auto-confirms selection).
    - Expand a workspace in the tree panel to lazy-load child folders and workspace filters, then select the exact upload target container.

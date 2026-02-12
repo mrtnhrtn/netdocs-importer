@@ -641,9 +641,10 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         DirectUploadPlanContext context,
         CancellationToken cancellationToken)
     {
+        var v1DocumentPath = BuildV1DocumentUploadPath(context.V1DocumentIndexPriority);
         var candidateEndpoints = new[]
         {
-            (Path: "/v1/Document", IncludeAction: true)
+            (Path: v1DocumentPath, IncludeAction: true)
         };
 
         var failureMessages = new List<string>();
@@ -718,6 +719,16 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             failureMessages.Count > 0
                 ? $"No supported upload endpoint accepted the request for this destination ({string.Join(",", failureMessages)})."
                 : "No supported upload endpoint accepted the request for this destination.");
+    }
+
+    private static string BuildV1DocumentUploadPath(int? indexPriority)
+    {
+        if (!indexPriority.HasValue || indexPriority.Value <= 0)
+        {
+            return "/v1/Document";
+        }
+
+        return $"/v1/Document?indexpriority={indexPriority.Value.ToString(CultureInfo.InvariantCulture)}";
     }
 
     private async Task<Dictionary<string, string>> BuildProfileValuesForFileAsync(

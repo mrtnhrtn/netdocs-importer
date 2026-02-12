@@ -67,9 +67,17 @@ public sealed partial class MainViewModel
         {
             if (SetField(ref _isNetDocumentsConnected, value))
             {
+                if (!value)
+                {
+                    IsSettingsOpen = true;
+                    SetCurrentStep(StepKey.SelectFolder);
+                }
+
                 OnPropertyChanged(nameof(CanSyncNetDocumentsCabinets));
                 OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
                 OnPropertyChanged(nameof(CanSelectSourceFolder));
+                OnPropertyChanged(nameof(IsAuthenticationRequired));
+                OnPropertyChanged(nameof(CanAccessMainFlow));
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));

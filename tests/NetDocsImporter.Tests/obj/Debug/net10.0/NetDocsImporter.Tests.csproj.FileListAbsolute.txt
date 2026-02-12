@@ -137,3 +137,5 @@ C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.deps.json
 C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.runtimeconfig.json
 C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.dll
 C:\dev\netdocs-importer\.tmpbuild\NetDocsImporter.Tests.pdb
+C:\Dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImporter.NetDocs.dll
+C:\Dev\netdocs-importer\tests\NetDocsImporter.Tests\bin\Debug\net10.0\NetDocsImporter.NetDocs.pdb

@@ -606,6 +606,21 @@
         "runtime": {
           "bin/placeholder/NetDocsImporter.Data.dll": {}
         }
+      },
+      "NetDocsImporter.NetDocs/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v10.0",
+        "dependencies": {
+          "NetDocsImporter.Core": "1.0.0",
+          "NetDocsImporter.Data": "1.0.0",
+          "System.Security.Cryptography.ProtectedData": "9.0.0"
+        },
+        "compile": {
+          "bin/placeholder/NetDocsImporter.NetDocs.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/NetDocsImporter.NetDocs.dll": {}
+        }
       }
     }
   },
@@ -1285,6 +1300,11 @@
       "type": "project",
       "path": "../../src/NetDocsImporter.Data/NetDocsImporter.Data.csproj",
       "msbuildProject": "../../src/NetDocsImporter.Data/NetDocsImporter.Data.csproj"
+    },
+    "NetDocsImporter.NetDocs/1.0.0": {
+      "type": "project",
+      "path": "../../src/NetDocsImporter.NetDocs/NetDocsImporter.NetDocs.csproj",
+      "msbuildProject": "../../src/NetDocsImporter.NetDocs/NetDocsImporter.NetDocs.csproj"
     }
   },
   "projectFileDependencyGroups": {
@@ -1293,6 +1313,7 @@
       "Microsoft.NET.Test.Sdk >= 17.14.1",
       "NetDocsImporter.Core >= 1.0.0",
       "NetDocsImporter.Data >= 1.0.0",
+      "NetDocsImporter.NetDocs >= 1.0.0",
       "coverlet.collector >= 6.0.4",
       "xunit >= 2.9.3",
       "xunit.runner.visualstudio >= 3.1.4"
@@ -1328,6 +1349,9 @@
             },
             "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj": {
               "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Data\\NetDocsImporter.Data.csproj"
+            },
+            "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj": {
+              "projectPath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.NetDocs\\NetDocsImporter.NetDocs.csproj"
             }
           }
         }

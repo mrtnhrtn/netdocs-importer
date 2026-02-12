@@ -12,6 +12,7 @@
           "Microsoft.NET.Test.Sdk": "17.14.1",
           "NetDocsImporter.Core": "1.0.0",
           "NetDocsImporter.Data": "1.0.0",
+          "NetDocsImporter.NetDocs": "1.0.0",
           "xunit": "2.9.3"
         },
         "runtime": {
@@ -531,6 +532,19 @@
             "fileVersion": "1.0.0.0"
           }
         }
+      },
+      "NetDocsImporter.NetDocs/1.0.0": {
+        "dependencies": {
+          "NetDocsImporter.Core": "1.0.0",
+          "NetDocsImporter.Data": "1.0.0",
+          "System.Security.Cryptography.ProtectedData": "9.0.0"
+        },
+        "runtime": {
+          "NetDocsImporter.NetDocs.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
       }
     }
   },
@@ -672,6 +686,11 @@
       "sha512": ""
     },
     "NetDocsImporter.Data/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "NetDocsImporter.NetDocs/1.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

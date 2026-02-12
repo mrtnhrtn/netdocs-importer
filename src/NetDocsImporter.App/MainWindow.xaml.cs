@@ -28,6 +28,21 @@ public partial class MainWindow : Window
         await _viewModel.LoadNdImportSettingsAsync();
     }
 
+    public void OnToggleSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ToggleSettings();
+    }
+
+    public void OnOpenSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenSettings();
+    }
+
+    public void OnCloseSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CloseSettings();
+    }
+
     public async void OnSelectFolder(object sender, RoutedEventArgs e)
     {
         await _viewModel.SelectFolderAndScanAsync();

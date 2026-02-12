@@ -84,6 +84,8 @@ public sealed class DirectUploadPlanContext
     public TimeSpan MultipartPartTimeout { get; init; } = TimeSpan.FromMinutes(30);
 
     public int MultipartPartMaxRetryAttempts { get; init; } = 4;
+
+    public int? V1DocumentIndexPriority { get; init; }
 }
 
 public sealed record DirectUploadProgress(

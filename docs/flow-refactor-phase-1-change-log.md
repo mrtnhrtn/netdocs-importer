@@ -1,7 +1,9 @@
 # Flow Refactor (Phase 1)
 
 ## What Changed
-- NetDocuments connect/setup moved to **Select Folder** step.
+- NetDocuments connect/setup moved to **Settings** (gear icon) instead of the Select Folder step.
+- Startup authentication gate added:
+  - If no NetDocuments session can be restored, the app opens Settings and requires login before workflow steps are enabled.
 - Distribution-first OAuth behavior:
   - End users do not configure OAuth client details in UI.
   - App resolves OAuth profiles from provisioned machine data.

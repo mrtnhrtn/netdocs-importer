@@ -9,69 +9,12 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel>
         <TextBlock Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Login and choose your NetDocuments location to pre-fill profiling attributes."
+        <TextBlock Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
                    Foreground="#555555" Margin="0,0,0,8" TextWrapping="Wrap" />
-
-        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
-            <StackPanel>
-                <TextBlock Text="1) NetDocuments Connection" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <TextBlock Text="Region" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
-                          SelectedItem="{Binding SelectedNetDocumentsRegion}"
-                          Margin="0,2,0,6" />
-                <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" />
-                    </StackPanel>
-                </Border>
-                <Border BorderBrush="#E4E7EB"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="8"
-                        Margin="0,0,0,8"
-                        Visibility="{Binding CanShowNetDocumentsDevBootstrap, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <StackPanel>
-                        <TextBlock Text="Developer mode only: local OAuth bootstrap (not for distribution)."
-                                   Foreground="#8A5A00"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,6"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Text="Client Id" Foreground="#555555" />
-                        <TextBox Text="{Binding NetDocumentsBootstrapClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-                        <TextBlock Text="Client Secret" Foreground="#555555" />
-                        <PasswordBox Margin="0,2,0,6"
-                                     Loaded="OnNetDocumentsBootstrapClientSecretLoaded"
-                                     PasswordChanged="OnNetDocumentsBootstrapClientSecretPasswordChanged" />
-                        <TextBlock Text="Redirect URI" Foreground="#555555" />
-                        <TextBox Text="{Binding NetDocumentsBootstrapRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
-                        <Button Content="Save Local OAuth Profile"
-                                Width="180"
-                                Click="OnSaveNetDocumentsOAuthProfile"
-                                IsEnabled="{Binding CanSaveNetDocumentsDevBootstrap}"
-                                Style="{StaticResource SecondaryButton}" />
-                    </StackPanel>
-                </Border>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Connect"
-                            Width="110"
-                            Margin="0,0,6,0"
-                            Click="OnConnectToNetDocuments"
-                            IsEnabled="{Binding CanConnectToNetDocuments}"
-                            Style="{StaticResource PrimaryButton}" />
-                    <Button Content="Sync Cabinets"
-                            Width="120"
-                            Margin="0,0,6,0"
-                            Click="OnSyncNetDocumentsCabinets"
-                            IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
-                            Style="{StaticResource SecondaryButton}" />
-                </StackPanel>
-                <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" />
-            </StackPanel>
-        </Border>
 
         <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
             <StackPanel>
-                <TextBlock Text="2) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
                 <TextBlock Text="Repository" Foreground="#555555" />
                 <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
                           SelectedValuePath="RepositoryId"

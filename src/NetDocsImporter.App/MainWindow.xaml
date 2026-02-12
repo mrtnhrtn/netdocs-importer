@@ -158,6 +158,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
@@ -182,6 +183,22 @@
                     <TextBlock Text="Excluded:" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
+                <Button Grid.Column="2"
+                        Width="38"
+                        Height="32"
+                        Margin="12,0,0,0"
+                        VerticalAlignment="Center"
+                        Click="OnToggleSettings"
+                        Style="{StaticResource SecondaryButton}">
+                    <Button.ToolTip>
+                        <ToolTip Content="Settings" />
+                    </Button.ToolTip>
+                    <TextBlock FontFamily="Segoe MDL2 Assets"
+                               Text="&#xE713;"
+                               FontSize="14"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Button>
             </Grid>
         </Border>
 
@@ -191,7 +208,13 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#F8FAFC" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8">
+            <Border Grid.Column="0"
+                    Background="#F8FAFC"
+                    BorderBrush="#E4E7EB"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="8"
+                    IsEnabled="{Binding CanAccessMainFlow}">
                 <ListBox ItemsSource="{Binding Steps}"
                          SelectedItem="{Binding CurrentStep, Mode=TwoWay}"
                          BorderThickness="0"
@@ -228,7 +251,14 @@
                 </ListBox>
             </Border>
 
-            <Border Grid.Column="1" Background="White" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="12" Margin="12,0,0,0">
+            <Border Grid.Column="1"
+                    Background="White"
+                    BorderBrush="#E4E7EB"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="12"
+                    Margin="12,0,0,0"
+                    IsEnabled="{Binding CanAccessMainFlow}">
                 <ContentControl Content="{Binding}">
                     <ContentControl.Resources>
                         <DataTemplate x:Key="SelectFolderTemplate">
@@ -258,6 +288,123 @@
                         </Style>
                     </ContentControl.Style>
                 </ContentControl>
+            </Border>
+
+            <Border Grid.ColumnSpan="2"
+                    Background="#CCF8FAFC"
+                    BorderBrush="#D7DEE8"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="18"
+                    Panel.ZIndex="10"
+                    Visibility="{Binding IsAuthenticationRequired, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel Width="560" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="NetDocuments sign-in required"
+                               FontWeight="SemiBold"
+                               FontSize="18"
+                               Foreground="#0B2B5D"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="Open Settings (gear icon) and authenticate before using the workflow."
+                               Foreground="#334155"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,6" />
+                    <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}"
+                               Foreground="#475569"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,12" />
+                    <Button Content="Open Settings"
+                            Width="140"
+                            Click="OnOpenSettings"
+                            Style="{StaticResource PrimaryButton}" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.ColumnSpan="2"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Width="430"
+                    MaxHeight="640"
+                    Background="#FFFFFF"
+                    BorderBrush="#CBD5E1"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="12"
+                    Margin="0,0,0,0"
+                    Panel.ZIndex="20"
+                    Visibility="{Binding IsSettingsOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                        <TextBlock DockPanel.Dock="Left" Text="Settings" FontSize="18" FontWeight="SemiBold" Foreground="#0B2B5D" />
+                        <Button DockPanel.Dock="Right"
+                                Width="80"
+                                Content="Close"
+                                Click="OnCloseSettings"
+                                IsEnabled="{Binding CanAccessMainFlow}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </DockPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <TextBlock Text="NetDocuments Connection" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,8" />
+                            <TextBlock Text="Region" Foreground="#555555" />
+                            <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
+                                      SelectedItem="{Binding SelectedNetDocumentsRegion}"
+                                      Margin="0,2,0,6" />
+                            <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border BorderBrush="#E4E7EB"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="8"
+                                    Margin="0,0,0,8"
+                                    Visibility="{Binding CanShowNetDocumentsDevBootstrap, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock Text="Developer mode only: local OAuth bootstrap (not for distribution)."
+                                               Foreground="#8A5A00"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,6"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="Client Id" Foreground="#555555" />
+                                    <TextBox Text="{Binding NetDocumentsBootstrapClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+                                    <TextBlock Text="Client Secret" Foreground="#555555" />
+                                    <PasswordBox Margin="0,2,0,6"
+                                                 Loaded="OnNetDocumentsBootstrapClientSecretLoaded"
+                                                 PasswordChanged="OnNetDocumentsBootstrapClientSecretPasswordChanged" />
+                                    <TextBlock Text="Redirect URI" Foreground="#555555" />
+                                    <TextBox Text="{Binding NetDocumentsBootstrapRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
+                                    <Button Content="Save Local OAuth Profile"
+                                            Width="180"
+                                            Click="OnSaveNetDocumentsOAuthProfile"
+                                            IsEnabled="{Binding CanSaveNetDocumentsDevBootstrap}"
+                                            Style="{StaticResource SecondaryButton}" />
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Connect"
+                                        Width="110"
+                                        Margin="0,0,6,0"
+                                        Click="OnConnectToNetDocuments"
+                                        IsEnabled="{Binding CanConnectToNetDocuments}"
+                                        Style="{StaticResource PrimaryButton}" />
+                                <Button Content="Sync Cabinets"
+                                        Width="120"
+                                        Margin="0,0,6,0"
+                                        Click="OnSyncNetDocumentsCabinets"
+                                        IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
+                                        Style="{StaticResource SecondaryButton}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Border>
         </Grid>
 

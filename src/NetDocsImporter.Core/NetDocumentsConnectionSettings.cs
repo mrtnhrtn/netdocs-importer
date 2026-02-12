@@ -63,4 +63,6 @@ public sealed class NetDocumentsConnectionSettings
     public string LastWorkspaceQuery { get; set; } = string.Empty;
 
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
+
+    public int? DirectUploadV1DocumentIndexPriority { get; set; } = 400;
 }

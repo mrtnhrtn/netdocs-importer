@@ -52,7 +52,7 @@ namespace NetDocsImporter.App.Views.Steps {
                 return;
             }
             _contentLoaded = true;
-            System.Uri resourceLocater = new System.Uri("/NetDocsImporter.App;V1.0.0.0;component/views/steps/ndimportconfigstepview.xaml", System.UriKind.Relative);
+            System.Uri resourceLocater = new System.Uri("/NetDocsImporter.App;component/views/steps/ndimportconfigstepview.xaml", System.UriKind.Relative);
             
             #line 1 "..\..\..\..\..\Views\Steps\NdImportConfigStepView.xaml"
             System.Windows.Application.LoadComponent(this, resourceLocater);
