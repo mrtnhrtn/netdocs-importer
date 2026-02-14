@@ -1657,13 +1657,9 @@ public sealed partial class MainViewModel
 
     private static string BuildBrowseChildMetadata(NdContainerNode node)
     {
-        var typeDisplay = node.SupportedType switch
-        {
-            NdTargetType.Workspace => "Workspace",
-            NdTargetType.WorkspaceFilter => "Workspace Filter",
-            NdTargetType.Folder => "Folder",
-            _ => "Container"
-        };
+        var typeDisplay = node.SupportedType.HasValue
+            ? NdTargetBrowserLogic.ResolveTypeDisplay(node.SupportedType.Value, node.Id)
+            : "Container";
 
         if (!string.IsNullOrWhiteSpace(node.PathDisplay) &&
             !string.Equals(node.PathDisplay, node.Name, StringComparison.OrdinalIgnoreCase))
@@ -1795,13 +1791,7 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetId = selection.Id;
         SelectedNetDocumentsTargetName = string.IsNullOrWhiteSpace(selection.Name) ? selection.Id : selection.Name;
-        SelectedNetDocumentsTargetTypeDisplay = selection.Type switch
-        {
-            NdTargetType.Workspace => "Workspace",
-            NdTargetType.WorkspaceFilter => "Workspace Filter",
-            NdTargetType.Folder => "Folder",
-            _ => selection.Type.ToString()
-        };
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(selection.Type, selection.Id);
 
         if (string.IsNullOrWhiteSpace(knownPath) && CanPickNetDocumentsTarget)
         {
@@ -1980,12 +1970,16 @@ public sealed partial class MainViewModel
         var cacheKey = BuildTargetSnapshotCacheKey(_selectedNetDocumentsTarget);
         if (!_targetProfileCache.TryGetValue(cacheKey, out var snapshot))
         {
-            var lookupContext =
-                _selectedNetDocumentsTarget.Type == NdTargetType.Workspace &&
+            var hasLookupDefaults =
                 _workspaceLookupContext is not null &&
-                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey)
-                    ? _workspaceLookupContext
-                    : null;
+                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey);
+            var allowLookupDefaults =
+                _selectedNetDocumentsTarget.Type == NdTargetType.Workspace ||
+                (_selectedNetDocumentsTarget.Type == NdTargetType.Folder &&
+                 _selectedNetDocumentsTarget.SourceFlow == NdTargetSourceFlow.LookupWs);
+            var lookupContext = hasLookupDefaults && allowLookupDefaults
+                ? _workspaceLookupContext
+                : null;
             snapshot = await RequireSyncService().GetTargetProfileSnapshotAsync(
                 SelectedNetDocumentsCabinetId,
                 SelectedNetDocumentsRepositoryId,
@@ -2462,13 +2456,7 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetId = _selectedNetDocumentsTarget.Id;
         SelectedNetDocumentsTargetName = _selectedNetDocumentsTarget.Name;
-        SelectedNetDocumentsTargetTypeDisplay = _selectedNetDocumentsTarget.Type switch
-        {
-            NdTargetType.Workspace => "Workspace",
-            NdTargetType.WorkspaceFilter => "Workspace Filter",
-            NdTargetType.Folder => "Folder",
-            _ => _selectedNetDocumentsTarget.Type.ToString()
-        };
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(_selectedNetDocumentsTarget.Type, _selectedNetDocumentsTarget.Id);
         SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(settings.SelectedTargetPath)
             ? _selectedNetDocumentsTarget.Name
             : settings.SelectedTargetPath;
@@ -2556,13 +2544,7 @@ public sealed class NetDocumentsTargetItemView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => Selection.Type switch
-    {
-        NdTargetType.Workspace => "Workspace",
-        NdTargetType.WorkspaceFilter => "Workspace Filter",
-        NdTargetType.Folder => "Folder",
-        _ => Selection.Type.ToString()
-    };
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id);
 
     public string PathDisplay => string.IsNullOrWhiteSpace(Selection.ParentWorkspaceId)
         ? Selection.Name
@@ -2603,13 +2585,7 @@ public sealed class NetDocumentsWorkspaceTargetResultView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => Selection.Type switch
-    {
-        NdTargetType.Workspace => "Workspace",
-        NdTargetType.WorkspaceFilter => "Workspace Filter",
-        NdTargetType.Folder => "Folder",
-        _ => Selection.Type.ToString()
-    };
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id);
 
     public string PathDisplay { get; }
 
@@ -2698,9 +2674,9 @@ public sealed class NetDocumentsBrowseNodeView
 
     public NdChildrenLoadState ChildrenLoadState { get; set; }
 
-    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType).Glyph;
+    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id).Glyph;
 
-    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType).ColorHex;
+    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id).ColorHex;
 
     public string TypeDisplay
     {
@@ -2708,13 +2684,7 @@ public sealed class NetDocumentsBrowseNodeView
         {
             if (SupportedType.HasValue)
             {
-                return SupportedType.Value switch
-                {
-                    NdTargetType.Workspace => "Workspace",
-                    NdTargetType.WorkspaceFilter => "Workspace Filter",
-                    NdTargetType.Folder => "Folder",
-                    _ => SupportedType.Value.ToString()
-                };
+                return NdTargetBrowserLogic.ResolveTypeDisplay(SupportedType.Value, Id);
             }
 
             return string.IsNullOrWhiteSpace(TypeRaw) ? "Unknown" : TypeRaw;

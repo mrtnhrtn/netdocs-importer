@@ -119,6 +119,27 @@ public class NetDocumentsTargetBrowserLogicTests
     }
 
     [Fact]
+    public void ResolveIconDescriptor_FolderCollabspaceIdentifier_UsesPersonBlueIcon()
+    {
+        var collabspace = NdTargetBrowserLogic.ResolveIconDescriptor(
+            NdTargetType.Folder,
+            "(:AU2:p:8:a:b:^C260210231635968.nev|1");
+
+        Assert.Equal("\uE77B", collabspace.Glyph);
+        Assert.Equal("#2B6CB0", collabspace.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_FolderCollabspaceIdentifier_ReturnsCollabspace()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.Folder,
+            "(:AU2:p:8:a:b:^C260210231635968.nev|1");
+
+        Assert.Equal("Collabspace", typeDisplay);
+    }
+
+    [Fact]
     public void CreateSelectionFromContainerNode_PreservesTypeAndIdentifiers()
     {
         var node = new NdContainerNode

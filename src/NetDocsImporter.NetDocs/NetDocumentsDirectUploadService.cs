@@ -1659,6 +1659,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         return value.IndexOf("^F", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               value.IndexOf("^C", StringComparison.OrdinalIgnoreCase) >= 0 ||
                value.IndexOf("/f/", StringComparison.OrdinalIgnoreCase) >= 0 ||
                value.IndexOf(":f:", StringComparison.OrdinalIgnoreCase) >= 0;
     }
@@ -1805,8 +1806,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             return true;
         }
 
-        // Envelope ids for folders usually include '^F...'.
-        if (id.IndexOf("^F", StringComparison.OrdinalIgnoreCase) >= 0)
+        // Envelope ids for folders/collabspaces usually include '^F...' or '^C...'.
+        if (id.IndexOf("^F", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            id.IndexOf("^C", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             return true;
         }

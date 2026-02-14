@@ -32,6 +32,19 @@
 2. `NetDocumentsSyncService` synchronizes cabinets/attributes/lookups into `JobStore`.
 3. Target browser resolves selected destination and profile snapshot.
 
+### 1a) Folder NEV Hydration + Default Inference
+
+1. Workspace/folder expansion can return container IDs (`.nev`, `^F`, `^C`, `^W`) without a usable display name.
+2. `NetDocumentsSyncService.GetContainerChildrenAsync` now treats ID-like names as incomplete and hydrates each row with `GET /v2/container/{id}/info`.
+3. Hydrated metadata is used for:
+   - display name normalization in the target tree (human label over raw NEV),
+   - profile default extraction from container attributes for later upload planning.
+4. Default resolution priority is:
+   - v1 profile-default endpoints (when available),
+   - workspace lookup context (client/matter lookup keys),
+   - v2 container info attribute payloads (including numeric attribute tokens such as `"2"` / `"3"` mapped to synced attribute metadata).
+5. When selecting a folder from workspace-lookup flow, lookup-context defaults are carried into the profile snapshot if endpoint defaults are sparse.
+
 ### 2) Local Scan + Preflight
 
 1. `ScanJobRunner` writes scanned folders/files to `JobStore`.

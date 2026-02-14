@@ -153,6 +153,7 @@ public sealed partial class NetDocumentsSyncService
                 query.Trim(),
                 cancellationToken,
                 Math.Max(10, top));
+            await HydrateTargetSelectionNamesAsync(items, cancellationToken);
             Trace.WriteLine($"ND-SEARCH workspace v2-extension query='{query}' count={items.Count}.");
             results.AddRange(items.Select(item => new NdWorkspaceSearchResult
             {
@@ -178,6 +179,58 @@ public sealed partial class NetDocumentsSyncService
         return results
             .OrderBy(item => item.WorkspaceName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private async Task HydrateTargetSelectionNamesAsync(
+        IReadOnlyList<NdTargetSelection> selections,
+        CancellationToken cancellationToken)
+    {
+        if (selections.Count == 0)
+        {
+            return;
+        }
+
+        var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var selection in selections)
+        {
+            if (selection is null ||
+                string.IsNullOrWhiteSpace(selection.Id) ||
+                !ShouldHydrateSelectionName(selection))
+            {
+                continue;
+            }
+
+            if (!hydratedNameCache.TryGetValue(selection.Id, out var hydrated))
+            {
+                hydrated = await TryHydrateContainerNodeAsync(
+                    selection.Id,
+                    parentContainerId: null,
+                    selection.Type,
+                    cancellationToken);
+                hydratedNameCache[selection.Id] = hydrated;
+            }
+
+            if (hydrated is not null && !string.IsNullOrWhiteSpace(hydrated.Name))
+            {
+                selection.Name = hydrated.Name;
+                if (string.IsNullOrWhiteSpace(selection.ParentWorkspaceId) &&
+                    !string.IsNullOrWhiteSpace(hydrated.ParentWorkspaceId))
+                {
+                    selection.ParentWorkspaceId = hydrated.ParentWorkspaceId;
+                }
+
+                if (NdTargetBrowserLogic.IsCollabspaceIdentifier(hydrated.Id) &&
+                    !NdTargetBrowserLogic.IsCollabspaceIdentifier(selection.Id))
+                {
+                    selection.Id = hydrated.Id;
+                    if (string.IsNullOrWhiteSpace(selection.Extension) &&
+                        !string.IsNullOrWhiteSpace(hydrated.Extension))
+                    {
+                        selection.Extension = hydrated.Extension;
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -598,11 +651,17 @@ public sealed partial class NetDocumentsSyncService
 
                             // Some search shapes return IDs but omit human display names.
                             if (string.IsNullOrWhiteSpace(node.Name) ||
-                                string.Equals(node.Name, node.Id, StringComparison.OrdinalIgnoreCase))
+                                string.Equals(node.Name, node.Id, StringComparison.OrdinalIgnoreCase) ||
+                                !IsValidContainerDisplayName(node.Name) ||
+                                LooksLikeContainerIdentifier(node.Name))
                             {
                                 if (!hydratedNameCache.TryGetValue(node.Id, out var hydrated))
                                 {
-                                    hydrated = await TryHydrateContainerNodeAsync(node.Id, parentContainerId, cancellationToken);
+                                    hydrated = await TryHydrateContainerNodeAsync(
+                                        node.Id,
+                                        parentContainerId,
+                                        node.SupportedType,
+                                        cancellationToken);
                                     hydratedNameCache[node.Id] = hydrated;
                                 }
 
@@ -779,6 +838,7 @@ public sealed partial class NetDocumentsSyncService
     {
         var nodes = new List<NdContainerNode>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in EnumerateContainerChildrenItems(root))
         {
             var parsed = ParseContainerNode(item);
@@ -787,9 +847,18 @@ public sealed partial class NetDocumentsSyncService
                 continue;
             }
 
-            if (parsed.SupportedType is null)
+            if (ShouldHydrateContainerNode(parsed))
             {
-                var hydrated = await TryHydrateContainerNodeAsync(parsed.Id, parentContainerId, cancellationToken);
+                if (!hydratedNameCache.TryGetValue(parsed.Id, out var hydrated))
+                {
+                    hydrated = await TryHydrateContainerNodeAsync(
+                        parsed.Id,
+                        parentContainerId,
+                        parsed.SupportedType,
+                        cancellationToken);
+                    hydratedNameCache[parsed.Id] = hydrated;
+                }
+
                 if (hydrated is not null)
                 {
                     parsed = hydrated;
@@ -811,26 +880,151 @@ public sealed partial class NetDocumentsSyncService
         return nodes;
     }
 
+    private static bool ShouldHydrateContainerNode(NdContainerNode node)
+    {
+        if (node.SupportedType is null)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(node.Name))
+        {
+            return true;
+        }
+
+        if (string.Equals(node.Name, node.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!IsValidContainerDisplayName(node.Name))
+        {
+            return true;
+        }
+
+        return LooksLikeContainerIdentifier(node.Name);
+    }
+
     private async Task<NdContainerNode?> TryHydrateContainerNodeAsync(
         string containerId,
         string? parentContainerId,
+        NdTargetType? expectedType,
         CancellationToken cancellationToken)
     {
-        try
+        var candidates = new List<string>();
+        AddSearchScopeCandidate(candidates, containerId);
+        AddSearchScopeCandidate(candidates, TrimContainerIdVersionSuffix(containerId));
+        foreach (var candidate in BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId)))
         {
-            var hydrated = await GetContainerInfoAsync(containerId, cancellationToken);
-            if (hydrated is null || hydrated.SupportedType is null)
-            {
-                return null;
-            }
-
-            NormalizeContainerNodeForTree(hydrated, parentContainerId);
-            return hydrated;
+            AddSearchScopeCandidate(candidates, candidate);
         }
-        catch
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var hydrated = await GetContainerInfoAsync(candidate, cancellationToken);
+                if (hydrated is null)
+                {
+                    continue;
+                }
+
+                hydrated.SupportedType ??= expectedType;
+                hydrated.SupportedType ??= InferTargetTypeFromContainerId(candidate);
+                hydrated.SupportedType ??= InferTargetTypeFromContainerId(containerId);
+                hydrated.SupportedType ??= InferTargetTypeFromContainerId(hydrated.Id);
+                if (hydrated.SupportedType is null)
+                {
+                    Trace.WriteLine(
+                        $"NetDocuments target hydration skipped id='{containerId}' candidate='{candidate}' reason='unsupported-type' hydratedId='{hydrated.Id}'.");
+                    continue;
+                }
+
+                if (LooksLikeContainerIdentifier(hydrated.Name))
+                {
+                    var ancestryName = await TryResolveDisplayNameFromAncestryAsync(hydrated.Id, cancellationToken)
+                                      ?? await TryResolveDisplayNameFromAncestryAsync(candidate, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(ancestryName))
+                    {
+                        hydrated.Name = ancestryName;
+                    }
+
+                    if (LooksLikeContainerIdentifier(hydrated.Name))
+                    {
+                        Trace.WriteLine(
+                            $"NetDocuments target hydration unresolved-name id='{containerId}' candidate='{candidate}' hydratedId='{hydrated.Id}' name='{hydrated.Name}'.");
+                    }
+                }
+
+                NormalizeContainerNodeForTree(hydrated, parentContainerId);
+                return hydrated;
+            }
+            catch
+            {
+                // Try the next candidate id.
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<string?> TryResolveDisplayNameFromAncestryAsync(string containerId, CancellationToken cancellationToken)
+    {
+        var candidates = new List<string>();
+        AddSearchScopeCandidate(candidates, containerId);
+        AddSearchScopeCandidate(candidates, TrimContainerIdVersionSuffix(containerId));
+        foreach (var candidate in BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId)))
+        {
+            AddSearchScopeCandidate(candidates, candidate);
+        }
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var ancestryPath = await GetContainerAncestryAsync(candidate, cancellationToken);
+                if (string.IsNullOrWhiteSpace(ancestryPath))
+                {
+                    continue;
+                }
+
+                var segments = ancestryPath
+                    .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                for (var index = segments.Length - 1; index >= 0; index--)
+                {
+                    var segment = segments[index];
+                    if (!string.IsNullOrWhiteSpace(segment) &&
+                        IsValidContainerDisplayName(segment) &&
+                        !LooksLikeContainerIdentifier(segment))
+                    {
+                        return segment;
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore ancestry fallback failures and keep trying candidates.
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TrimContainerIdVersionSuffix(string? containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
         {
             return null;
         }
+
+        var trimmed = containerId.Trim();
+        var pipeIndex = trimmed.IndexOf('|');
+        if (pipeIndex <= 0)
+        {
+            return null;
+        }
+
+        return trimmed[..pipeIndex];
     }
 
     private static void NormalizeContainerNodeForTree(NdContainerNode node, string? parentContainerId)
@@ -980,11 +1174,7 @@ public sealed partial class NetDocumentsSyncService
     private static NdTargetSelection? ParseTargetSelection(JsonElement element, string? defaultExtension = null)
     {
         var source = SelectTargetSelectionSource(element);
-        var id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
-        if (string.IsNullOrWhiteSpace(id))
-        {
-            id = ReadString(source, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
-        }
+        var id = ResolveContainerIdentifier(element, source);
 
         if (string.IsNullOrWhiteSpace(id))
         {
@@ -1052,18 +1242,27 @@ public sealed partial class NetDocumentsSyncService
     {
         var candidates = new[]
         {
-            "name", "displayName", "longName", "fullName", "description", "label", "title"
+            "name", "displayName", "dispName", "longName", "shortName", "fullName", "description", "desc", "label", "title", "long", "short", "default"
         };
 
         foreach (var node in EnumerateCandidateNameNodes(element, source))
         {
             var value = ReadString(node, candidates);
-            if (!IsValidContainerDisplayName(value))
+            if (!IsValidContainerDisplayName(value) || LooksLikeContainerIdentifier(value))
             {
                 continue;
             }
 
             return value;
+        }
+
+        foreach (var node in EnumerateFallbackNameNodes(element, source))
+        {
+            var value = TryFindPreferredNameRecursive(node, candidates);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
         }
 
         return string.Empty;
@@ -1098,6 +1297,73 @@ public sealed partial class NetDocumentsSyncService
         }
     }
 
+    private static IEnumerable<JsonElement> EnumerateFallbackNameNodes(JsonElement element, JsonElement source)
+    {
+        foreach (var root in new[] { element, source })
+        {
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var key in new[] { "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames", "locations" })
+            {
+                if (TryGetPropertyIgnoreCase(root, key, out var nested))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static string TryFindPreferredNameRecursive(JsonElement element, IReadOnlyList<string> candidates)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (!TryGetPropertyIgnoreCase(element, candidate, out var valueNode))
+                {
+                    continue;
+                }
+
+                var value = valueNode.ValueKind switch
+                {
+                    JsonValueKind.String => valueNode.GetString() ?? string.Empty,
+                    JsonValueKind.Number => valueNode.GetRawText(),
+                    _ => string.Empty
+                };
+
+                if (IsValidContainerDisplayName(value) && !LooksLikeContainerIdentifier(value))
+                {
+                    return value.Trim();
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = TryFindPreferredNameRecursive(property.Value, candidates);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = TryFindPreferredNameRecursive(item, candidates);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
     private static bool IsValidContainerDisplayName(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -1118,6 +1384,42 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return true;
+    }
+
+    private static bool LooksLikeContainerIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        if (trimmed.StartsWith(":", StringComparison.Ordinal) &&
+            trimmed.Count(c => c == ':') >= 3)
+        {
+            return true;
+        }
+
+        if (trimmed.IndexOf("^F", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            trimmed.IndexOf("^W", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            trimmed.IndexOf("^C", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        if (trimmed.Count(c => c == '-') >= 2 &&
+            trimmed.Length >= 10 &&
+            trimmed.All(ch => char.IsLetterOrDigit(ch) || ch == '-'))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static NdTargetSelection? ParseWorkspaceSelection(JsonElement element)
@@ -1306,7 +1608,9 @@ public sealed partial class NetDocumentsSyncService
         try
         {
             using var document = await _apiClient.GetJsonAsync(primaryPath, cancellationToken);
-            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            var parsed = await HydrateWorkspaceListItemNamesAsync(
+                ParseWorkspaceListItems(document.RootElement, parseFavoriteShape),
+                cancellationToken);
             Trace.WriteLine($"NetDocuments target browser: endpoint='{primaryPath}' count={parsed.Count}.");
             if (parsed.Count == 0)
             {
@@ -1329,7 +1633,9 @@ public sealed partial class NetDocumentsSyncService
         var fallbackPath = BuildWorkspaceListPath(endpointPath, cabinetId, bypassCache, useQuotedCabinetFilter: false);
         using (var document = await _apiClient.GetJsonAsync(fallbackPath, cancellationToken))
         {
-            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            var parsed = await HydrateWorkspaceListItemNamesAsync(
+                ParseWorkspaceListItems(document.RootElement, parseFavoriteShape),
+                cancellationToken);
             Trace.WriteLine($"NetDocuments target browser: endpoint='{fallbackPath}' count={parsed.Count}.");
             if (parsed.Count == 0)
             {
@@ -1346,7 +1652,9 @@ public sealed partial class NetDocumentsSyncService
         var unfilteredPath = BuildWorkspaceListPath(endpointPath, null, bypassCache, useQuotedCabinetFilter: false);
         using (var document = await _apiClient.GetJsonAsync(unfilteredPath, cancellationToken))
         {
-            var parsed = ParseWorkspaceListItems(document.RootElement, parseFavoriteShape);
+            var parsed = await HydrateWorkspaceListItemNamesAsync(
+                ParseWorkspaceListItems(document.RootElement, parseFavoriteShape),
+                cancellationToken);
             Trace.WriteLine($"NetDocuments target browser: endpoint='{unfilteredPath}' count={parsed.Count}.");
             if (parsed.Count > 0)
             {
@@ -1463,7 +1771,9 @@ public sealed partial class NetDocumentsSyncService
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var parsed = ParseWorkspaceListItemsFromV2(document.RootElement);
+                var parsed = await HydrateWorkspaceListItemNamesAsync(
+                    ParseWorkspaceListItemsFromV2(document.RootElement),
+                    cancellationToken);
                 Trace.WriteLine($"NetDocuments target browser: v2 endpoint='{path}' count={parsed.Count}.");
                 if (parsed.Count > 0)
                 {
@@ -1479,6 +1789,40 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return Array.Empty<NdTargetRecentItem>();
+    }
+
+    private async Task<IReadOnlyList<NdTargetRecentItem>> HydrateWorkspaceListItemNamesAsync(
+        IReadOnlyList<NdTargetRecentItem> items,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+        {
+            return items;
+        }
+
+        await HydrateTargetSelectionNamesAsync(items.Select(item => item.Selection).ToList(), cancellationToken);
+
+        return items;
+    }
+
+    private static bool ShouldHydrateSelectionName(NdTargetSelection selection)
+    {
+        if (string.IsNullOrWhiteSpace(selection.Name))
+        {
+            return true;
+        }
+
+        if (string.Equals(selection.Name, selection.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!IsValidContainerDisplayName(selection.Name))
+        {
+            return true;
+        }
+
+        return LooksLikeContainerIdentifier(selection.Name);
     }
 
     private static IEnumerable<string> BuildRecentEndpointCandidatesV2(string? cabinetId)
@@ -1742,11 +2086,7 @@ public sealed partial class NetDocumentsSyncService
     private static NdContainerNode? ParseContainerNode(JsonElement element)
     {
         var source = SelectTargetSelectionSource(element);
-        var id = ReadString(element, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
-        if (string.IsNullOrWhiteSpace(id))
-        {
-            id = ReadString(source, "id", "containerId", "workspaceId", "folderId", "docId", "envelopeId", "documentId", "envId", "environmentId");
-        }
+        var id = ResolveContainerIdentifier(element, source);
 
         if (string.IsNullOrWhiteSpace(id))
         {
@@ -1811,6 +2151,51 @@ public sealed partial class NetDocumentsSyncService
                           ReadBool(element, "hasChildren", "containsChildren", "canExpand"),
             ChildrenLoadState = NdChildrenLoadState.NotLoaded
         };
+    }
+
+    private static string ResolveContainerIdentifier(JsonElement element, JsonElement source)
+    {
+        var id = ReadString(
+            element,
+            "id",
+            "containerId",
+            "workspaceId",
+            "folderId",
+            "docId",
+            "envelopeId",
+            "documentId",
+            "envId",
+            "environmentId");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = ReadString(
+                source,
+                "id",
+                "containerId",
+                "workspaceId",
+                "folderId",
+                "docId",
+                "envelopeId",
+                "documentId",
+                "envId",
+                "environmentId");
+        }
+
+        var envId = ReadString(source, "envId", "environmentId", "env", "environment");
+        if (string.IsNullOrWhiteSpace(envId))
+        {
+            envId = ReadString(element, "envId", "environmentId", "env", "environment");
+        }
+
+        // Some list rows use numeric ids for collabspaces while also returning envId.
+        // Prefer the env-form id so downstream rendering can classify collabspaces reliably.
+        if (!string.IsNullOrWhiteSpace(envId) &&
+            NdTargetBrowserLogic.IsCollabspaceIdentifier(envId))
+        {
+            return envId;
+        }
+
+        return id ?? string.Empty;
     }
 
     private async Task<IReadOnlyList<NdTargetSelection>> SearchTargetSelectionsByExtensionAsync(
@@ -2610,6 +2995,16 @@ public sealed partial class NetDocumentsSyncService
             {
                 return byId;
             }
+
+            if (int.TryParse(attrId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAttrNum) &&
+                parsedAttrNum > 0)
+            {
+                var byAttrNum = attributes.FirstOrDefault(a => a.AttributeNum == parsedAttrNum);
+                if (byAttrNum is not null)
+                {
+                    return byAttrNum;
+                }
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(attrName))
@@ -2619,6 +3014,16 @@ public sealed partial class NetDocumentsSyncService
             if (byName is not null)
             {
                 return byName;
+            }
+
+            if (int.TryParse(attrName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAttrNum) &&
+                parsedAttrNum > 0)
+            {
+                var byAttrNum = attributes.FirstOrDefault(a => a.AttributeNum == parsedAttrNum);
+                if (byAttrNum is not null)
+                {
+                    return byAttrNum;
+                }
             }
         }
 

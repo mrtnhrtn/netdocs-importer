@@ -6,57 +6,76 @@
              xmlns:local="clr-namespace:NetDocsImporter.App"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="900">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel>
-        <TextBlock Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
-                   Foreground="#555555" Margin="0,0,0,8" TextWrapping="Wrap" />
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
-            <StackPanel>
-                <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <Grid Margin="0,0,0,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="16" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="16" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="Repository" Foreground="#555555" />
-                        <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
-                                  SelectedValuePath="RepositoryId"
-                                  DisplayMemberPath="RepositoryName"
-                                  SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
-                                  Margin="0,2,0,0"
-                                  MinWidth="240"
-                                  MaxWidth="520"
-                                  HorizontalAlignment="Left"
-                                  IsEnabled="{Binding IsNetDocumentsConnected}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2">
-                        <TextBlock Text="Cabinet" Foreground="#555555" />
-                        <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
-                                  SelectedValuePath="CabinetId"
-                                  DisplayMemberPath="CabinetName"
-                                  SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
-                                  Margin="0,2,0,0"
-                                  MinWidth="240"
-                                  MaxWidth="520"
-                                  HorizontalAlignment="Left"
-                                  IsEnabled="{Binding IsNetDocumentsConnected}" />
-                    </StackPanel>
-                    <Button Grid.Column="4"
-                            Content="Force Refresh"
-                            Width="120"
-                            VerticalAlignment="Bottom"
-                            Click="OnLoadTargetContainers"
-                            IsEnabled="{Binding CanPickNetDocumentsTarget}"
-                            Style="{StaticResource SecondaryButton}" />
-                </Grid>
+        <TextBlock Grid.Row="0" Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
+        <TextBlock Grid.Row="1"
+                   Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
+                   Foreground="#555555"
+                   Margin="0,0,0,8"
+                   TextWrapping="Wrap" />
 
-                <TabControl Margin="0,4,0,0"
+        <Border Grid.Row="2" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0">
+                    <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Repository" Foreground="#555555" />
+                            <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
+                                      SelectedValuePath="RepositoryId"
+                                      DisplayMemberPath="RepositoryName"
+                                      SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,2,0,0"
+                                      MinWidth="240"
+                                      MaxWidth="520"
+                                      HorizontalAlignment="Left"
+                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Cabinet" Foreground="#555555" />
+                            <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
+                                      SelectedValuePath="CabinetId"
+                                      DisplayMemberPath="CabinetName"
+                                      SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,2,0,0"
+                                      MinWidth="240"
+                                      MaxWidth="520"
+                                      HorizontalAlignment="Left"
+                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                        </StackPanel>
+                        <Button Grid.Column="4"
+                                Content="Force Refresh"
+                                Width="120"
+                                VerticalAlignment="Bottom"
+                                Click="OnLoadTargetContainers"
+                                IsEnabled="{Binding CanPickNetDocumentsTarget}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </Grid>
+                </StackPanel>
+
+                <TabControl Grid.Row="1"
+                            Margin="0,4,0,0"
                             BorderThickness="0"
                             Background="Transparent"
                             SelectedIndex="{Binding SelectedTargetBrowserTabIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
@@ -72,18 +91,29 @@
                     <TabItem Header="Go to Workspace" />
                 </TabControl>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
-                        <TextBlock Text="Loading recent workspaces..."
+                <Border Grid.Row="2" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <TextBlock Grid.Row="1"
+                                   Text="Loading recent workspaces..."
                                    Foreground="#555555"
                                    Margin="0,0,0,6"
                                    Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <TextBlock Text="Loading favorite workspaces..."
+                        <TextBlock Grid.Row="2"
+                                   Text="Loading favorite workspaces..."
                                    Foreground="#555555"
                                    Margin="0,0,0,6"
                                    Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBox Width="260"
                                      Margin="0,0,6,0"
                                      Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}"
@@ -95,12 +125,14 @@
                                     IsEnabled="{Binding CanSearchWorkspaceTargets}"
                                     Style="{StaticResource SecondaryButton}" />
                         </StackPanel>
-                        <TextBlock Text="{Binding WorkspaceLookupStatus}"
+                        <TextBlock Grid.Row="4"
+                                   Text="{Binding WorkspaceLookupStatus}"
                                    Foreground="#555555"
                                    Margin="0,0,0,6"
                                    TextWrapping="Wrap" />
-                        <TreeView ItemsSource="{Binding BrowseRootNodes}"
-                                  Height="220"
+                        <TreeView Grid.Row="5"
+                                  ItemsSource="{Binding BrowseRootNodes}"
+                                  MinHeight="340"
                                   SelectedItemChanged="OnBrowseSelectionChanged">
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem">
@@ -161,14 +193,12 @@
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
-                <TextBlock Text="{Binding TargetBrowserMessage}" Foreground="#555555" FontSize="12" Margin="0,0,0,6" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
-
-            </StackPanel>
+                <TextBlock Grid.Row="3" Text="{Binding TargetBrowserMessage}" Foreground="#555555" FontSize="12" Margin="0,0,0,6" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="4" Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
+            </Grid>
         </Border>
-    </StackPanel>
-    </ScrollViewer>
+    </Grid>
 </UserControl>

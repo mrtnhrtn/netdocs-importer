@@ -328,13 +328,42 @@ public static class NdTargetBrowserLogic
 
     public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type)
     {
+        return ResolveIconDescriptor(type, targetId: null);
+    }
+
+    public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId)
+    {
         return type switch
         {
+            NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => new NdTargetIconDescriptor("\uE77B", "#2B6CB0"),
             NdTargetType.Folder => new NdTargetIconDescriptor("\uE8B7", "#D69E2E"),
             NdTargetType.WorkspaceFilter => new NdTargetIconDescriptor("\uE71C", "#2B6CB0"),
             NdTargetType.Workspace => new NdTargetIconDescriptor("\uE821", "#4A5568"),
             _ => new NdTargetIconDescriptor("\uE9CE", "#718096")
         };
+    }
+
+    public static string ResolveTypeDisplay(NdTargetType type, string? targetId)
+    {
+        return type switch
+        {
+            NdTargetType.Workspace => "Workspace",
+            NdTargetType.WorkspaceFilter => "Workspace Filter",
+            NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => "Collabspace",
+            NdTargetType.Folder => "Folder",
+            _ => type.ToString()
+        };
+    }
+
+    public static bool IsCollabspaceIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        return targetId.Contains("^C", StringComparison.OrdinalIgnoreCase) ||
+               targetId.Contains("C^", StringComparison.OrdinalIgnoreCase);
     }
 
     public static IReadOnlyList<NdTargetRecentItem> MergeRecentTargets(
