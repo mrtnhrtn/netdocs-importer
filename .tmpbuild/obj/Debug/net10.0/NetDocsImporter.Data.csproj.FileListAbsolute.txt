@@ -1,6 +1,0 @@
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.csproj.AssemblyReference.cache
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.GeneratedMSBuildEditorConfig.editorconfig
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.AssemblyInfoInputs.cache
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.AssemblyInfo.cs
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.csproj.CoreCompileInputs.cache
-C:\Dev\netdocs-importer\.tmpbuild\obj\Debug\net10.0\NetDocsImporter.Data.sourcelink.json
