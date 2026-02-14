@@ -1,9 +1,9 @@
 # Direct Upload Run Log Format
 
 ## File output
-- Location: `reports/directupload-<jobId>-<timestamp>-runlog.txt`
+- Location: `completed-jobs/directupload-<jobId>-<timestamp>-runlog.txt`
 - Encoding: UTF-8 (no BOM)
-- Retention: indefinite (not auto-managed by app)
+- Retention: 30 days (auto-pruned by app)
 
 ## Structure
 1. ASCII header block with run metadata.
@@ -17,9 +17,8 @@
    - severity, code, message, relative path
 
 ## Export from UI
-- Step 3 (`Recent jobs`) includes:
-  - `Export Last Direct Upload Log`
-- Export writes a copy to a user-selected location.
+- Step 3 (`Recent jobs`) auto-refreshes and surfaces the latest persisted run summary per job.
+- Logs are persisted in `completed-jobs` and retained for 30 days.
 
 ## Example status summary fields
 - Requested

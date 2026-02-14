@@ -33,4 +33,5 @@ Direct upload now runs through an adaptive worker pool with persisted transfer s
 
 ## Retention
 - System trace log is pruned to 7 days on startup.
-- Per-run exported logs/reports are not pruned by the application.
+- Per-run direct-upload run logs are written to `completed-jobs` and pruned after 30 days.
+- CSV reports remain under `reports`.

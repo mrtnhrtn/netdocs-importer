@@ -22,6 +22,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     private const int DefaultMaxUploadConcurrency = 8;
     private const int MaxUploadConcurrency = 8;
     private const int DefaultMaxUploadAttempts = 4;
+    private static readonly bool EnablePermissiveAmbiguousFolderListFallback =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("ND_DIRECTUPLOAD_DISABLE_PERMISSIVE_AMBIGUOUS_FOLDER_LIST"),
+            "1",
+            StringComparison.OrdinalIgnoreCase);
 
     private readonly NetDocumentsApiClient _apiClient;
     private readonly JobStore _jobStore;
@@ -1183,7 +1188,21 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     }
                     else
                     {
-                        _folderListSupported = false;
+                        _folderListSupported = true;
+                    }
+
+                    if (EnablePermissiveAmbiguousFolderListFallback)
+                    {
+                        issues.Add(new DirectUploadIssue(
+                            DirectUploadIssueSeverity.Warning,
+                            "FOLDER_LIST_AMBIGUOUS_PERMISSIVE",
+                            $"Folder listing for '{endpoint}' returned items but none could be matched as folders under '{parentContainerId}'. Proceeding with permissive fallback and optimistic folder-create planning.",
+                            parentContainerId));
+
+                        Trace.WriteLine(
+                            $"ND-DIRECT folder-list permissive-fallback endpoint='{endpoint}' parent='{parentContainerId}' reason='filtered-all'.");
+
+                        return new FolderListResult(children, true, topLevelKeys, listNode);
                     }
 
                     issues.Add(new DirectUploadIssue(

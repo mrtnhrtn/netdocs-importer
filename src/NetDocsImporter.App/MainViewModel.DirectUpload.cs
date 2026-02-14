@@ -241,6 +241,8 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            var runStartedUtc = DateTime.UtcNow;
+
             var progress = new Progress<DirectUploadProgress>(p =>
             {
                 var percent = p.PercentComplete;
@@ -255,8 +257,8 @@ public sealed partial class MainViewModel
             });
 
             var result = await service.UploadAsync(executionPlan, executionContext, progress);
-            var reportPath = await WriteDirectUploadReportAsync(executionPlan, result);
-            var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath);
+            var reportPath = await WriteDirectUploadReportAsync(executionPlan, result, runStartedUtc);
+            var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath, runStartedUtc);
             _lastDirectUploadLogPath = runLogPath;
             OnPropertyChanged(nameof(CanExportDirectUploadLog));
             DirectUploadProgressPercent = 100;
@@ -266,10 +268,31 @@ public sealed partial class MainViewModel
                 $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}, resumed {result.ResumedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}. Run log: {runLogPath}";
 
             var runStatus = result.FailedFiles > 0 || result.SkippedFiles > 0 ? "DirectUpload Partial" : "DirectUpload";
+            var runSummaryText =
+                $"Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (Skipped {result.SkippedFiles:N0}, Resumed {result.ResumedFiles:N0}), Created {result.CreatedFolders:N0}, Failed {result.FailedFiles:N0}, report {Path.GetFileName(reportPath)}";
             NdImportSessions.Insert(0, new NdImportSessionView(
                 DateTime.Now,
                 runStatus,
-                $"Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (Skipped {result.SkippedFiles:N0}, Resumed {result.ResumedFiles:N0}), Created {result.CreatedFolders:N0}, Failed {result.FailedFiles:N0}, report {Path.GetFileName(reportPath)}"));
+                runSummaryText));
+
+            await _completedJobLogStore.WriteSummaryAsync(new CompletedJobRunSummary
+            {
+                JobId = currentJobId,
+                StartedUtc = runStartedUtc,
+                RunType = "DirectUpload",
+                Status = runStatus,
+                Summary = runSummaryText,
+                RequestedFiles = result.TotalRequestedFiles,
+                PlannedFiles = result.PlannedFiles,
+                UploadedFiles = result.SucceededFiles,
+                FailedFiles = result.FailedFiles,
+                SkippedFiles = result.SkippedFiles,
+                ResumedFiles = result.ResumedFiles,
+                CreatedFolders = result.CreatedFolders,
+                ReportFileName = Path.GetFileName(reportPath),
+                RunLogFileName = Path.GetFileName(runLogPath)
+            });
+            _completedJobLogStore.PruneExpired(DateTime.UtcNow);
 
             foreach (var skippedIssue in executionPlan.Issues.Where(DirectUploadIssueUtilities.IsSkippedFileIssue))
             {
@@ -279,6 +302,8 @@ public sealed partial class MainViewModel
                     "DirectUpload Skip",
                     $"{result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} complete; skipped {result.SkippedFiles:N0}; {reason}: {skippedIssue.RelativePath ?? string.Empty}"));
             }
+
+            await LoadRecentJobsAsync();
         }
         catch (Exception ex)
         {
@@ -344,10 +369,13 @@ public sealed partial class MainViewModel
         return true;
     }
 
-    private async Task<string> WriteDirectUploadReportAsync(UploadPlanResult plan, DirectUploadRunResult result)
+    private async Task<string> WriteDirectUploadReportAsync(
+        UploadPlanResult plan,
+        DirectUploadRunResult result,
+        DateTime runStartedUtc)
     {
         Directory.CreateDirectory(_paths.ReportsDirectory);
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+        var timestamp = runStartedUtc.ToLocalTime().ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         var job = CurrentJobId ?? "unknown";
         var reportPath = Path.Combine(_paths.ReportsDirectory, $"directupload-{job}-{timestamp}.csv");
 
@@ -395,18 +423,16 @@ public sealed partial class MainViewModel
     private async Task<string> WriteDirectUploadRunLogAsync(
         UploadPlanResult plan,
         DirectUploadRunResult result,
-        string reportPath)
+        string reportPath,
+        DateTime runStartedUtc)
     {
-        Directory.CreateDirectory(_paths.ReportsDirectory);
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         var job = CurrentJobId ?? "unknown";
-        var logPath = Path.Combine(_paths.ReportsDirectory, $"directupload-{job}-{timestamp}-runlog.txt");
 
         var builder = new StringBuilder();
         builder.AppendLine("+------------------------------------------------------------+");
         builder.AppendLine("|                 NetDocs Importer Run Log                  |");
         builder.AppendLine("+------------------------------------------------------------+");
-        builder.AppendLine($" Started: {DateTime.Now:g}");
+        builder.AppendLine($" Started: {runStartedUtc.ToLocalTime():g}");
         builder.AppendLine($" Job Id: {job}");
         builder.AppendLine($" Target: {SelectedNetDocumentsTargetName}");
         builder.AppendLine($" Requested: {result.TotalRequestedFiles:N0}");
@@ -444,8 +470,7 @@ public sealed partial class MainViewModel
             builder.AppendLine($" [{issue.Severity}] {issue.Code} :: {issue.Message} :: {issue.RelativePath}");
         }
 
-        await File.WriteAllTextAsync(logPath, builder.ToString(), new UTF8Encoding(false));
-        return logPath;
+        return await _completedJobLogStore.WriteRunLogAsync(job, runStartedUtc, builder.ToString());
     }
 
     private static string GetSkippedFileReason(string? issueCode)

@@ -102,6 +102,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
+    private readonly CompletedJobLogStore _completedJobLogStore;
     private readonly SecretStore _secretStore;
     private readonly INetDocumentsOAuthClientConfigProvider _netDocumentsOAuthClientConfigProvider;
     private readonly AppRuntimeOptions _runtimeOptions;
@@ -116,6 +117,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private FolderNodeViewModel? _selectedFolderNode;
     private readonly object _profileSaveLock = new();
     private bool _profileSavePending;
+    private int _recentJobsRefreshInFlight;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -635,6 +637,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _runtimeOptions = runtimeOptions ?? new AppRuntimeOptions();
         _paths = new AppPaths();
+        _completedJobLogStore = new CompletedJobLogStore(_paths.CompletedJobsDirectory, TimeSpan.FromDays(30));
+        _completedJobLogStore.PruneExpired(DateTime.UtcNow);
         _secretStore = new SecretStore(_paths.SecretsDirectory);
         var userProfileProvider = new DpapiNetDocumentsOAuthClientConfigProvider(_secretStore, AppSettings.DefaultNetDocumentsOAuthClientProfilesRef);
         var machineProfilePath = Path.Combine(
@@ -653,9 +657,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
         _showLegacyScopeExplorer = false;
 
-        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Choose your NetDocuments upload destination", this));
+        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments", "Choose your NetDocuments upload destination", this));
         Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and review upload readiness", this));
-        Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+        Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Review and select prior jobs", this));
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();
@@ -778,13 +782,33 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public async Task LoadRecentJobsAsync()
     {
-        await _jobStore.InitializeAsync();
-        var jobs = await _jobStore.GetRecentJobsAsync(10);
-
-        RecentJobs.Clear();
-        foreach (var job in jobs)
+        if (Interlocked.Exchange(ref _recentJobsRefreshInFlight, 1) == 1)
         {
-            RecentJobs.Add(new JobSummaryView(job));
+            return;
+        }
+
+        try
+        {
+            await _jobStore.InitializeAsync();
+            _completedJobLogStore.PruneExpired(DateTime.UtcNow);
+            var jobs = await _jobStore.GetRecentJobsAsync(10);
+            var latestRunByJob = await _completedJobLogStore.GetLatestRunsByJobAsync(50);
+
+            RecentJobs.Clear();
+            foreach (var job in jobs)
+            {
+                var view = new JobSummaryView(job);
+                if (latestRunByJob.TryGetValue(job.JobId, out var latestRun))
+                {
+                    view.ApplyLatestRun(latestRun);
+                }
+
+                RecentJobs.Add(view);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _recentJobsRefreshInFlight, 0);
         }
     }
 
@@ -2583,6 +2607,9 @@ public sealed class JobSummaryView
         FileCountDisplay = summary.FileCount.ToString("N0", CultureInfo.CurrentCulture);
         TotalBytesDisplay = FormatBytes(summary.TotalBytes);
         LargeWarningsDisplay = summary.LargeWarnings.ToString("N0", CultureInfo.CurrentCulture);
+        LastRunDisplay = "--";
+        LastRunStatus = "--";
+        LastRunSummary = "--";
     }
 
     public string JobId { get; }
@@ -2600,6 +2627,19 @@ public sealed class JobSummaryView
     public string TotalBytesDisplay { get; }
 
     public string LargeWarningsDisplay { get; }
+
+    public string LastRunDisplay { get; private set; }
+
+    public string LastRunStatus { get; private set; }
+
+    public string LastRunSummary { get; private set; }
+
+    public void ApplyLatestRun(CompletedJobRunSummary summary)
+    {
+        LastRunDisplay = summary.StartedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+        LastRunStatus = string.IsNullOrWhiteSpace(summary.Status) ? "--" : summary.Status;
+        LastRunSummary = string.IsNullOrWhiteSpace(summary.Summary) ? "--" : summary.Summary;
+    }
 
     private static string FormatBytes(long bytes)
     {

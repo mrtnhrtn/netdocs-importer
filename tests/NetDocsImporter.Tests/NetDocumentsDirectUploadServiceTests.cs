@@ -9,6 +9,69 @@ namespace NetDocsImporter.Tests;
 public class NetDocumentsDirectUploadServiceTests
 {
     [Fact]
+    public async Task BuildPlanAsync_UsesPermissiveFallbackWhenFolderListingIsAmbiguous()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestPaths = new List<string>();
+
+        try
+        {
+            await SeedJobWithSingleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requestPaths)
+                {
+                    requestPaths.Add(request.RequestUri?.AbsolutePath ?? string.Empty);
+                }
+
+                if (request.RequestUri?.AbsolutePath == "/v1/Folder/3470-9157-8890")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[{"envId":":AU2:i:e:9:8:~211201092644749.nev","type":"doc"}],"sortOrder":"name"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Folder,
+                    Id = "3470-9157-8890",
+                    Name = "Top level folder"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Equal(1, result.PlannedFolderCreates);
+            Assert.Single(result.Files);
+            Assert.StartsWith("planned:", result.Files[0].DestinationContainerId, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(result.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
+            Assert.Contains(result.Issues, issue => issue.Code == "FOLDER_LIST_AMBIGUOUS_PERMISSIVE");
+            Assert.Contains(result.Issues, issue => issue.Code == "FOLDER_CREATE_PLANNED");
+            Assert.Contains("/v1/Folder/3470-9157-8890", requestPaths);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_UsesV1DocumentPathWithoutIndexPriorityByDefault()
     {
         var tempRoot = CreateTempRoot();
@@ -116,6 +179,53 @@ public class NetDocumentsDirectUploadServiceTests
                     UseMultipartUpload: false)
             }
         };
+    }
+
+    private static async Task SeedJobWithSingleNestedFileAsync(string dbPath, string jobId, string sourceRoot, string filePath)
+    {
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, sourceRoot, "Complete"));
+
+        var rootFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            rootFolderId,
+            jobId,
+            sourceRoot,
+            string.Empty,
+            null,
+            0,
+            true,
+            false,
+            DateTime.UtcNow,
+            "include",
+            "inherit"));
+
+        var childFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            childFolderId,
+            jobId,
+            Path.Combine(sourceRoot, "client_a"),
+            "client_a",
+            rootFolderId,
+            1,
+            true,
+            false,
+            DateTime.UtcNow,
+            "inherit",
+            "inherit"));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            filePath,
+            "client_a\\sample.txt",
+            new FileInfo(filePath).Length,
+            DateTime.UtcNow,
+            false,
+            childFolderId,
+            "inherit",
+            null));
     }
 
     private static NetDocumentsDirectUploadService CreateDirectUploadService(HttpMessageHandler handler, string dbPath)

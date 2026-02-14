@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -8,6 +9,7 @@ namespace NetDocsImporter.App;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private readonly DispatcherTimer _recentJobsRefreshTimer = new() { Interval = TimeSpan.FromSeconds(15) };
 
     public MainWindow()
         : this(new AppRuntimeOptions())
@@ -20,12 +22,38 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _viewModel;
         Loaded += OnLoaded;
+        Closed += OnClosed;
+        _recentJobsRefreshTimer.Tick += OnRecentJobsRefreshTick;
     }
 
     public async void OnLoaded(object sender, RoutedEventArgs e)
     {
         await _viewModel.LoadRecentJobsAsync();
         await _viewModel.LoadNdImportSettingsAsync();
+        _recentJobsRefreshTimer.Start();
+    }
+
+    public void OnClosed(object? sender, EventArgs e)
+    {
+        _recentJobsRefreshTimer.Stop();
+        _recentJobsRefreshTimer.Tick -= OnRecentJobsRefreshTick;
+    }
+
+    private async void OnRecentJobsRefreshTick(object? sender, EventArgs e)
+    {
+        if (_viewModel.CurrentStep?.Key != StepKey.RecentJobs)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.LoadRecentJobsAsync();
+        }
+        catch
+        {
+            // Best-effort periodic refresh only.
+        }
     }
 
     public void OnToggleSettings(object sender, RoutedEventArgs e)

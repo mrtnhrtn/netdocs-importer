@@ -18,25 +18,44 @@
         </Grid.ColumnDefinitions>
 
         <Border Grid.Row="0" Grid.ColumnSpan="4" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
-            <StackPanel>
-                <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Select Folder"
-                            Width="120"
-                            Margin="0,0,6,0"
-                            Click="OnSelectFolder"
-                            IsEnabled="{Binding CanSelectSourceFolder}"
-                            Style="{StaticResource SecondaryButton}" />
-                    <Button Content="Cancel Scan"
-                            Width="110"
-                            Click="OnCancelScan"
-                            IsEnabled="{Binding IsScanning}"
-                            Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            Style="{StaticResource SecondaryButton}" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="360" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="Select Folder"
+                                Width="120"
+                                Margin="0,0,6,0"
+                                Click="OnSelectFolder"
+                                IsEnabled="{Binding CanSelectSourceFolder}"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Cancel Scan"
+                                Width="110"
+                                Click="OnCancelScan"
+                                IsEnabled="{Binding IsScanning}"
+                                Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#555555" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
                 </StackPanel>
-                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#555555" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
-            </StackPanel>
+
+                <Border Grid.Column="2"
+                        BorderBrush="#E4E7EB"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8"
+                        Visibility="{Binding HasFolderRoots, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{Binding ReviewTargetBreadcrumbDisplay}" Foreground="#555555" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </Grid>
         </Border>
 
         <StackPanel Grid.Row="1" Grid.Column="0" Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -120,13 +139,6 @@
 
         <ScrollViewer Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{Binding ReviewTargetBreadcrumbDisplay}" Foreground="#555555" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="Direct Upload" Style="{StaticResource SectionTitle}" />

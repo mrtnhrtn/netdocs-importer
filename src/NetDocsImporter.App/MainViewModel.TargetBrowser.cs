@@ -922,6 +922,7 @@ public sealed partial class MainViewModel
                             SelectedNetDocumentsCabinetId,
                             parentContainerId: scopeId,
                             workspaceId: node.SupportedType == NdTargetType.Workspace ? scopeId : null,
+                            preferredType: node.SupportedType,
                             cancellationToken: cancellationToken));
             }
 

@@ -15,68 +15,74 @@
         <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
             <StackPanel>
                 <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <TextBlock Text="Repository" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
-                          SelectedValuePath="RepositoryId"
-                          DisplayMemberPath="RepositoryName"
-                          SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
-                          Margin="0,2,0,6"
-                          IsEnabled="{Binding IsNetDocumentsConnected}" />
-                <TextBlock Text="Cabinet" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
-                          SelectedValuePath="CabinetId"
-                          DisplayMemberPath="CabinetName"
-                          SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
-                          Margin="0,2,0,6"
-                          IsEnabled="{Binding IsNetDocumentsConnected}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Force Refresh"
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Repository" Foreground="#555555" />
+                        <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
+                                  SelectedValuePath="RepositoryId"
+                                  DisplayMemberPath="RepositoryName"
+                                  SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                                  Margin="0,2,0,0"
+                                  MinWidth="240"
+                                  MaxWidth="520"
+                                  HorizontalAlignment="Left"
+                                  IsEnabled="{Binding IsNetDocumentsConnected}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Cabinet" Foreground="#555555" />
+                        <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
+                                  SelectedValuePath="CabinetId"
+                                  DisplayMemberPath="CabinetName"
+                                  SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                                  Margin="0,2,0,0"
+                                  MinWidth="240"
+                                  MaxWidth="520"
+                                  HorizontalAlignment="Left"
+                                  IsEnabled="{Binding IsNetDocumentsConnected}" />
+                    </StackPanel>
+                    <Button Grid.Column="4"
+                            Content="Force Refresh"
                             Width="120"
-                            Margin="0,0,6,0"
+                            VerticalAlignment="Bottom"
                             Click="OnLoadTargetContainers"
                             IsEnabled="{Binding CanPickNetDocumentsTarget}"
                             Style="{StaticResource SecondaryButton}" />
-                </StackPanel>
+                </Grid>
 
-                <TabControl Margin="0,4,0,8"
+                <TabControl Margin="0,4,0,0"
+                            BorderThickness="0"
+                            Background="Transparent"
                             SelectedIndex="{Binding SelectedTargetBrowserTabIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
-                    <TabItem Header="Recent">
-                        <StackPanel Margin="4">
-                            <TextBlock Text="Loading recent workspaces..."
-                                       Foreground="#555555"
-                                       Margin="0,0,0,6"
-                                       Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <TextBlock Text="Recent targets are shown in the tree below."
-                                       Foreground="#555555"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                    </TabItem>
-
-                    <TabItem Header="Favorites">
-                        <StackPanel Margin="4">
-                            <TextBlock Text="Loading favorite workspaces..."
-                                       Foreground="#555555"
-                                       Margin="0,0,0,6"
-                                       Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <TextBlock Text="Favorite targets are shown in the tree below."
-                                       Foreground="#555555"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                    </TabItem>
-
-                    <TabItem Header="Go to Workspace">
-                        <StackPanel Margin="4">
-                            <TextBlock Text="Use the search controls in the tree panel to load workspace results."
-                                       Foreground="#555555"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                    </TabItem>
-
+                    <TabControl.Template>
+                        <ControlTemplate TargetType="TabControl">
+                            <Grid KeyboardNavigation.TabNavigation="Local">
+                                <TabPanel IsItemsHost="True" Background="Transparent" />
+                            </Grid>
+                        </ControlTemplate>
+                    </TabControl.Template>
+                    <TabItem Header="Recent" />
+                    <TabItem Header="Favorites" />
+                    <TabItem Header="Go to Workspace" />
                 </TabControl>
 
                 <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <TextBlock Text="Loading recent workspaces..."
+                                   Foreground="#555555"
+                                   Margin="0,0,0,6"
+                                   Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock Text="Loading favorite workspaces..."
+                                   Foreground="#555555"
+                                   Margin="0,0,0,6"
+                                   Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBox Width="260"
                                      Margin="0,0,6,0"
@@ -87,11 +93,6 @@
                                     Margin="0,0,6,0"
                                     Click="OnSearchWorkspaceTargets"
                                     IsEnabled="{Binding CanSearchWorkspaceTargets}"
-                                    Style="{StaticResource SecondaryButton}" />
-                            <Button Content="Toggle Favorite"
-                                    Width="120"
-                                    Click="OnToggleFavoriteForSelectedTarget"
-                                    IsEnabled="{Binding CanPickNetDocumentsTarget}"
                                     Style="{StaticResource SecondaryButton}" />
                         </StackPanel>
                         <TextBlock Text="{Binding WorkspaceLookupStatus}"
@@ -160,23 +161,10 @@
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
-                        <TextBlock Text="Expand cabinet/workspace/folder nodes to lazy-load child folders and filters."
-                                   Foreground="#666666"
-                                   Margin="0,6,0,0" />
                     </StackPanel>
                 </Border>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="Selected Target" FontWeight="Bold" FontSize="16" Margin="0,0,0,6" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetName, StringFormat=Name: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetTypeDisplay, StringFormat=Type: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetId, StringFormat=Id: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetPath, StringFormat=Path: {0}}" Foreground="#333333" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding TargetBrowserMessage}" Foreground="#555555" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
+                <TextBlock Text="{Binding TargetBrowserMessage}" Foreground="#555555" FontSize="12" Margin="0,0,0,6" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
 
             </StackPanel>

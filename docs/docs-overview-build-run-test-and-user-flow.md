@@ -52,6 +52,7 @@ dotnet test .\tests\NetDocsImporter.Tests\NetDocsImporter.Tests.csproj -c Debug
 - App/system logs are written under `%LocalAppData%\NetDocsImporter\logs`.
 - Trace log retention is pruned to 7 days during startup.
 - Export and direct-upload reports are written under `%LocalAppData%\NetDocsImporter\reports`.
+- Direct-upload run logs are written under `%LocalAppData%\NetDocsImporter\completed-jobs` and retained for 30 days.
 
 ## OAuth Profile Provisioning
 
