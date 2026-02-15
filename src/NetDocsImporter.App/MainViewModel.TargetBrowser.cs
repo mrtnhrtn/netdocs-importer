@@ -580,18 +580,26 @@ public sealed partial class MainViewModel
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
                 var cachedItems = cachedRecords.Select(ToRecentItem).ToList();
-                _localRecentTargets = cachedItems.ToList();
-                UpdateOnUi(() =>
+                if (cachedItems.Any(item => HasUnresolvedTargetDisplayName(item.Selection)))
                 {
-                    _recentTargets.Clear();
-                    foreach (var item in cachedItems)
+                    Trace.WriteLine("ND-CACHE recent stale-names detected; refreshing from server.");
+                }
+                else
+                {
+                    _localRecentTargets = cachedItems.ToList();
+                    UpdateOnUi(() =>
                     {
-                        _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
-                    }
-                });
-                _hasLoadedRecentTargets = true;
-                Trace.WriteLine($"ND-CACHE recent source=cache count={cachedItems.Count}");
-                return;
+                        _recentTargets.Clear();
+                        foreach (var item in cachedItems)
+                        {
+                            _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                        }
+                    });
+                    _hasLoadedRecentTargets = true;
+                    Trace.WriteLine($"ND-CACHE recent source=cache count={cachedItems.Count}");
+                    return;
+                }
+
             }
 
             var serverItems = (await RequireSyncService().GetRecentTargetsAsync(cabinetScope))
@@ -712,18 +720,25 @@ public sealed partial class MainViewModel
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
                 var cachedItems = cachedRecords.Select(ToFavoriteItem).ToList();
-                _localFavoriteTargets = cachedItems.ToList();
-                UpdateOnUi(() =>
+                if (cachedItems.Any(item => HasUnresolvedTargetDisplayName(item.Selection)))
                 {
-                    _favoriteTargets.Clear();
-                    foreach (var item in cachedItems)
+                    Trace.WriteLine("ND-CACHE favorites stale-names detected; refreshing from server.");
+                }
+                else
+                {
+                    _localFavoriteTargets = cachedItems.ToList();
+                    UpdateOnUi(() =>
                     {
-                        _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
-                    }
-                });
-                _hasLoadedFavoriteTargets = true;
-                Trace.WriteLine($"ND-CACHE favorites source=cache count={cachedItems.Count}");
-                return;
+                        _favoriteTargets.Clear();
+                        foreach (var item in cachedItems)
+                        {
+                            _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                        }
+                    });
+                    _hasLoadedFavoriteTargets = true;
+                    Trace.WriteLine($"ND-CACHE favorites source=cache count={cachedItems.Count}");
+                    return;
+                }
             }
 
             var serverItems = (await RequireSyncService().GetFavoriteTargetsAsync(cabinetScope))
@@ -808,6 +823,39 @@ public sealed partial class MainViewModel
                 RefreshBrowseRootsForSelectedTab();
             }
         }
+    }
+
+    private static bool HasUnresolvedTargetDisplayName(NdTargetSelection selection)
+    {
+        if (selection is null)
+        {
+            return true;
+        }
+
+        var name = selection.Name?.Trim() ?? string.Empty;
+        var id = selection.Id?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(id) &&
+            string.Equals(name, id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(name, "nev", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (name.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     public async Task SearchWorkspacesAsync()
