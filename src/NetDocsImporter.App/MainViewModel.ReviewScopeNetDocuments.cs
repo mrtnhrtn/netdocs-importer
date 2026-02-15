@@ -35,6 +35,21 @@ public sealed partial class MainViewModel
 
     public string ReviewTargetPath => _jobContext.TargetPath;
 
+    public string ReviewTargetCabinetDisplay
+    {
+        get
+        {
+            var cabinetId = string.IsNullOrWhiteSpace(_jobContext.CabinetId) ? "--" : _jobContext.CabinetId;
+            var cabinetName = string.IsNullOrWhiteSpace(_jobContext.CabinetName) ? "--" : _jobContext.CabinetName;
+            return $"{cabinetId} / {cabinetName}";
+        }
+    }
+
+    public string ReviewWorkspaceNameDisplay =>
+        string.IsNullOrWhiteSpace(_jobContext.TargetContainerName) ? "--" : _jobContext.TargetContainerName;
+
+    public bool HasReviewEffectiveDefaults => _effectiveProfileDefaultsRows.Count > 0;
+
     public string ReviewTargetBreadcrumbDisplay
     {
         get
@@ -177,8 +192,10 @@ public sealed partial class MainViewModel
     {
         OnPropertyChanged(nameof(ReviewTargetRepository));
         OnPropertyChanged(nameof(ReviewTargetCabinet));
+        OnPropertyChanged(nameof(ReviewTargetCabinetDisplay));
         OnPropertyChanged(nameof(ReviewTargetContainerId));
         OnPropertyChanged(nameof(ReviewTargetContainerName));
+        OnPropertyChanged(nameof(ReviewWorkspaceNameDisplay));
         OnPropertyChanged(nameof(ReviewTargetContainerType));
         OnPropertyChanged(nameof(ReviewTargetPath));
         OnPropertyChanged(nameof(ReviewTargetBreadcrumbDisplay));
@@ -187,6 +204,7 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(ReviewProfileLookupCountDisplay));
         OnPropertyChanged(nameof(ReviewProfileRequiredCountDisplay));
         OnPropertyChanged(nameof(ReviewProfileLookupCacheReady));
+        OnPropertyChanged(nameof(HasReviewEffectiveDefaults));
         OnPropertyChanged(nameof(HasReviewTargetContext));
     }
 

@@ -140,6 +140,16 @@ public class NetDocumentsTargetBrowserLogicTests
     }
 
     [Fact]
+    public void ResolveTypeDisplay_FolderTildeNevIdentifier_ReturnsCollabspace()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.Folder,
+            ":AU2:u:3:e:p:~260209191130366.nev");
+
+        Assert.Equal("Collabspace", typeDisplay);
+    }
+
+    [Fact]
     public void CreateSelectionFromContainerNode_PreservesTypeAndIdentifiers()
     {
         var node = new NdContainerNode

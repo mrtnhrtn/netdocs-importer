@@ -113,18 +113,51 @@
                                    Foreground="#555555"
                                    Margin="0,0,0,6"
                                    Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,6">
-                            <TextBox Width="260"
-                                     Margin="0,0,6,0"
+                        <Grid Grid.Row="3" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0"
+                                     Width="260"
                                      Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}"
                                      IsEnabled="{Binding CanSearchWorkspaceTargets}" />
-                            <Button Content="Search"
+                            <Button Grid.Column="2"
+                                    Content="Search"
                                     Width="100"
-                                    Margin="0,0,6,0"
                                     Click="OnSearchWorkspaceTargets"
                                     IsEnabled="{Binding CanSearchWorkspaceTargets}"
                                     Style="{StaticResource SecondaryButton}" />
-                        </StackPanel>
+                            <ToggleButton Grid.Column="4"
+                                          Content="Filter"
+                                          Width="80"
+                                          IsChecked="{Binding IsBrowseFilterPanelVisible, Mode=TwoWay}" />
+                            <Border Grid.Column="6"
+                                    Padding="8,4"
+                                    BorderBrush="#E4E7EB"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Visibility="{Binding IsBrowseFilterPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox Content="Cab Folders"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowCabFolders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Folders"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowFolders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Filters"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowFilters, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Collabspaces"
+                                              IsChecked="{Binding BrowseFilterShowCollabspaces, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
                         <TextBlock Grid.Row="4"
                                    Text="{Binding WorkspaceLookupStatus}"
                                    Foreground="#555555"

@@ -56,6 +56,11 @@ public sealed partial class MainViewModel
     private NdTargetBrowserTab _selectedTargetBrowserTab = NdTargetBrowserTab.Recent;
     private string _workspaceSearchText = string.Empty;
     private string _workspaceLookupStatus = string.Empty;
+    private bool _isBrowseFilterPanelVisible;
+    private bool _browseFilterShowCabFolders = true;
+    private bool _browseFilterShowFolders = true;
+    private bool _browseFilterShowFilters = true;
+    private bool _browseFilterShowCollabspaces = true;
     private EffectiveProfileDefaults _effectiveProfileDefaults = EffectiveProfileDefaults.Empty;
     private WorkspaceLookupContext? _workspaceLookupContext;
     private CancellationTokenSource? _workspaceSearchCts;
@@ -278,6 +283,70 @@ public sealed partial class MainViewModel
     {
         get => _workspaceLookupStatus;
         private set => SetField(ref _workspaceLookupStatus, value);
+    }
+
+    public bool IsBrowseFilterPanelVisible
+    {
+        get => _isBrowseFilterPanelVisible;
+        set
+        {
+            if (SetField(ref _isBrowseFilterPanelVisible, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowCabFolders
+    {
+        get => _browseFilterShowCabFolders;
+        set
+        {
+            if (SetField(ref _browseFilterShowCabFolders, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowFolders
+    {
+        get => _browseFilterShowFolders;
+        set
+        {
+            if (SetField(ref _browseFilterShowFolders, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowFilters
+    {
+        get => _browseFilterShowFilters;
+        set
+        {
+            if (SetField(ref _browseFilterShowFilters, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowCollabspaces
+    {
+        get => _browseFilterShowCollabspaces;
+        set
+        {
+            if (SetField(ref _browseFilterShowCollabspaces, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
     }
 
     public EffectiveProfileDefaults EffectiveProfileDefaults
@@ -931,6 +1000,7 @@ public sealed partial class MainViewModel
                     child,
                     sourceFlow: node.SourceFlow,
                     metadata: BuildBrowseChildMetadata(child)))
+                .Where(ShouldIncludeBrowseNode)
                 .ToList();
             node.ReplaceChildren(mapped);
             node.ChildrenLoadState = NdChildrenLoadState.Loaded;
@@ -1548,6 +1618,7 @@ public sealed partial class MainViewModel
                 .Concat(roots)
                 .ToList();
         }
+        roots = roots.Where(ShouldIncludeBrowseNode).ToList();
         Trace.WriteLine(
             $"ND-BROWSER roots-refresh tab={SelectedTargetBrowserTab} roots={roots.Count} " +
             $"workspaceTree={_workspaceTreeSearchTargets.Count} recent={_recentTargets.Count} favorites={_favoriteTargets.Count}");
@@ -1668,6 +1739,38 @@ public sealed partial class MainViewModel
         }
 
         return typeDisplay;
+    }
+
+    private bool ShouldIncludeBrowseNode(NetDocumentsBrowseNodeView node)
+    {
+        if (node.IsPlaceholder)
+        {
+            return true;
+        }
+
+        if (IsCabinetRootBrowseNode(node))
+        {
+            return BrowseFilterShowCabFolders;
+        }
+
+        if (node.SupportedType == NdTargetType.Workspace)
+        {
+            return BrowseFilterShowCollabspaces;
+        }
+
+        if (node.SupportedType == NdTargetType.WorkspaceFilter)
+        {
+            return BrowseFilterShowFilters;
+        }
+
+        if (node.SupportedType == NdTargetType.Folder)
+        {
+            return NdTargetBrowserLogic.IsCollabspaceIdentifier(node.Id)
+                ? BrowseFilterShowCollabspaces
+                : BrowseFilterShowFolders;
+        }
+
+        return true;
     }
 
     private static NdTargetType ParseTargetType(string raw)
@@ -2090,6 +2193,8 @@ public sealed partial class MainViewModel
             {
                 _effectiveProfileDefaultsRows.Add(row);
             }
+
+            OnPropertyChanged(nameof(HasReviewEffectiveDefaults));
         });
     }
 
@@ -2422,6 +2527,16 @@ public sealed partial class MainViewModel
         _localRecentTargets = new List<NdTargetRecentItem>();
         _localFavoriteTargets = NdTargetBrowserLogic.DeserializeFavoriteTargets(settings.FavoriteTargetsJson).ToList();
         WorkspaceSearchText = settings.LastWorkspaceQuery ?? string.Empty;
+        _isBrowseFilterPanelVisible = settings.IsBrowseFilterPanelVisible;
+        _browseFilterShowCabFolders = settings.BrowseFilterShowCabFolders;
+        _browseFilterShowFolders = settings.BrowseFilterShowFolders;
+        _browseFilterShowFilters = settings.BrowseFilterShowFilters;
+        _browseFilterShowCollabspaces = settings.BrowseFilterShowCollabspaces;
+        OnPropertyChanged(nameof(IsBrowseFilterPanelVisible));
+        OnPropertyChanged(nameof(BrowseFilterShowCabFolders));
+        OnPropertyChanged(nameof(BrowseFilterShowFolders));
+        OnPropertyChanged(nameof(BrowseFilterShowFilters));
+        OnPropertyChanged(nameof(BrowseFilterShowCollabspaces));
         _workspaceLookupContext = WorkspaceLookupContext.FromJson(settings.WorkspaceLookupContextJson);
         WorkspaceLookupStatus = string.Empty;
 
@@ -2469,6 +2584,11 @@ public sealed partial class MainViewModel
         settings.RecentTargetsJson = string.Empty;
         settings.FavoriteTargetsJson = NdTargetBrowserLogic.SerializeFavoriteTargets(_localFavoriteTargets);
         settings.LastWorkspaceQuery = WorkspaceSearchText ?? string.Empty;
+        settings.IsBrowseFilterPanelVisible = IsBrowseFilterPanelVisible;
+        settings.BrowseFilterShowCabFolders = BrowseFilterShowCabFolders;
+        settings.BrowseFilterShowFolders = BrowseFilterShowFolders;
+        settings.BrowseFilterShowFilters = BrowseFilterShowFilters;
+        settings.BrowseFilterShowCollabspaces = BrowseFilterShowCollabspaces;
         settings.WorkspaceLookupContextJson = _workspaceLookupContext?.ToJson() ?? string.Empty;
 
         if (_selectedNetDocumentsTarget is null)

@@ -363,7 +363,9 @@ public static class NdTargetBrowserLogic
         }
 
         return targetId.Contains("^C", StringComparison.OrdinalIgnoreCase) ||
-               targetId.Contains("C^", StringComparison.OrdinalIgnoreCase);
+               targetId.Contains("C^", StringComparison.OrdinalIgnoreCase) ||
+               (targetId.Contains(":~", StringComparison.OrdinalIgnoreCase) &&
+                targetId.Contains(".nev", StringComparison.OrdinalIgnoreCase));
     }
 
     public static IReadOnlyList<NdTargetRecentItem> MergeRecentTargets(

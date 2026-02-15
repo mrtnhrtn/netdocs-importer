@@ -20,11 +20,11 @@
         <Border Grid.Row="0" Grid.ColumnSpan="4" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="12" />
-                    <ColumnDefinition Width="360" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
+                <StackPanel Grid.Column="0" MinWidth="420" MaxWidth="760">
                     <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                         <Button Content="Select Folder"
@@ -44,17 +44,84 @@
                     <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
                 </StackPanel>
 
-                <Border Grid.Column="2"
-                        BorderBrush="#E4E7EB"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        Padding="8"
-                        Visibility="{Binding HasFolderRoots, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <StackPanel>
-                        <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{Binding ReviewTargetBreadcrumbDisplay}" Foreground="#555555" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
+                <StackPanel Grid.Column="2"
+                            Margin="0,2,0,0"
+                            VerticalAlignment="Top"
+                            HorizontalAlignment="Left"
+                            MaxWidth="520"
+                            Visibility="{Binding HasFolderRoots, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Cabinet:" FontWeight="SemiBold" Foreground="#374151" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ReviewTargetCabinetDisplay}" Foreground="#555555" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Target container:" FontWeight="SemiBold" Foreground="#374151" Margin="0,4,0,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReviewWorkspaceNameDisplay}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
+                    </Grid>
+
+                    <TextBlock Text="Profile Attributes (Inherited Defaults)" FontWeight="SemiBold" Foreground="#374151" Margin="0,0,0,4" />
+                    <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="6" MinWidth="320" MaxHeight="170">
+                        <Grid>
+                            <TextBlock Text="No inherited profile attributes available."
+                                       Foreground="#6B7280"
+                                       TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasReviewEffectiveDefaults}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ScrollViewer.Style>
+                                    <Style TargetType="ScrollViewer">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasReviewEffectiveDefaults}" Value="False">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ScrollViewer.Style>
+                                <ItemsControl ItemsSource="{Binding ReviewEffectiveDefaults}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="160" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding AttributeName}"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#374151"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding DisplayValue}"
+                                                           Foreground="#555555"
+                                                           TextWrapping="Wrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </StackPanel>
             </Grid>
         </Border>
 

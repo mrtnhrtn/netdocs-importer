@@ -1999,6 +1999,11 @@ public sealed partial class NetDocumentsSyncService
             return NdTargetType.Folder;
         }
 
+        if (value.Contains(":~", StringComparison.Ordinal) && value.Contains(".NEV", StringComparison.Ordinal))
+        {
+            return NdTargetType.Folder;
+        }
+
         return null;
     }
 
@@ -2414,9 +2419,12 @@ public sealed partial class NetDocumentsSyncService
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var colonId = ConvertWsUrlPathToColonContainerId(rawWsUrl);
-        if (!string.IsNullOrWhiteSpace(colonId) && seen.Add(colonId))
+        foreach (var candidate in ExpandContainerIdVariants(colonId))
         {
-            yield return colonId;
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(token))
@@ -2430,19 +2438,128 @@ public sealed partial class NetDocumentsSyncService
             yield break;
         }
 
-        foreach (var candidate in new[]
-                 {
-                     normalized,
-                     $"^{normalized}",
-                     $"{normalized}.nev",
-                     $"^{normalized}.nev"
-                 })
+        foreach (var candidate in ExpandContainerIdVariants(Uri.UnescapeDataString(normalized)))
         {
             if (seen.Add(candidate))
             {
                 yield return candidate;
             }
         }
+    }
+
+    private static IEnumerable<string> ExpandContainerIdVariants(string? containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            yield break;
+        }
+
+        var trimmed = containerId.Trim();
+        var unversioned = TrimContainerIdVersionSuffix(trimmed);
+        if (!string.IsNullOrWhiteSpace(unversioned))
+        {
+            yield return unversioned;
+        }
+
+        yield return trimmed;
+
+        if (LooksLikeStructuredContainerIdentifier(trimmed))
+        {
+            var withNev = EnsureNevSuffixBeforeVersion(trimmed);
+            if (!string.Equals(withNev, trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                var withNevUnversioned = TrimContainerIdVersionSuffix(withNev);
+                if (!string.IsNullOrWhiteSpace(withNevUnversioned))
+                {
+                    yield return withNevUnversioned;
+                }
+
+                yield return withNev;
+            }
+
+            yield break;
+        }
+
+        if (!trimmed.StartsWith("^", StringComparison.Ordinal) &&
+            LooksLikeLegacyEnvToken(trimmed))
+        {
+            yield return $"^{trimmed}";
+        }
+
+        if (trimmed.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            yield break;
+        }
+
+        if (LooksLikeLegacyEnvToken(trimmed))
+        {
+            yield return $"{trimmed}.nev";
+            yield return $"^{trimmed}.nev";
+        }
+    }
+
+    private static bool LooksLikeStructuredContainerIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith(":", StringComparison.Ordinal) &&
+            trimmed.Count(ch => ch == ':') >= 3)
+        {
+            return true;
+        }
+
+        return trimmed.IndexOf(':') >= 0 &&
+               trimmed.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool LooksLikeLegacyEnvToken(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("^", StringComparison.Ordinal))
+        {
+            trimmed = trimmed[1..];
+        }
+
+        if (trimmed.Length < 2)
+        {
+            return false;
+        }
+
+        var prefix = char.ToUpperInvariant(trimmed[0]);
+        if (prefix is not ('F' or 'C' or 'W'))
+        {
+            return false;
+        }
+
+        return trimmed[1..].All(char.IsDigit);
+    }
+
+    private static string EnsureNevSuffixBeforeVersion(string containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return containerId;
+        }
+
+        var trimmed = containerId.Trim();
+        var pipeIndex = trimmed.IndexOf('|');
+        var basePart = pipeIndex >= 0 ? trimmed[..pipeIndex] : trimmed;
+        var suffix = pipeIndex >= 0 ? trimmed[pipeIndex..] : string.Empty;
+        if (basePart.EndsWith(".nev", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed;
+        }
+
+        return $"{basePart}.nev{suffix}";
     }
 
     private static string? ConvertWsUrlPathToColonContainerId(string? rawWsUrl)
