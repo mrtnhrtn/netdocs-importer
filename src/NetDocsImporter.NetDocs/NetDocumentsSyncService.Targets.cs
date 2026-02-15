@@ -241,6 +241,8 @@ public sealed partial class NetDocumentsSyncService
                     }
                 }
             }
+
+            selection.Name = ResolveFriendlyContainerName(selection.Name, selection.Id, selection.Type);
         }
     }
 
@@ -822,6 +824,7 @@ public sealed partial class NetDocumentsSyncService
             {
                 node.Name = node.Id;
             }
+            node.Name = ResolveFriendlyContainerName(node.Name, node.Id, node.SupportedType);
 
             if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
             {
@@ -1627,7 +1630,10 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var name = ReadPreferredContainerName(element, source);
-        var effectiveName = string.IsNullOrWhiteSpace(name) ? id : name;
+        var effectiveName = ResolveFriendlyContainerName(
+            string.IsNullOrWhiteSpace(name) ? id : name,
+            id,
+            resolvedType.Value);
         if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, resolvedType))
         {
             return null;
@@ -1920,7 +1926,10 @@ public sealed partial class NetDocumentsSyncService
             return null;
         }
         var name = ReadPreferredContainerName(element, source);
-        var effectiveName = string.IsNullOrWhiteSpace(name) ? id : name;
+        var effectiveName = ResolveFriendlyContainerName(
+            string.IsNullOrWhiteSpace(name) ? id : name,
+            id,
+            normalizedType.Value);
         if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, normalizedType))
         {
             return null;
@@ -2659,7 +2668,10 @@ public sealed partial class NetDocumentsSyncService
         return new NdContainerNode
         {
             Id = id,
-            Name = string.IsNullOrWhiteSpace(name) ? id : name,
+            Name = ResolveFriendlyContainerName(
+                string.IsNullOrWhiteSpace(name) ? id : name,
+                id,
+                supportedType),
             TypeRaw = rawType,
             Extension = extension,
             ParentId = parentId,
@@ -3154,6 +3166,7 @@ public sealed partial class NetDocumentsSyncService
         {
             name = id;
         }
+        name = ResolveFriendlyContainerName(name, id, NdTargetType.WorkspaceFilter);
 
         return new NdTargetSelection
         {
@@ -3362,10 +3375,90 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var existingIsDisplayName = IsValidContainerDisplayName(existingName) &&
-                                    !LooksLikeContainerIdentifier(existingName);
+                                    !LooksLikeContainerIdentifier(existingName) &&
+                                    !IsSyntheticWorkspaceFilterName(existingName);
         var candidateIsDisplayName = IsValidContainerDisplayName(candidateName) &&
-                                     !LooksLikeContainerIdentifier(candidateName);
+                                     !LooksLikeContainerIdentifier(candidateName) &&
+                                     !IsSyntheticWorkspaceFilterName(candidateName);
         return !existingIsDisplayName && candidateIsDisplayName;
+    }
+
+    private static bool IsSyntheticWorkspaceFilterName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var trimmed = name.Trim();
+        return trimmed.StartsWith("Workspace Filter (", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(trimmed, "Workspace Filter (Unresolved)", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveFriendlyContainerName(string? name, string? id, NdTargetType? type)
+    {
+        var effectiveName = (name ?? string.Empty).Trim();
+        var effectiveId = id?.Trim() ?? string.Empty;
+        if (type != NdTargetType.WorkspaceFilter)
+        {
+            return string.IsNullOrWhiteSpace(effectiveName)
+                ? effectiveId
+                : effectiveName;
+        }
+
+        if (IsValidContainerDisplayName(effectiveName) &&
+            !LooksLikeContainerIdentifier(effectiveName))
+        {
+            return effectiveName;
+        }
+
+        var hint = BuildContainerNameHint(effectiveId);
+        return string.IsNullOrWhiteSpace(hint)
+            ? "Workspace Filter (Unresolved)"
+            : $"Workspace Filter ({hint})";
+    }
+
+    private static string BuildContainerNameHint(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return string.Empty;
+        }
+
+        var normalized = Uri.UnescapeDataString(id.Trim());
+        normalized = TrimContainerIdVersionSuffix(normalized) ?? normalized;
+        if (normalized.StartsWith(":", StringComparison.Ordinal))
+        {
+            var segments = normalized
+                .Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var last = segments.Length > 0 ? segments[^1] : normalized;
+            return NormalizeContainerNameHintToken(last);
+        }
+
+        return NormalizeContainerNameHintToken(normalized);
+    }
+
+    private static string NormalizeContainerNameHintToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return string.Empty;
+        }
+
+        var normalized = token.Trim();
+        if (normalized.StartsWith("^", StringComparison.Ordinal))
+        {
+            normalized = normalized[1..];
+        }
+
+        if (normalized.EndsWith(".nev", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^4];
+        }
+
+        return normalized.Length <= 20
+            ? normalized
+            : normalized[..20];
     }
 
     private static string NormalizeContainerIdentityForDedupe(string? containerId)

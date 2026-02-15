@@ -1703,6 +1703,80 @@ public class NetDocumentsSyncServiceTargetsTests
     }
 
     [Fact]
+    public async Task GetRecentTargetsAsync_UsesFriendlyNameWhenWorkspaceFilterMetadataIsNevOnly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string filterId = ":AU2:i:y:9:r:~240321180539808.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{filterId}}",
+                                "description": "{{filterId}}",
+                                "Ext": "ndflt"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(filterId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{filterId}}",
+                            "extension": "ndflt",
+                            "description": "{{filterId}}"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
+            Assert.StartsWith("Workspace Filter (", item.Selection.Name, StringComparison.Ordinal);
+            Assert.DoesNotContain(".nev", item.Selection.Name, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task SearchWorkspacesAsync_HydratesNevLikeWorkspaceNames()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
