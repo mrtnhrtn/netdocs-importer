@@ -1375,13 +1375,29 @@ public sealed partial class MainViewModel
         var container = await sync.GetContainerInfoAsync(envId, cancellationToken);
         if (container is null)
         {
+            Trace.WriteLine($"ND-SEARCH lookup-resolve workspace rejected envId='{envId}' reason='container-null'.");
             return null;
         }
 
         var extension = string.IsNullOrWhiteSpace(container.Extension) ? container.TypeRaw : container.Extension;
-        var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(extension, hasWorkspaceIdHint: true);
+        var workspaceHintFromEnvId = LooksLikeWorkspaceIdentifier(envId) ? NdTargetType.Workspace : (NdTargetType?)null;
+        var normalizedFromExtension = NdTargetBrowserLogic.NormalizeSupportedType(extension, hasWorkspaceIdHint: false);
+        var resolvedType = container.SupportedType ?? normalizedFromExtension ?? workspaceHintFromEnvId;
+
+        // Some workspace container responses omit extension/type and can normalize to Folder via hints.
+        // When wsurl resolves a ^W id, prefer the workspace hint.
+        if (resolvedType == NdTargetType.Folder &&
+            workspaceHintFromEnvId == NdTargetType.Workspace &&
+            string.IsNullOrWhiteSpace(container.Extension) &&
+            string.IsNullOrWhiteSpace(container.TypeRaw))
+        {
+            resolvedType = NdTargetType.Workspace;
+        }
+
         if (resolvedType != NdTargetType.Workspace)
         {
+            Trace.WriteLine(
+                $"ND-SEARCH lookup-resolve workspace rejected envId='{envId}' resolvedType='{resolvedType?.ToString() ?? "null"}' extension='{extension}' containerId='{container.Id}'.");
             return null;
         }
 
@@ -1417,8 +1433,13 @@ public sealed partial class MainViewModel
 
         if (_workspaceLookupPairCache.TryGetValue(pairKey, out var cached))
         {
-            Trace.WriteLine($"ND-SEARCH lookup-cache hit parent='{parent.Key}' child='{child.Key}' hasResult={(cached is not null)}.");
-            return cached;
+            if (cached is not null)
+            {
+                Trace.WriteLine($"ND-SEARCH lookup-cache hit parent='{parent.Key}' child='{child.Key}' hasResult=true.");
+                return cached;
+            }
+
+            _workspaceLookupPairCache.TryRemove(pairKey, out _);
         }
 
         try
@@ -1436,7 +1457,10 @@ public sealed partial class MainViewModel
                     child.Description);
             }
 
-            _workspaceLookupPairCache[pairKey] = resolved;
+            if (resolved is not null)
+            {
+                _workspaceLookupPairCache[pairKey] = resolved;
+            }
             return resolved;
         }
         catch (Exception ex)
@@ -1448,7 +1472,6 @@ public sealed partial class MainViewModel
             }
 
             Trace.WriteLine($"ND-SEARCH lookup-resolve failed parent='{parent.Key}' child='{child.Key}' error='{ex.Message}'.");
-            _workspaceLookupPairCache[pairKey] = null;
             return null;
         }
     }
@@ -1458,6 +1481,16 @@ public sealed partial class MainViewModel
         return string.IsNullOrWhiteSpace(description)
             ? key
             : $"{description} ({key})";
+    }
+
+    private static bool LooksLikeWorkspaceIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("^W", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<NdLookupValueItem> RankLookupCandidatesByTerm(

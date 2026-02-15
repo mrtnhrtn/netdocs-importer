@@ -11,6 +11,13 @@ namespace NetDocsImporter.NetDocs;
 /// </summary>
 public sealed partial class NetDocumentsSyncService
 {
+    private static readonly HashSet<string> HiddenCabinetPseudoContainerNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Cabinet",
+        "Inbox",
+        "Documents"
+    };
+
     private enum TargetDefaultsSource
     {
         V1Endpoints,
@@ -678,6 +685,11 @@ public sealed partial class NetDocumentsSyncService
                                 node.Name = node.Id;
                             }
 
+                            if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
+                            {
+                                continue;
+                            }
+
                             results.Add(node);
                         }
                     }
@@ -871,6 +883,15 @@ public sealed partial class NetDocumentsSyncService
             }
 
             NormalizeContainerNodeForTree(parsed, parentContainerId);
+            if (ShouldRejectAmbiguousFolderNode(parsed.Id, parsed.SupportedType, parsed.Name))
+            {
+                continue;
+            }
+            if (ShouldSuppressCabinetPseudoContainer(parsed, parentContainerId))
+            {
+                continue;
+            }
+
             if (seen.Add(parsed.Id))
             {
                 nodes.Add(parsed);
@@ -929,7 +950,14 @@ public sealed partial class NetDocumentsSyncService
                     continue;
                 }
 
-                hydrated.SupportedType ??= expectedType;
+                if (hydrated.SupportedType is null &&
+                    expectedType.HasValue &&
+                    !IsAmbiguousNevEnvelopeIdentifier(candidate) &&
+                    !IsAmbiguousNevEnvelopeIdentifier(containerId) &&
+                    !IsAmbiguousNevEnvelopeIdentifier(hydrated.Id))
+                {
+                    hydrated.SupportedType = expectedType;
+                }
                 hydrated.SupportedType ??= InferTargetTypeFromContainerId(candidate);
                 hydrated.SupportedType ??= InferTargetTypeFromContainerId(containerId);
                 hydrated.SupportedType ??= InferTargetTypeFromContainerId(hydrated.Id);
@@ -1049,6 +1077,49 @@ public sealed partial class NetDocumentsSyncService
             // Most legacy list endpoints omit hasChildren for folder/workspace rows.
             node.HasChildren = true;
         }
+    }
+
+    private static bool ShouldSuppressCabinetPseudoContainer(NdContainerNode node, string? parentContainerId)
+    {
+        if (!string.IsNullOrWhiteSpace(parentContainerId))
+        {
+            return false;
+        }
+
+        return ShouldSuppressCabinetPseudoContainer(node.Name, node.Id, node.SupportedType);
+    }
+
+    private static bool ShouldSuppressCabinetPseudoContainer(string? name, string? id, NdTargetType? supportedType)
+    {
+        if (string.IsNullOrWhiteSpace(name) ||
+            string.IsNullOrWhiteSpace(id) ||
+            supportedType is null)
+        {
+            return false;
+        }
+
+        if (!HiddenCabinetPseudoContainerNames.Contains(name.Trim()))
+        {
+            return false;
+        }
+
+        if (!NdTargetBrowserLogic.IsCollabspaceIdentifier(id))
+        {
+            return false;
+        }
+
+        return supportedType is NdTargetType.Folder or NdTargetType.Workspace;
+    }
+
+    private static bool ShouldRejectAmbiguousFolderNode(string? id, NdTargetType? supportedType, string? displayName)
+    {
+        if (supportedType != NdTargetType.Folder || !IsAmbiguousNevEnvelopeIdentifier(id))
+        {
+            return false;
+        }
+
+        var effectiveName = displayName ?? string.Empty;
+        return LooksLikeContainerIdentifier(effectiveName) || IsLikelyDocumentDisplayName(effectiveName);
     }
 
     /// <summary>
@@ -1187,11 +1258,6 @@ public sealed partial class NetDocumentsSyncService
             extension = ReadExtensionValue(element);
         }
 
-        if (string.IsNullOrWhiteSpace(extension))
-        {
-            extension = defaultExtension ?? string.Empty;
-        }
-
         var rawType = string.IsNullOrWhiteSpace(extension)
             ? ReadString(source, "type", "containerType", "kind", "extension", "ext")
             : extension;
@@ -1200,13 +1266,38 @@ public sealed partial class NetDocumentsSyncService
             rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
         }
 
+        var explicitContainerIdentifier = IsExplicitContainerIdentifier(id);
+        var hasContainerTypeHint = IsContainerSelectionTypeToken(defaultExtension) ||
+                                   IsContainerSelectionTypeToken(rawType) ||
+                                   IsContainerSelectionTypeToken(extension);
+        if ((!explicitContainerIdentifier && HasDocumentIdentifierHint(element, source, id) && !hasContainerTypeHint) ||
+            IsDocumentLikeType(rawType) ||
+            IsDocumentLikeType(extension))
+        {
+            return null;
+        }
+
+        var ambiguousNevIdentifier = IsAmbiguousNevEnvelopeIdentifier(id);
+        var defaultExtensionNormalized = (defaultExtension ?? string.Empty).Trim();
+        var allowAmbiguousDefaultType = string.Equals(defaultExtensionNormalized, "ndws", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(defaultExtensionNormalized, "ndflt", StringComparison.OrdinalIgnoreCase);
         var hasWorkspaceIdHint =
             TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
             TryGetPropertyIgnoreCase(element, "workspaceId", out _);
         var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint);
+        if (resolvedType == NdTargetType.Folder &&
+            ambiguousNevIdentifier &&
+            string.IsNullOrWhiteSpace(rawType) &&
+            string.IsNullOrWhiteSpace(extension))
+        {
+            resolvedType = null;
+        }
         if (resolvedType is null && !string.IsNullOrWhiteSpace(defaultExtension))
         {
-            resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(defaultExtension, hasWorkspaceIdHint);
+            if (!ambiguousNevIdentifier || allowAmbiguousDefaultType)
+            {
+                resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(defaultExtension, hasWorkspaceIdHint);
+            }
         }
         if (resolvedType is null)
         {
@@ -1219,6 +1310,11 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var name = ReadPreferredContainerName(element, source);
+        var effectiveName = string.IsNullOrWhiteSpace(name) ? id : name;
+        if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, resolvedType))
+        {
+            return null;
+        }
 
         var parentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "parentId", "workspace");
         if (string.IsNullOrWhiteSpace(parentWorkspaceId))
@@ -1226,13 +1322,21 @@ public sealed partial class NetDocumentsSyncService
             parentWorkspaceId = ReadString(element, "parentWorkspaceId", "workspaceId", "parentId", "workspace");
         }
 
+        var effectiveExtension = extension;
+        if (string.IsNullOrWhiteSpace(effectiveExtension) &&
+            !string.IsNullOrWhiteSpace(defaultExtension) &&
+            (!IsAmbiguousNevEnvelopeIdentifier(id) || allowAmbiguousDefaultType))
+        {
+            effectiveExtension = defaultExtension;
+        }
+
         return new NdTargetSelection
         {
             Id = id,
-            Name = name,
+            Name = effectiveName,
             Type = resolvedType.Value,
             ParentWorkspaceId = parentWorkspaceId,
-            Extension = extension,
+            Extension = effectiveExtension,
             SourceFlow = NdTargetSourceFlow.Browse
         };
     }
@@ -1462,14 +1566,46 @@ public sealed partial class NetDocumentsSyncService
             rawType = ReadString(element, "type", "containerType", "kind");
         }
 
-        var normalizedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint: true) ?? NdTargetType.Workspace;
+        var explicitContainerIdentifier = IsExplicitContainerIdentifier(id);
+        var hasWorkspaceTypeHint = IsWorkspaceTypeToken(rawType) ||
+                                   IsWorkspaceTypeToken(extension) ||
+                                   InferTargetTypeFromContainerId(id) == NdTargetType.Workspace;
+        if ((!explicitContainerIdentifier && HasDocumentIdentifierHint(element, source, id) && !hasWorkspaceTypeHint) ||
+            IsDocumentLikeType(rawType) ||
+            IsDocumentLikeType(extension))
+        {
+            return null;
+        }
+
+        var ambiguousNevIdentifier = IsAmbiguousNevEnvelopeIdentifier(id);
+        var normalizedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint: true);
+        if (normalizedType == NdTargetType.Folder &&
+            ambiguousNevIdentifier &&
+            string.IsNullOrWhiteSpace(rawType) &&
+            string.IsNullOrWhiteSpace(extension))
+        {
+            normalizedType = null;
+        }
+        if (normalizedType is null)
+        {
+            normalizedType = InferTargetTypeFromContainerId(id);
+        }
+        if (normalizedType is null)
+        {
+            return null;
+        }
         var name = ReadPreferredContainerName(element, source);
+        var effectiveName = string.IsNullOrWhiteSpace(name) ? id : name;
+        if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, normalizedType))
+        {
+            return null;
+        }
 
         return new NdTargetSelection
         {
             Id = id,
-            Name = string.IsNullOrWhiteSpace(name) ? id : name,
-            Type = normalizedType,
+            Name = effectiveName,
+            Type = normalizedType.Value,
             ParentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "workspace", "parentId"),
             Extension = extension,
             SourceFlow = NdTargetSourceFlow.Browse
@@ -1730,7 +1866,7 @@ public sealed partial class NetDocumentsSyncService
                      {
                          "wsRecent", "wsFav", "recent", "favorites", "locations",
                          "standardList",
-                         "rows", "data", "items", "results", "value", "documents"
+                         "rows", "data", "items", "results", "value"
                      })
             {
                 if (!TryGetPropertyIgnoreCase(root, name, out var child))
@@ -1999,11 +2135,6 @@ public sealed partial class NetDocumentsSyncService
             return NdTargetType.Folder;
         }
 
-        if (value.Contains(":~", StringComparison.Ordinal) && value.Contains(".NEV", StringComparison.Ordinal))
-        {
-            return NdTargetType.Folder;
-        }
-
         return null;
     }
 
@@ -2018,7 +2149,7 @@ public sealed partial class NetDocumentsSyncService
         {
             foreach (var name in new[]
                      {
-                         "children", "list", "items", "results", "data", "value", "folders", "records", "documents",
+                         "children", "list", "items", "results", "data", "value", "folders", "records",
                          "standardList", "customList", "locations", "rows"
                      })
             {
@@ -2112,10 +2243,29 @@ public sealed partial class NetDocumentsSyncService
             rawType = ReadString(element, "type", "containerType", "kind", "extension", "ext");
         }
 
+        var explicitContainerIdentifier = IsExplicitContainerIdentifier(id);
+        var hasContainerTypeHint = IsContainerSelectionTypeToken(rawType) ||
+                                   IsContainerSelectionTypeToken(extension) ||
+                                   InferTargetTypeFromContainerId(id).HasValue;
+        if ((!explicitContainerIdentifier && HasDocumentIdentifierHint(element, source, id) && !hasContainerTypeHint) ||
+            IsDocumentLikeType(rawType) ||
+            IsDocumentLikeType(extension))
+        {
+            return null;
+        }
+
+        var ambiguousNevIdentifier = IsAmbiguousNevEnvelopeIdentifier(id);
         var hasWorkspaceIdHint =
             TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
             TryGetPropertyIgnoreCase(element, "workspaceId", out _);
         var supportedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint);
+        if (supportedType == NdTargetType.Folder &&
+            ambiguousNevIdentifier &&
+            string.IsNullOrWhiteSpace(rawType) &&
+            string.IsNullOrWhiteSpace(extension))
+        {
+            supportedType = null;
+        }
         if (supportedType is null)
         {
             supportedType = InferTargetTypeFromContainerId(id);
@@ -2166,9 +2316,7 @@ public sealed partial class NetDocumentsSyncService
             "containerId",
             "workspaceId",
             "folderId",
-            "docId",
             "envelopeId",
-            "documentId",
             "envId",
             "environmentId");
         if (string.IsNullOrWhiteSpace(id))
@@ -2179,9 +2327,7 @@ public sealed partial class NetDocumentsSyncService
                 "containerId",
                 "workspaceId",
                 "folderId",
-                "docId",
                 "envelopeId",
-                "documentId",
                 "envId",
                 "environmentId");
         }
@@ -2192,10 +2338,10 @@ public sealed partial class NetDocumentsSyncService
             envId = ReadString(element, "envId", "environmentId", "env", "environment");
         }
 
-        // Some list rows use numeric ids for collabspaces while also returning envId.
-        // Prefer the env-form id so downstream rendering can classify collabspaces reliably.
+        // Some list rows use numeric ids while also returning envId.
+        // Prefer explicit env-form ids so downstream parsing/classification stays container-accurate.
         if (!string.IsNullOrWhiteSpace(envId) &&
-            NdTargetBrowserLogic.IsCollabspaceIdentifier(envId))
+            IsExplicitContainerIdentifier(envId))
         {
             return envId;
         }
@@ -2684,6 +2830,130 @@ public sealed partial class NetDocumentsSyncService
             .Trim()
             .Replace("*", string.Empty, StringComparison.Ordinal)
             .Trim();
+    }
+
+    private static bool HasDocumentIdentifierHint(
+        JsonElement element,
+        JsonElement source,
+        string? resolvedContainerId = null)
+    {
+        return HasDocumentIdentifierHint(source, resolvedContainerId) ||
+               HasDocumentIdentifierHint(element, resolvedContainerId);
+    }
+
+    private static bool HasDocumentIdentifierHint(JsonElement node, string? resolvedContainerId)
+    {
+        var documentId = ReadString(node, "docId", "documentId");
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolvedContainerId) &&
+            string.Equals(
+                documentId.Trim(),
+                resolvedContainerId.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsDocumentLikeType(string? rawType)
+    {
+        var normalized = (rawType ?? string.Empty)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Trim()
+            .ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized is "doc" or "document" or "docs" or "nddoc" or "file" or "email" or "eml" or "msg";
+    }
+
+    private static bool IsAmbiguousNevEnvelopeIdentifier(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        var value = Uri.UnescapeDataString(id).ToUpperInvariant();
+        if (!value.Contains(".NEV", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (value.Contains("^F", StringComparison.Ordinal) ||
+            value.Contains("^C", StringComparison.Ordinal) ||
+            value.Contains("^W", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return value.Contains(":~", StringComparison.Ordinal);
+    }
+
+    private static bool IsExplicitContainerIdentifier(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        var value = Uri.UnescapeDataString(id).ToUpperInvariant();
+        return value.Contains("^W", StringComparison.Ordinal) ||
+               value.Contains("^F", StringComparison.Ordinal) ||
+               value.Contains("^C", StringComparison.Ordinal);
+    }
+
+    private static bool IsContainerSelectionTypeToken(string? rawType)
+    {
+        var normalized = (rawType ?? string.Empty)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Trim()
+            .ToLowerInvariant();
+        return normalized is "workspace" or "workspacefilter" or "folder" or "ndws" or "ndflt" or "ndfld";
+    }
+
+    private static bool IsWorkspaceTypeToken(string? rawType)
+    {
+        var normalized = (rawType ?? string.Empty)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Trim()
+            .ToLowerInvariant();
+        return normalized is "workspace" or "ndws";
+    }
+
+    private static bool IsLikelyDocumentDisplayName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var candidate = value.Trim();
+        if (candidate.Length > 320)
+        {
+            candidate = candidate[..320];
+        }
+
+        var dotIndex = candidate.LastIndexOf('.');
+        if (dotIndex <= 0 || dotIndex >= candidate.Length - 1)
+        {
+            return false;
+        }
+
+        var extension = candidate[(dotIndex + 1)..].Trim().ToLowerInvariant();
+        return extension is "msg" or "eml" or "pdf" or "doc" or "docx" or "dotx" or "rtf" or "txt" or
+               "xls" or "xlsx" or "ppt" or "pptx" or "csv" or "zip" or "jpg" or "jpeg" or "png" or "tif" or "tiff";
     }
 
     private static string ReadExtensionValue(JsonElement element)
