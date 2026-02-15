@@ -188,6 +188,99 @@ public class NetDocumentsSyncServiceTargetsTests
     }
 
     [Fact]
+    public async Task GetContainerChildrenAsync_PrefersDisplayNameWhenDuplicateFilterRowsDisagree()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string workspaceId = ":AU2:o:w:m:v:^W200423132232851.nev";
+        const string filterId = ":AU2:u:3:e:p:~260209191130366.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                if (string.Equals(path, $"/v2/container/{workspaceId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{workspaceId}}",
+                            "description": "Workspace Root",
+                            "extension": "ndws"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, $"/v1/Workspace/{workspaceId}", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "items": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{filterId}}",
+                                "description": "{{filterId}}",
+                                "Ext": "ndflt",
+                                "workspaceId": "{{workspaceId}}"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, $"/v2/container/{workspaceId}/sub", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "items": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{filterId}}",
+                                "description": "Assigned To Me",
+                                "Ext": "ndflt",
+                                "workspaceId": "{{workspaceId}}"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"items": []}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync(
+                "NG-CAB",
+                parentContainerId: workspaceId);
+
+            var filter = Assert.Single(nodes);
+            Assert.Equal(filterId, filter.Id);
+            Assert.Equal("Assigned To Me", filter.Name);
+            Assert.Equal(NdTargetType.WorkspaceFilter, filter.SupportedType);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GetContainerChildrenAsync_AcceptsTypeTokenWhenExtensionAliasDiffers()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");

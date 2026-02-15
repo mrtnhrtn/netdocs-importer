@@ -849,6 +849,7 @@ public sealed partial class NetDocumentsSyncService
 
         var results = new List<NdTargetSelection>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dedupeIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var endpointSucceeded = false;
         var candidateIds = BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId))
             .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -919,7 +920,32 @@ public sealed partial class NetDocumentsSyncService
                         var dedupeKey = BuildTargetSelectionDedupeKey(parsed);
                         if (seen.Add(dedupeKey))
                         {
+                            dedupeIndex[dedupeKey] = results.Count;
                             results.Add(parsed);
+                            continue;
+                        }
+
+                        if (!dedupeIndex.TryGetValue(dedupeKey, out var existingIndex))
+                        {
+                            continue;
+                        }
+
+                        var existing = results[existingIndex];
+                        if (ShouldPreferSelectionDisplayName(existing, parsed))
+                        {
+                            existing.Name = parsed.Name;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(existing.ParentWorkspaceId) &&
+                            !string.IsNullOrWhiteSpace(parsed.ParentWorkspaceId))
+                        {
+                            existing.ParentWorkspaceId = parsed.ParentWorkspaceId;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(existing.Extension) &&
+                            !string.IsNullOrWhiteSpace(parsed.Extension))
+                        {
+                            existing.Extension = parsed.Extension;
                         }
                     }
 
@@ -3324,6 +3350,22 @@ public sealed partial class NetDocumentsSyncService
 
         var normalizedId = NormalizeContainerIdentityForDedupe(selection.Id);
         return $"{selection.Type}:{normalizedId}";
+    }
+
+    private static bool ShouldPreferSelectionDisplayName(NdTargetSelection existing, NdTargetSelection candidate)
+    {
+        var existingName = existing.Name?.Trim() ?? string.Empty;
+        var candidateName = candidate.Name?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(candidateName))
+        {
+            return false;
+        }
+
+        var existingIsDisplayName = IsValidContainerDisplayName(existingName) &&
+                                    !LooksLikeContainerIdentifier(existingName);
+        var candidateIsDisplayName = IsValidContainerDisplayName(candidateName) &&
+                                     !LooksLikeContainerIdentifier(candidateName);
+        return !existingIsDisplayName && candidateIsDisplayName;
     }
 
     private static string NormalizeContainerIdentityForDedupe(string? containerId)
