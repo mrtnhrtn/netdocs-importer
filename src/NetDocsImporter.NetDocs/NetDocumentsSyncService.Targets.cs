@@ -1637,7 +1637,8 @@ public sealed partial class NetDocumentsSyncService
     {
         var candidates = new[]
         {
-            "name", "displayName", "dispName", "longName", "shortName", "fullName", "description", "desc", "label", "title", "long", "short", "default"
+            "name", "displayName", "dispName", "longName", "shortName", "fullName", "description", "desc", "label", "title", "long", "short", "default",
+            "filterName", "filterDisplayName", "filterDescription", "searchName", "savedSearchName"
         };
 
         foreach (var node in EnumerateCandidateNameNodes(element, source))
@@ -1681,7 +1682,7 @@ public sealed partial class NetDocumentsSyncService
             foreach (var key in new[]
                      {
                          "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames",
-                         "standardAttributes", "attributes", "profile"
+                         "standardAttributes", "attributes", "profile", "filter", "filters", "workspaceFilter", "ndflt", "metadata"
                      })
             {
                 if (TryGetPropertyIgnoreCase(root, key, out var nested) && nested.ValueKind == JsonValueKind.Object)
@@ -1701,7 +1702,11 @@ public sealed partial class NetDocumentsSyncService
                 continue;
             }
 
-            foreach (var key in new[] { "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames", "locations" })
+            foreach (var key in new[]
+                     {
+                         "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames", "locations",
+                         "filter", "filters", "workspaceFilter", "ndflt", "metadata"
+                     })
             {
                 if (TryGetPropertyIgnoreCase(root, key, out var nested))
                 {
