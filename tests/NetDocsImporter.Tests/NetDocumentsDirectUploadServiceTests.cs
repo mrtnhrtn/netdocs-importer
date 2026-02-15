@@ -72,6 +72,97 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_DoesNotCarryFolderListCapabilityAcrossPlans()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "invoices", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestPaths = new List<string>();
+
+        try
+        {
+            await SeedJobWithDoubleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                lock (requestPaths)
+                {
+                    requestPaths.Add(path);
+                }
+
+                if (path == "/v1/Folder/%3Abadfilter%7C1")
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":":badfilter|1 is not a folder id"}""");
+                }
+
+                if (path == "/v1/Workspace/3437-5615-8479")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[{"id":"folder-client-a","name":"client_a","type":"ndfld"}]}""");
+                }
+
+                if (path == "/v1/Folder/folder-client-a")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[{"id":"folder-invoices","name":"invoices","type":"ndfld"}],"sortOrder":"name"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+
+            var badFilterResult = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.WorkspaceFilter,
+                    Id = ":badfilter|1",
+                    Name = "Bad Filter"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.False(badFilterResult.CanUpload);
+            Assert.Contains(badFilterResult.Issues, issue => issue.Code == "FOLDER_ENUMERATION_UNRELIABLE");
+
+            var workspaceResult = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = "3437-5615-8479",
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.True(workspaceResult.CanUpload);
+            Assert.Single(workspaceResult.Files);
+            Assert.Equal("folder-invoices", workspaceResult.Files[0].DestinationContainerId);
+            Assert.DoesNotContain(workspaceResult.Issues, issue => issue.Code == "FOLDER_ENUMERATION_UNRELIABLE");
+            Assert.Contains("/v1/Workspace/3437-5615-8479", requestPaths);
+            Assert.Contains("/v1/Folder/folder-client-a", requestPaths);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_UsesV1DocumentPathWithoutIndexPriorityByDefault()
     {
         var tempRoot = CreateTempRoot();
@@ -224,6 +315,67 @@ public class NetDocumentsDirectUploadServiceTests
             DateTime.UtcNow,
             false,
             childFolderId,
+            "inherit",
+            null));
+    }
+
+    private static async Task SeedJobWithDoubleNestedFileAsync(string dbPath, string jobId, string sourceRoot, string filePath)
+    {
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, sourceRoot, "Complete"));
+
+        var rootFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            rootFolderId,
+            jobId,
+            sourceRoot,
+            string.Empty,
+            null,
+            0,
+            true,
+            false,
+            DateTime.UtcNow,
+            "include",
+            "inherit"));
+
+        var clientFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            clientFolderId,
+            jobId,
+            Path.Combine(sourceRoot, "client_a"),
+            "client_a",
+            rootFolderId,
+            1,
+            true,
+            false,
+            DateTime.UtcNow,
+            "inherit",
+            "inherit"));
+
+        var invoicesFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            invoicesFolderId,
+            jobId,
+            Path.Combine(sourceRoot, "client_a", "invoices"),
+            "client_a\\invoices",
+            clientFolderId,
+            2,
+            true,
+            false,
+            DateTime.UtcNow,
+            "inherit",
+            "inherit"));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            filePath,
+            "client_a\\invoices\\sample.txt",
+            new FileInfo(filePath).Length,
+            DateTime.UtcNow,
+            false,
+            invoicesFolderId,
             "inherit",
             null));
     }

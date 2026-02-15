@@ -174,6 +174,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _currentJobId;
         private set
         {
+            var previousJobId = _currentJobId;
             if (SetField(ref _currentJobId, value))
             {
                 OnPropertyChanged(nameof(CanStartImport));
@@ -181,6 +182,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+
+                if (!string.Equals(previousJobId, value, StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleDirectUploadContextChanged(
+                        "Source job changed. Refresh direct upload preflight.",
+                        refreshPreflight: false);
+                }
             }
         }
     }

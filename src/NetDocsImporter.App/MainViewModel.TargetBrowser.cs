@@ -1922,6 +1922,10 @@ public sealed partial class MainViewModel
 
     private async Task SetSelectedTargetAsync(NdTargetSelection selection, string? knownPath = null)
     {
+        var previousTargetKey = _selectedNetDocumentsTarget is null
+            ? string.Empty
+            : NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+
         _selectedNetDocumentsTarget = CloneSelection(selection);
         _selectedNetDocumentsTargetSupported = true;
 
@@ -1948,6 +1952,18 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(IsSelectedTargetFavorite));
         OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
         OnPropertyChanged(nameof(CanContinueToReviewScope));
+        OnPropertyChanged(nameof(CanRunDirectUpload));
+
+        var selectedTargetKey = _selectedNetDocumentsTarget is null
+            ? string.Empty
+            : NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+        if (!string.Equals(previousTargetKey, selectedTargetKey, StringComparison.OrdinalIgnoreCase))
+        {
+            HandleDirectUploadContextChanged(
+                "NetDocuments target changed. Refresh direct upload preflight.",
+                refreshPreflight: true);
+        }
+
         QueueSettingsSave();
     }
 

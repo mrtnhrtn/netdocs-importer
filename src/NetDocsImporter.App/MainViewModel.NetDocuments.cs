@@ -123,6 +123,10 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+            OnPropertyChanged(nameof(CanRunDirectUpload));
+            HandleDirectUploadContextChanged(
+                "NetDocuments repository changed. Refresh direct upload preflight.",
+                refreshPreflight: false);
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
             _ = LoadNetDocumentsTargetContainersAsync();
@@ -161,6 +165,10 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+            OnPropertyChanged(nameof(CanRunDirectUpload));
+            HandleDirectUploadContextChanged(
+                "NetDocuments cabinet changed. Refresh direct upload preflight.",
+                refreshPreflight: false);
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
             _ = RefreshReviewScopeNetDocumentsAsync();

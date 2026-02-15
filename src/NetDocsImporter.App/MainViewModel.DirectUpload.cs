@@ -15,6 +15,10 @@ public sealed partial class MainViewModel
 
     private ImportExecutionMode _selectedImportExecutionMode = ImportExecutionMode.NdImportCsv;
     private UploadPlanResult? _directUploadPlan;
+    private string _directUploadPlanJobId = string.Empty;
+    private string _directUploadPlanTargetKey = string.Empty;
+    private string _directUploadPlanRepositoryId = string.Empty;
+    private string _directUploadPlanCabinetId = string.Empty;
     private bool _isDirectUploadBusy;
     private string _directUploadStatus = "Direct upload mode is available as preview.";
     private double _directUploadProgressPercent;
@@ -83,6 +87,7 @@ public sealed partial class MainViewModel
         !IsDirectUploadBusy &&
         IsNetDocumentsConnected &&
         _directUploadPlan is not null &&
+        IsDirectUploadPlanAlignedWithCurrentContext() &&
         _directUploadPlan.CanUpload &&
         _directUploadPlan.Files.Count > 0;
 
@@ -181,7 +186,9 @@ public sealed partial class MainViewModel
             return;
         }
 
-        if (_directUploadPlan is null || _directUploadPlan.Files.Count == 0)
+        if (_directUploadPlan is null ||
+            _directUploadPlan.Files.Count == 0 ||
+            !IsDirectUploadPlanAlignedWithCurrentContext())
         {
             await RefreshDirectUploadPreflightAsync();
         }
@@ -514,6 +521,23 @@ public sealed partial class MainViewModel
     private void SetDirectUploadPlan(UploadPlanResult? plan)
     {
         _directUploadPlan = plan;
+        if (plan is null)
+        {
+            _directUploadPlanJobId = string.Empty;
+            _directUploadPlanTargetKey = string.Empty;
+            _directUploadPlanRepositoryId = string.Empty;
+            _directUploadPlanCabinetId = string.Empty;
+        }
+        else
+        {
+            _directUploadPlanJobId = CurrentJobId ?? string.Empty;
+            _directUploadPlanTargetKey = _selectedNetDocumentsTarget is null
+                ? string.Empty
+                : NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+            _directUploadPlanRepositoryId = SelectedNetDocumentsRepositoryId ?? string.Empty;
+            _directUploadPlanCabinetId = SelectedNetDocumentsCabinetId ?? string.Empty;
+        }
+
         _directUploadPreflightIssues.Clear();
         if (plan is not null)
         {
@@ -534,6 +558,43 @@ public sealed partial class MainViewModel
     {
         SetDirectUploadPlan(null);
         DirectUploadStatus = reason;
+    }
+
+    private bool IsDirectUploadPlanAlignedWithCurrentContext()
+    {
+        if (_directUploadPlan is null || _selectedNetDocumentsTarget is null)
+        {
+            return false;
+        }
+
+        var currentTargetKey = NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+        return string.Equals(_directUploadPlanJobId, CurrentJobId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(_directUploadPlanTargetKey, currentTargetKey, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(_directUploadPlanRepositoryId, SelectedNetDocumentsRepositoryId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(_directUploadPlanCabinetId, SelectedNetDocumentsCabinetId ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void HandleDirectUploadContextChanged(string reason, bool refreshPreflight)
+    {
+        if (_directUploadPlan is null && !IsDirectApiMode)
+        {
+            return;
+        }
+
+        InvalidateDirectUploadPlan(reason);
+        OnPropertyChanged(nameof(CanRunDirectUpload));
+
+        if (!refreshPreflight ||
+            !IsDirectApiMode ||
+            IsDirectUploadBusy ||
+            string.IsNullOrWhiteSpace(CurrentJobId) ||
+            _selectedNetDocumentsTarget is null ||
+            !_selectedNetDocumentsTargetSupported)
+        {
+            return;
+        }
+
+        _ = RefreshDirectUploadPreflightAsync();
     }
 
     private static string EscapeCsv(string value)

@@ -140,6 +140,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         var fileEntries = new List<UploadPlanFileEntry>(files.Count);
         var resolvedFolders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _folderListReliabilityCache.Clear();
+        _workspaceListSupported = null;
+        _folderListSupported = null;
+        _folderCreateSupported = null;
 
         var uniqueRelativeFolders = files
             .Select(f => GetRelativeFolderPath(f.RelativePath))
