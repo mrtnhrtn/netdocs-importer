@@ -102,6 +102,11 @@ public partial class MainWindow : Window
         await _viewModel.ExportLastDirectUploadLogAsync(dialog.FileName);
     }
 
+    public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenLastDirectUploadReport();
+    }
+
     public async void OnStartImport(object sender, RoutedEventArgs e)
     {
         await _viewModel.StartImportAsync();

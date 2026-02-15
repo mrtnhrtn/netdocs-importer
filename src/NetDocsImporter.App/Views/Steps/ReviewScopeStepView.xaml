@@ -217,9 +217,15 @@
                                     Style="{StaticResource SecondaryButton}" />
                             <Button Content="Run Direct Upload"
                                     Width="130"
+                                    Margin="0,0,6,0"
                                     Click="OnRunDirectUpload"
                                     Style="{StaticResource PrimaryButton}"
                                     IsEnabled="{Binding CanRunDirectUpload}" />
+                            <Button Content="Open Last CSV"
+                                    Width="110"
+                                    Click="OnOpenLastDirectUploadReport"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanOpenLastDirectUploadReport}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6" VerticalAlignment="Center">
                             <ProgressBar Width="280"

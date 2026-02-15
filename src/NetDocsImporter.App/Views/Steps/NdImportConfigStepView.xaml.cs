@@ -51,6 +51,14 @@ public partial class NdImportConfigStepView : System.Windows.Controls.UserContro
         }
     }
 
+    public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnOpenLastDirectUploadReport(sender, e);
+        }
+    }
+
     public void OnNdImportPasswordChanged(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel || sender is not PasswordBox passwordBox)

@@ -23,6 +23,7 @@ public sealed partial class MainViewModel
     private string _directUploadStatus = "Direct upload mode is available as preview.";
     private double _directUploadProgressPercent;
     private string? _lastDirectUploadLogPath;
+    private string? _lastDirectUploadReportPath;
 
     public IReadOnlyList<ImportExecutionMode> ImportExecutionModeOptions => _importExecutionModeOptions;
 
@@ -81,6 +82,7 @@ public sealed partial class MainViewModel
     public string DirectUploadProgressPercentDisplay => $"{DirectUploadProgressPercent:0.##}%";
 
     public bool CanExportDirectUploadLog => !string.IsNullOrWhiteSpace(_lastDirectUploadLogPath) && File.Exists(_lastDirectUploadLogPath);
+    public bool CanOpenLastDirectUploadReport => !string.IsNullOrWhiteSpace(_lastDirectUploadReportPath) && File.Exists(_lastDirectUploadReportPath);
 
     public bool CanRunDirectUpload =>
         IsDirectApiMode &&
@@ -266,13 +268,17 @@ public sealed partial class MainViewModel
             var result = await service.UploadAsync(executionPlan, executionContext, progress);
             var reportPath = await WriteDirectUploadReportAsync(executionPlan, result, runStartedUtc);
             var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath, runStartedUtc);
+            _lastDirectUploadReportPath = reportPath;
             _lastDirectUploadLogPath = runLogPath;
+            OnPropertyChanged(nameof(CanOpenLastDirectUploadReport));
             OnPropertyChanged(nameof(CanExportDirectUploadLog));
             DirectUploadProgressPercent = 100;
             OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
 
             StatusText =
-                $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}, resumed {result.ResumedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}. Report: {reportPath}. Run log: {runLogPath}";
+                $"Direct upload complete. Uploaded {result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} (skipped {result.SkippedFiles:N0}, resumed {result.ResumedFiles:N0}). Created folders={result.CreatedFolders:N0}. Succeeded={result.SucceededFiles:N0}, Failed={result.FailedFiles:N0}.";
+            DirectUploadStatus =
+                $"Direct upload complete. CSV report: {Path.GetFileName(reportPath)}";
 
             var runStatus = result.FailedFiles > 0 || result.SkippedFiles > 0 ? "DirectUpload Partial" : "DirectUpload";
             var runSummaryText =
@@ -516,6 +522,17 @@ public sealed partial class MainViewModel
         await using var sourceStream = File.OpenRead(_lastDirectUploadLogPath);
         await using var destinationStream = File.Create(destinationPath);
         await sourceStream.CopyToAsync(destinationStream);
+    }
+
+    public void OpenLastDirectUploadReport()
+    {
+        if (string.IsNullOrWhiteSpace(_lastDirectUploadReportPath) || !File.Exists(_lastDirectUploadReportPath))
+        {
+            StatusText = "No direct upload CSV report is available to open.";
+            return;
+        }
+
+        OpenFile(_lastDirectUploadReportPath);
     }
 
     private void SetDirectUploadPlan(UploadPlanResult? plan)

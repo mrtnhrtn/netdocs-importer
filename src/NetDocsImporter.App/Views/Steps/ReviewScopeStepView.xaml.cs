@@ -44,6 +44,14 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnOpenLastDirectUploadReport(sender, e);
+        }
+    }
+
     public void OnFolderTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (Window.GetWindow(this) is MainWindow main)
