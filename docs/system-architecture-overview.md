@@ -45,6 +45,14 @@
    - v2 container info attribute payloads (including numeric attribute tokens such as `"2"` / `"3"` mapped to synced attribute metadata).
 5. When selecting a folder from workspace-lookup flow, lookup-context defaults are carried into the profile snapshot if endpoint defaults are sparse.
 
+### 1b) Workspace/Container Invariants
+
+1. Child expansion under workspace/folder tree nodes must surface `ndfld`, `ndflt`, and `ndcs` when present.
+2. Only folders/collabspaces (`ndfld`, `ndcs`) are expandable; workspace filters (`ndflt`) are terminal targets (`HasChildren=false`).
+3. Saved searches (`ndsq`) are intentionally unsupported in this app and are excluded from browse targets.
+4. Collabspaces are modeled as folder targets in this codebase for browse/upload behavior.
+5. API calls used for target browsing/upload planning are restricted to documented REST API manual/v2 Swagger endpoint/parameter shapes. The only known exception retained is `indexpriority`.
+
 ### 2) Local Scan + Preflight
 
 1. `ScanJobRunner` writes scanned folders/files to `JobStore`.

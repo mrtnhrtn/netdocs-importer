@@ -990,7 +990,7 @@ public sealed partial class MainViewModel
                         await sync.GetContainerChildrenAsync(
                             SelectedNetDocumentsCabinetId,
                             parentContainerId: scopeId,
-                            workspaceId: node.SupportedType == NdTargetType.Workspace ? scopeId : null,
+                            workspaceId: node.SupportedType == NdTargetType.Workspace ? node.Id : null,
                             preferredType: node.SupportedType,
                             cancellationToken: cancellationToken));
             }
@@ -2127,6 +2127,7 @@ public sealed partial class MainViewModel
                 !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey);
             var allowLookupDefaults =
                 _selectedNetDocumentsTarget.Type == NdTargetType.Workspace ||
+                _selectedNetDocumentsTarget.Type == NdTargetType.WorkspaceFilter ||
                 (_selectedNetDocumentsTarget.Type == NdTargetType.Folder &&
                  _selectedNetDocumentsTarget.SourceFlow == NdTargetSourceFlow.LookupWs);
             var lookupContext = hasLookupDefaults && allowLookupDefaults
@@ -2172,7 +2173,7 @@ public sealed partial class MainViewModel
     private void TryApplyWorkspaceLookupKeysFromSelection(NdTargetSelection selection, string? pathDisplay)
     {
         if (_workspaceLookupContext is null ||
-            selection.Type != NdTargetType.Workspace)
+            (selection.Type != NdTargetType.Workspace && selection.Type != NdTargetType.WorkspaceFilter))
         {
             return;
         }

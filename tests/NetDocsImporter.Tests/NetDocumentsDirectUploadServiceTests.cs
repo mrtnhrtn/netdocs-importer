@@ -96,9 +96,9 @@ public class NetDocumentsDirectUploadServiceTests
                     requestPaths.Add(path);
                 }
 
-                if (path == "/v1/Folder/%3Abadfilter%7C1")
+                if (path == "/v1/Folder/%3Abadfolder%7C1")
                 {
-                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":":badfilter|1 is not a folder id"}""");
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":":badfolder|1 is not a folder id"}""");
                 }
 
                 if (path == "/v1/Workspace/3437-5615-8479")
@@ -116,13 +116,13 @@ public class NetDocumentsDirectUploadServiceTests
 
             var service = CreateDirectUploadService(handler, dbPath);
 
-            var badFilterResult = await service.BuildPlanAsync(
+            var badFolderResult = await service.BuildPlanAsync(
                 jobId,
                 new NdTargetSelection
                 {
-                    Type = NdTargetType.WorkspaceFilter,
-                    Id = ":badfilter|1",
-                    Name = "Bad Filter"
+                    Type = NdTargetType.Folder,
+                    Id = ":badfolder|1",
+                    Name = "Bad Folder"
                 },
                 new DirectUploadPlanContext
                 {
@@ -131,8 +131,8 @@ public class NetDocumentsDirectUploadServiceTests
                 },
                 CancellationToken.None);
 
-            Assert.False(badFilterResult.CanUpload);
-            Assert.Contains(badFilterResult.Issues, issue => issue.Code == "FOLDER_ENUMERATION_UNRELIABLE");
+            Assert.False(badFolderResult.CanUpload);
+            Assert.Contains(badFolderResult.Issues, issue => issue.Code == "FOLDER_ENUMERATION_UNRELIABLE");
 
             var workspaceResult = await service.BuildPlanAsync(
                 jobId,
@@ -155,6 +155,141 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.DoesNotContain(workspaceResult.Issues, issue => issue.Code == "FOLDER_ENUMERATION_UNRELIABLE");
             Assert.Contains("/v1/Workspace/3437-5615-8479", requestPaths);
             Assert.Contains("/v1/Folder/folder-client-a", requestPaths);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_WorkspaceFilterFlattensFolderHierarchyAndWarns()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "invoices", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestPaths = new List<string>();
+
+        try
+        {
+            await SeedJobWithDoubleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requestPaths)
+                {
+                    requestPaths.Add(request.RequestUri?.AbsolutePath ?? string.Empty);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.WorkspaceFilter,
+                    Id = ":AU2:2:d:e:8:~260209191130554.nev|1",
+                    Name = "EMAIL"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    CabinetId = "NG-2Q4O0ACP"
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Single(result.Files);
+            Assert.Equal(":AU2:2:d:e:8:~260209191130554.nev|1", result.Files[0].DestinationContainerId);
+            Assert.Equal(0, result.PlannedFolderCreates);
+            Assert.Contains(result.Issues, issue => issue.Code == "FILTER_FLAT_UPLOAD");
+            Assert.DoesNotContain(result.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
+            Assert.DoesNotContain(requestPaths, path => path.StartsWith("/v1/Folder/", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_CollabspaceUsesV2ContainerSubListingInsteadOfFolderEndpoint()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestPaths = new List<string>();
+
+        try
+        {
+            await SeedJobWithSingleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                var absolutePath = request.RequestUri?.AbsolutePath ?? string.Empty;
+                var query = request.RequestUri?.Query ?? string.Empty;
+                var unescapedPath = Uri.UnescapeDataString(absolutePath);
+                lock (requestPaths)
+                {
+                    requestPaths.Add($"{absolutePath}{query}");
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/:AU2:z:g:r:t:^C230123140133608.nev|1/sub", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "Results": [
+                            {
+                              "EnvId": "folder-client-a",
+                              "Attributes": {
+                                "Description": "client_a",
+                                "Ext": "ndfld"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Folder,
+                    Id = ":AU2:z:g:r:t:^C230123140133608.nev|1",
+                    Name = "quick share"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    CabinetId = "NG-2Q4O0ACP"
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Single(result.Files);
+            Assert.Equal("folder-client-a", result.Files[0].DestinationContainerId);
+            Assert.DoesNotContain(result.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
+            Assert.Contains(requestPaths, path => Uri.UnescapeDataString(path).StartsWith("/v2/container/:AU2:z:g:r:t:^C230123140133608.nev|1/sub", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(requestPaths, path => path.StartsWith("/v1/Folder/%3AAU2%3Az%3Ag%3Ar%3At%3A%5EC230123140133608.nev%7C1", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

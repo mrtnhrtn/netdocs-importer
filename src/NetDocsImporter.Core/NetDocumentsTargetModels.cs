@@ -251,6 +251,7 @@ public sealed class NdTargetProfileSnapshot
 public static class NdTargetBrowserLogic
 {
     private const string UnsupportedMessage = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string CabinetRootTargetPrefix = "cabinet-root:";
 
     public static string BuildTargetKey(NdTargetSelection selection)
     {
@@ -277,6 +278,8 @@ public static class NdTargetBrowserLogic
             "ndws" => NdTargetType.Workspace,
             "ndflt" => NdTargetType.WorkspaceFilter,
             "ndfld" => NdTargetType.Folder,
+            "ndcs" => NdTargetType.Folder,
+            "collabspace" => NdTargetType.Folder,
             _ => null
         };
     }
@@ -333,6 +336,11 @@ public static class NdTargetBrowserLogic
 
     public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId)
     {
+        if (!type.HasValue && IsCabinetRootIdentifier(targetId))
+        {
+            return new NdTargetIconDescriptor("\uE8B7", "#B7791F");
+        }
+
         return type switch
         {
             NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => new NdTargetIconDescriptor("\uE77B", "#2B6CB0"),
@@ -364,6 +372,16 @@ public static class NdTargetBrowserLogic
 
         return targetId.Contains("^C", StringComparison.OrdinalIgnoreCase) ||
                targetId.Contains("C^", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCabinetRootIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        return targetId.StartsWith(CabinetRootTargetPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     public static IReadOnlyList<NdTargetRecentItem> MergeRecentTargets(

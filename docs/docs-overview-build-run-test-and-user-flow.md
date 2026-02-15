@@ -39,7 +39,7 @@ dotnet test .\tests\NetDocsImporter.Tests\NetDocsImporter.Tests.csproj -c Debug
    - If no active NetDocuments session exists at startup, the app requires sign-in before workflow steps are enabled.
    - Select repository/cabinet.
    - Choose target from Recent/Favorites/Go To Workspace (auto-confirms selection).
-   - Expand a workspace in the tree panel to lazy-load child folders and workspace filters, then select the exact upload target container.
+   - Expand a workspace/folder in the tree panel to lazy-load child `ndfld`, `ndflt`, and `ndcs` containers; only folder/collabspace nodes expand further.
 2. **Local Folder**
    - Select local source folder and scan.
    - Review direct-upload preflight issues.

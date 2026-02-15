@@ -30,6 +30,10 @@ public sealed partial class NetDocumentsSyncService
         EffectiveProfileDefaults Defaults,
         TargetDefaultsSource Source);
 
+    private readonly record struct ContainerSelectionQueryResult(
+        IReadOnlyList<NdTargetSelection> Items,
+        bool EndpointSucceeded);
+
     /// <summary>
     /// Retrieves supported destination container selections for a cabinet.
     /// </summary>
@@ -610,6 +614,8 @@ public sealed partial class NetDocumentsSyncService
         CancellationToken cancellationToken = default)
     {
         var results = new List<NdContainerNode>();
+        var workspaceContext = preferredType == NdTargetType.Workspace || !string.IsNullOrWhiteSpace(workspaceId);
+        var forceWorkspaceEndpoints = ShouldForceWorkspaceChildEndpoints(parentContainerId, workspaceId, preferredType);
         var searchScopeId = !string.IsNullOrWhiteSpace(parentContainerId)
             ? parentContainerId
             : workspaceId;
@@ -621,86 +627,101 @@ public sealed partial class NetDocumentsSyncService
                 resolvedSearchScopeId = await ResolveContainerIdForBrowseAsync(searchScopeId, cancellationToken);
                 var searchScopeCandidates = new List<string>();
                 AddSearchScopeCandidate(searchScopeCandidates, resolvedSearchScopeId);
+                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(resolvedSearchScopeId));
                 AddSearchScopeCandidate(searchScopeCandidates, searchScopeId);
+                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(searchScopeId));
+                AddSearchScopeCandidate(searchScopeCandidates, workspaceId);
+                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(workspaceId));
                 foreach (var candidate in BuildContainerIdCandidates(searchScopeId, NormalizeWorkspaceEnvId(searchScopeId)))
                 {
                     AddSearchScopeCandidate(searchScopeCandidates, candidate);
                 }
+                foreach (var candidate in BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId)))
+                {
+                    AddSearchScopeCandidate(searchScopeCandidates, candidate);
+                }
 
+                var acceptedPrimaryContainerRows = false;
+                var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
+                var seenIdentityKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var seenDisplayKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var scopeCandidate in searchScopeCandidates)
                 {
-                    var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var extension in new[] { "ndws", "ndflt", "ndfld" })
+                    var queryResult = await QueryContainerChildSelectionsAsync(
+                        scopeCandidate,
+                        cancellationToken,
+                        forceWorkspaceEndpoints: forceWorkspaceEndpoints ||
+                                                 IsContainerIdentityEquivalent(scopeCandidate, workspaceId));
+                    if (queryResult.Items.Count > 0)
                     {
-                        var items = await SearchTargetSelectionsByExtensionAsync(
-                            cabinetId,
-                            extension,
-                            null,
-                            cancellationToken,
-                            top: 200,
-                            containerId: scopeCandidate);
-                        foreach (var item in items)
+                        var beforeCount = results.Count;
+                        await AddBrowseChildSelectionNodesAsync(
+                            queryResult.Items,
+                            results,
+                            hydratedNameCache,
+                            seenIdentityKeys,
+                            seenDisplayKeys,
+                            parentContainerId,
+                            cancellationToken);
+                        if (!acceptedPrimaryContainerRows)
                         {
-                            var node = new NdContainerNode
-                            {
-                                Id = item.Id,
-                                Name = item.Name,
-                                TypeRaw = item.Type.ToString(),
-                                ParentId = parentContainerId ?? string.Empty,
-                                ParentWorkspaceId = item.ParentWorkspaceId,
-                                PathDisplay = string.Empty,
-                                SupportedType = item.Type,
-                                IsSelectable = true,
-                                UnsupportedReason = string.Empty,
-                                HasChildren = item.Type != NdTargetType.WorkspaceFilter,
-                                ChildrenLoadState = NdChildrenLoadState.NotLoaded
-                            };
+                            acceptedPrimaryContainerRows = results.Count > beforeCount;
+                        }
+                    }
 
-                            // Some search shapes return IDs but omit human display names.
-                            if (string.IsNullOrWhiteSpace(node.Name) ||
-                                string.Equals(node.Name, node.Id, StringComparison.OrdinalIgnoreCase) ||
-                                !IsValidContainerDisplayName(node.Name) ||
-                                LooksLikeContainerIdentifier(node.Name))
-                            {
-                                if (!hydratedNameCache.TryGetValue(node.Id, out var hydrated))
-                                {
-                                    hydrated = await TryHydrateContainerNodeAsync(
-                                        node.Id,
-                                        parentContainerId,
-                                        node.SupportedType,
-                                        cancellationToken);
-                                    hydratedNameCache[node.Id] = hydrated;
-                                }
-
-                                if (hydrated is not null && !string.IsNullOrWhiteSpace(hydrated.Name))
-                                {
-                                    node.Name = hydrated.Name;
-                                    node.PathDisplay = string.IsNullOrWhiteSpace(node.PathDisplay) ? hydrated.PathDisplay : node.PathDisplay;
-                                    node.ParentWorkspaceId = string.IsNullOrWhiteSpace(node.ParentWorkspaceId) ? hydrated.ParentWorkspaceId : node.ParentWorkspaceId;
-                                }
-                            }
-
-                            if (string.IsNullOrWhiteSpace(node.Name))
-                            {
-                                node.Name = node.Id;
-                            }
-
-                            if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
+                    // Workspace expansion uses /v1/Workspace to retrieve anchored containers.
+                    // Keep extension lookups only as fallback when workspace endpoints yielded nothing.
+                    var shouldRunExtensionSearch = !workspaceContext ||
+                                                   queryResult.Items.Count == 0 ||
+                                                   !queryResult.Items.Any(item => item.Type == NdTargetType.WorkspaceFilter);
+                    if (shouldRunExtensionSearch)
+                    {
+                        // Some tenants omit ndflt/ndcs rows in container list responses.
+                        // Supplement child expansion with explicit extension searches only when needed.
+                        foreach (var extension in BuildChildExpansionSearchExtensions(includeFolders: !acceptedPrimaryContainerRows))
+                        {
+                            var items = await SearchTargetSelectionsByExtensionAsync(
+                                cabinetId,
+                                extension,
+                                null,
+                                cancellationToken,
+                                top: 200,
+                                containerId: scopeCandidate);
+                            if (items.Count == 0)
                             {
                                 continue;
                             }
 
-                            results.Add(node);
+                            await AddBrowseChildSelectionNodesAsync(
+                                items,
+                                results,
+                                hydratedNameCache,
+                                seenIdentityKeys,
+                                seenDisplayKeys,
+                                parentContainerId,
+                                cancellationToken);
                         }
                     }
 
                     if (results.Count > 0)
                     {
-                        return results
-                            .OrderByDescending(node => node.IsSelectable)
-                            .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
-                            .ToList();
+                        if (workspaceContext && results.Any(node => node.SupportedType == NdTargetType.WorkspaceFilter))
+                        {
+                            break;
+                        }
+
+                        // Keep merging across all container-id variants before returning.
+                        // Some tenants return ndflt/ndcs rows only for specific id shapes (for example with/without version suffix).
+                        continue;
                     }
+                }
+
+                if (results.Count > 0)
+                {
+                    return results
+                        .OrderByDescending(node => node.IsSelectable)
+                        .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
                 }
             }
             catch
@@ -740,6 +761,211 @@ public sealed partial class NetDocumentsSyncService
             .OrderByDescending(node => node.IsSelectable)
             .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private async Task AddBrowseChildSelectionNodesAsync(
+        IReadOnlyList<NdTargetSelection> items,
+        ICollection<NdContainerNode> results,
+        IDictionary<string, NdContainerNode?> hydratedNameCache,
+        ISet<string> seenIdentityKeys,
+        ISet<string> seenDisplayKeys,
+        string? parentContainerId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var item in items)
+        {
+            var node = new NdContainerNode
+            {
+                Id = item.Id,
+                Name = item.Name,
+                TypeRaw = item.Type.ToString(),
+                ParentId = parentContainerId ?? string.Empty,
+                ParentWorkspaceId = item.ParentWorkspaceId,
+                PathDisplay = string.Empty,
+                SupportedType = item.Type,
+                IsSelectable = true,
+                UnsupportedReason = string.Empty,
+                HasChildren = item.Type != NdTargetType.WorkspaceFilter,
+                ChildrenLoadState = NdChildrenLoadState.NotLoaded
+            };
+
+            // Some search shapes return IDs but omit human display names.
+            if (ShouldHydrateContainerNodeForBrowse(node))
+            {
+                if (!hydratedNameCache.TryGetValue(node.Id, out var hydrated))
+                {
+                    hydrated = await TryHydrateContainerNodeAsync(
+                        node.Id,
+                        parentContainerId,
+                        node.SupportedType,
+                        cancellationToken);
+                    hydratedNameCache[node.Id] = hydrated;
+                }
+
+                if (hydrated is not null && !string.IsNullOrWhiteSpace(hydrated.Name))
+                {
+                    if (!string.IsNullOrWhiteSpace(hydrated.Id) &&
+                        !IsExplicitContainerIdentifier(node.Id) &&
+                        IsExplicitContainerIdentifier(hydrated.Id))
+                    {
+                        node.Id = hydrated.Id;
+                    }
+
+                    node.Name = hydrated.Name;
+                    node.PathDisplay = string.IsNullOrWhiteSpace(node.PathDisplay) ? hydrated.PathDisplay : node.PathDisplay;
+                    node.ParentWorkspaceId = string.IsNullOrWhiteSpace(node.ParentWorkspaceId) ? hydrated.ParentWorkspaceId : node.ParentWorkspaceId;
+                    node.SupportedType = hydrated.SupportedType ?? node.SupportedType;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(node.Name))
+            {
+                node.Name = node.Id;
+            }
+
+            if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
+            {
+                continue;
+            }
+
+            if (!ShouldKeepContainerNodeForDedupe(node, seenIdentityKeys, seenDisplayKeys))
+            {
+                continue;
+            }
+
+            results.Add(node);
+        }
+    }
+
+    private async Task<ContainerSelectionQueryResult> QueryContainerChildSelectionsAsync(
+        string containerId,
+        CancellationToken cancellationToken,
+        bool forceWorkspaceEndpoints = false)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return new ContainerSelectionQueryResult(Array.Empty<NdTargetSelection>(), false);
+        }
+
+        var results = new List<NdTargetSelection>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var endpointSucceeded = false;
+        var candidateIds = BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToList();
+        if (candidateIds.Count == 0)
+        {
+            candidateIds.Add(containerId);
+        }
+
+        var attemptedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidateId in candidateIds)
+        {
+            var encoded = EncodeContainerIdForPath(candidateId);
+            var paths = new List<string>();
+            var candidateType = InferTargetTypeFromContainerId(candidateId);
+            var preferWorkspaceEndpoint = forceWorkspaceEndpoints || candidateType == NdTargetType.Workspace;
+            if (preferWorkspaceEndpoint)
+            {
+                paths.Add($"/v1/Workspace/{Uri.EscapeDataString(candidateId)}");
+            }
+
+            if (!forceWorkspaceEndpoints)
+            {
+                paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200&listflags=ValidateWorkspaces");
+                paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200");
+                paths.Add($"/v2/container/{encoded}?top=200&listflags=ValidateWorkspaces");
+                paths.Add($"/v2/container/{encoded}?top=200");
+            }
+
+            foreach (var path in paths)
+            {
+                if (!attemptedPaths.Add(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                    endpointSucceeded = true;
+                    var items = EnumerateSearchItems(document.RootElement).ToList();
+                    var beforeCount = results.Count;
+                    foreach (var item in items)
+                    {
+                        var parsed = ParseTargetSelection(item) ?? ParseWorkspaceSelection(item);
+                        if (parsed is null && path.StartsWith("/v1/Workspace/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            parsed = ParseWorkspaceEndpointFallbackSelection(item);
+                        }
+                        if (parsed is null)
+                        {
+                            continue;
+                        }
+
+                        if (path.StartsWith("/v1/Workspace/", StringComparison.OrdinalIgnoreCase) &&
+                            parsed.Type == NdTargetType.Folder &&
+                            IsAmbiguousNevEnvelopeIdentifier(parsed.Id))
+                        {
+                            // Workspace endpoint returns filters/saved-searches without stable type tokens in some tenants.
+                            // Ambiguous ~*.nev rows from this endpoint are workspace-filter containers in practice.
+                            parsed.Type = NdTargetType.WorkspaceFilter;
+                            if (string.IsNullOrWhiteSpace(parsed.Extension))
+                            {
+                                parsed.Extension = "ndflt";
+                            }
+                        }
+
+                        var dedupeKey = BuildTargetSelectionDedupeKey(parsed);
+                        if (seen.Add(dedupeKey))
+                        {
+                            results.Add(parsed);
+                        }
+                    }
+
+                    var added = results.Count - beforeCount;
+                    Trace.WriteLine(
+                        $"NetDocuments target children by container: endpoint='{path}' added={added} total={results.Count}.");
+                    if (added == 0 && items.Count > 0)
+                    {
+                        var sample = items[0];
+                        var sampleKeys = sample.ValueKind == JsonValueKind.Object
+                            ? string.Join(",", sample.EnumerateObject().Select(p => p.Name).Take(20))
+                            : sample.ValueKind.ToString();
+                        var sampleId = ResolveContainerIdentifier(sample, SelectTargetSelectionSource(sample));
+                        var sampleType = ReadExtensionValue(sample);
+                        var sampleName = ReadPreferredContainerName(sample, SelectTargetSelectionSource(sample));
+                        Trace.WriteLine(
+                            $"NetDocuments target children by container: endpoint='{path}' filtered-all raw={items.Count} sampleKeys='{sampleKeys}' sampleId='{sampleId}' sampleType='{sampleType}' sampleName='{sampleName}'.");
+                    }
+
+                    if (results.Count > 0)
+                    {
+                        if (forceWorkspaceEndpoints)
+                        {
+                            break;
+                        }
+
+                        // Keep probing additional endpoint variants for this candidate id.
+                        // Some tenants split folder/filter rows across endpoint shapes.
+                        continue;
+                    }
+                }
+                catch
+                {
+                    Trace.WriteLine($"NetDocuments target children by container: endpoint='{path}' failed.");
+                }
+            }
+
+            if (results.Count > 0)
+            {
+                // Keep merging across all candidate id variants (for example env-id vs numeric id).
+                // Some tenants return filter rows only for one id shape.
+                continue;
+            }
+        }
+
+        return new ContainerSelectionQueryResult(results, endpointSucceeded);
     }
 
     /// <summary>
@@ -849,7 +1075,8 @@ public sealed partial class NetDocumentsSyncService
         CancellationToken cancellationToken)
     {
         var nodes = new List<NdContainerNode>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIdentityKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenDisplayKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in EnumerateContainerChildrenItems(root))
         {
@@ -892,7 +1119,7 @@ public sealed partial class NetDocumentsSyncService
                 continue;
             }
 
-            if (seen.Add(parsed.Id))
+            if (ShouldKeepContainerNodeForDedupe(parsed, seenIdentityKeys, seenDisplayKeys))
             {
                 nodes.Add(parsed);
             }
@@ -924,6 +1151,70 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return LooksLikeContainerIdentifier(node.Name);
+    }
+
+    private static bool ShouldHydrateContainerNodeForBrowse(NdContainerNode node)
+    {
+        return ShouldHydrateContainerNode(node) || !IsExplicitContainerIdentifier(node.Id);
+    }
+
+    private static bool ShouldKeepContainerNodeForDedupe(
+        NdContainerNode node,
+        ISet<string> seenIdentityKeys,
+        ISet<string> seenDisplayKeys)
+    {
+        var displayKey = BuildContainerNodeDisplayDedupeKey(node);
+        if (!string.IsNullOrWhiteSpace(displayKey) && !seenDisplayKeys.Add(displayKey))
+        {
+            return false;
+        }
+
+        var identityKey = BuildContainerNodeIdentityDedupeKey(node);
+        if (!string.IsNullOrWhiteSpace(identityKey) && !seenIdentityKeys.Add(identityKey))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string BuildContainerNodeIdentityDedupeKey(NdContainerNode node)
+    {
+        if (node is null)
+        {
+            return string.Empty;
+        }
+
+        var typeToken = node.SupportedType?.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(typeToken))
+        {
+            typeToken = node.TypeRaw ?? string.Empty;
+        }
+
+        var normalizedId = NormalizeContainerIdentityForDedupe(node.Id);
+        return $"{typeToken}:{normalizedId}";
+    }
+
+    private static string BuildContainerNodeDisplayDedupeKey(NdContainerNode node)
+    {
+        if (node is null)
+        {
+            return string.Empty;
+        }
+
+        var name = node.Name?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name) ||
+            !IsValidContainerDisplayName(name) ||
+            LooksLikeContainerIdentifier(name))
+        {
+            return string.Empty;
+        }
+
+        var typeToken = node.SupportedType?.ToString() ?? node.TypeRaw ?? string.Empty;
+        var parentToken = !string.IsNullOrWhiteSpace(node.ParentId)
+            ? NormalizeContainerIdentityForDedupe(node.ParentId)
+            : NormalizeContainerIdentityForDedupe(node.ParentWorkspaceId ?? string.Empty);
+        return $"{typeToken}:{parentToken}:{name.ToUpperInvariant()}";
     }
 
     private async Task<NdContainerNode?> TryHydrateContainerNodeAsync(
@@ -1578,13 +1869,16 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var ambiguousNevIdentifier = IsAmbiguousNevEnvelopeIdentifier(id);
+        var hasWorkspaceIdHint =
+            TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
+            TryGetPropertyIgnoreCase(element, "workspaceId", out _);
         var normalizedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint: true);
         if (normalizedType == NdTargetType.Folder &&
             ambiguousNevIdentifier &&
             string.IsNullOrWhiteSpace(rawType) &&
             string.IsNullOrWhiteSpace(extension))
         {
-            normalizedType = null;
+            normalizedType = hasWorkspaceIdHint ? NdTargetType.WorkspaceFilter : null;
         }
         if (normalizedType is null)
         {
@@ -1680,14 +1974,8 @@ public sealed partial class NetDocumentsSyncService
 
     private static IEnumerable<string> BuildProfileAttributeEndpointCandidates(NdTargetSelection target)
     {
-        var escaped = Uri.EscapeDataString(target.Id);
-        yield return $"/v1/Container/{escaped}/profileAttributes";
-        yield return $"/v1/Containers/{escaped}/profileAttributes";
-        yield return $"/v1/Container/{escaped}/attributes";
-        if (target.Type == NdTargetType.Workspace)
-        {
-            yield return $"/v1/Workspace/{escaped}/profileAttributes";
-        }
+        _ = target;
+        yield break;
     }
 
     private static NdProfileAttribute? ParseNdProfileAttribute(JsonElement item)
@@ -2069,34 +2357,42 @@ public sealed partial class NetDocumentsSyncService
         string? workspaceId,
         NdTargetType? preferredType)
     {
+        _ = cabinetId;
+
         if (!string.IsNullOrWhiteSpace(parentContainerId))
         {
-            var escapedParent = Uri.EscapeDataString(parentContainerId);
-            var idHint = InferTargetTypeFromContainerId(parentContainerId);
-            var effectiveType = preferredType ?? idHint;
-
-            yield return $"/v1/Container/{escapedParent}/children";
-            yield return $"/v1/Containers/{escapedParent}/children";
-
-            if (effectiveType is NdTargetType.Folder or NdTargetType.WorkspaceFilter || effectiveType is null)
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var candidate in BuildContainerIdCandidates(parentContainerId, NormalizeWorkspaceEnvId(parentContainerId)))
             {
-                yield return $"/v1/Folder/{escapedParent}/children";
-                yield return $"/v1/Folder/{escapedParent}";
-            }
-
-            if (effectiveType == NdTargetType.Workspace || effectiveType is null)
-            {
-                if (!string.IsNullOrWhiteSpace(workspaceId))
+                if (string.IsNullOrWhiteSpace(candidate))
                 {
-                    var escapedWorkspace = Uri.EscapeDataString(workspaceId);
-                    yield return $"/v1/Workspace/{escapedWorkspace}/children";
-                    yield return $"/v1/Workspace/{escapedWorkspace}";
+                    continue;
                 }
-                else
+
+                var encoded = EncodeContainerIdForPath(candidate);
+                var paths = new List<string>();
+                var candidateType = InferTargetTypeFromContainerId(candidate);
+                var treatAsWorkspace = preferredType == NdTargetType.Workspace || candidateType == NdTargetType.Workspace;
+                if (treatAsWorkspace)
                 {
-                    // Some tenants expose workspace rows by the same id format; try workspace endpoints as fallback.
-                    yield return $"/v1/Workspace/{escapedParent}/children";
-                    yield return $"/v1/Workspace/{escapedParent}";
+                    // Prefer workspace endpoint for workspace expansion because it returns all anchored containers.
+                    paths.Add($"/v1/Workspace/{Uri.EscapeDataString(candidate)}");
+                }
+
+                if (!treatAsWorkspace)
+                {
+                    paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200&listflags=ValidateWorkspaces");
+                    paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200");
+                    paths.Add($"/v2/container/{encoded}?top=200&listflags=ValidateWorkspaces");
+                    paths.Add($"/v2/container/{encoded}?top=200");
+                }
+
+                foreach (var path in paths)
+                {
+                    if (seen.Add(path))
+                    {
+                        yield return path;
+                    }
                 }
             }
 
@@ -2105,9 +2401,40 @@ public sealed partial class NetDocumentsSyncService
 
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
-            var escapedWorkspaceId = Uri.EscapeDataString(workspaceId);
-            yield return $"/v1/Workspace/{escapedWorkspaceId}/children";
-            yield return $"/v1/Workspace/{escapedWorkspaceId}";
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var candidate in BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId)))
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    continue;
+                }
+
+                var encoded = EncodeContainerIdForPath(candidate);
+                var candidateType = InferTargetTypeFromContainerId(candidate);
+                var treatAsWorkspace = preferredType == NdTargetType.Workspace || candidateType == NdTargetType.Workspace;
+                var paths = new List<string>();
+                if (treatAsWorkspace)
+                {
+                    paths.Add($"/v1/Workspace/{Uri.EscapeDataString(candidate)}");
+                }
+
+                if (!treatAsWorkspace)
+                {
+                    paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200&listflags=ValidateWorkspaces");
+                    paths.Add($"/v2/container/{encoded}/sub?recursive=false&max=200");
+                    paths.Add($"/v2/container/{encoded}?top=200&listflags=ValidateWorkspaces");
+                    paths.Add($"/v2/container/{encoded}?top=200");
+                }
+
+                foreach (var path in paths)
+                {
+                    if (seen.Add(path))
+                    {
+                        yield return path;
+                    }
+                }
+            }
+
             yield break;
         }
     }
@@ -2126,6 +2453,14 @@ public sealed partial class NetDocumentsSyncService
         }
 
         if (value.Contains(":^W", StringComparison.Ordinal) || value.Contains("^W", StringComparison.Ordinal))
+        {
+            return NdTargetType.Workspace;
+        }
+
+        var normalizedToken = NormalizeContainerIdToken(value);
+        if (normalizedToken.Length > 2 &&
+            normalizedToken.StartsWith("W", StringComparison.OrdinalIgnoreCase) &&
+            normalizedToken.AsSpan(1).ToString().All(char.IsDigit))
         {
             return NdTargetType.Workspace;
         }
@@ -2363,17 +2698,32 @@ public sealed partial class NetDocumentsSyncService
         var filter = Uri.EscapeDataString($"extension eq '{extension}'");
 
         var candidates = new List<string>();
+        var listFlagVariants = BuildExtensionSearchListFlags(extension).ToList();
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            candidates.Add($"/v2/search/{escapedCabinet}?q={escapedQuery}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
-            candidates.Add($"/v2/search?cabinets={escapedCabinet}&q={escapedQuery}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
+            foreach (var listFlags in listFlagVariants)
+            {
+                var listFlagsQuery = string.IsNullOrWhiteSpace(listFlags)
+                    ? string.Empty
+                    : $"&listflags={listFlags}";
+                candidates.Add($"/v2/search/{escapedCabinet}?q={escapedQuery}&top={top}&filter={filter}&filtertype=IncludeOnly{listFlagsQuery}");
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(containerId))
         {
-            candidates.Add($"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
-            candidates.Add($"/v2/search?cabinets={escapedCabinet}&container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces");
+            var encodedContainerPath = EncodeContainerIdForPath(containerId);
+            foreach (var listFlags in listFlagVariants)
+            {
+                var listFlagsQuery = string.IsNullOrWhiteSpace(listFlags)
+                    ? string.Empty
+                    : $"&listflags={listFlags}";
+                // Prefer container listing over search-index calls for child expansion.
+                // This returns live container contents and avoids eventual-consistency misses.
+                candidates.Add($"/v2/container/{encodedContainerPath}?top={top}&filter={filter}&filtertype=IncludeOnly{listFlagsQuery}");
+                candidates.Add($"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly{listFlagsQuery}");
+            }
         }
 
         var results = new List<NdTargetSelection>();
@@ -2383,8 +2733,9 @@ public sealed partial class NetDocumentsSyncService
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var items = EnumerateSearchItems(document.RootElement).ToList();
                 var beforeCount = results.Count;
-                foreach (var item in EnumerateSearchItems(document.RootElement))
+                foreach (var item in items)
                 {
                     var parsed = ParseTargetSelection(item, extension);
                     if (parsed is null)
@@ -2404,6 +2755,18 @@ public sealed partial class NetDocumentsSyncService
                 }
                 var added = results.Count - beforeCount;
                 Trace.WriteLine($"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' added={added} total={results.Count}.");
+                if (added == 0 && items.Count > 0)
+                {
+                    var sample = items[0];
+                    var sampleKeys = sample.ValueKind == JsonValueKind.Object
+                        ? string.Join(",", sample.EnumerateObject().Select(p => p.Name).Take(20))
+                        : sample.ValueKind.ToString();
+                    var sampleId = ResolveContainerIdentifier(sample, SelectTargetSelectionSource(sample));
+                    var sampleType = ReadExtensionValue(sample);
+                    var sampleName = ReadPreferredContainerName(sample, SelectTargetSelectionSource(sample));
+                    Trace.WriteLine(
+                        $"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' filtered-all raw={items.Count} sampleKeys='{sampleKeys}' sampleId='{sampleId}' sampleType='{sampleType}' sampleName='{sampleName}'.");
+                }
 
                 if (results.Count > 0)
                 {
@@ -2461,7 +2824,18 @@ public sealed partial class NetDocumentsSyncService
 
     private static bool IsExtensionMatch(JsonElement element, string extension)
     {
-        var ext = ReadExtensionValue(element);
+        var source = SelectTargetSelectionSource(element);
+        var ext = ReadExtensionValue(source);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            ext = ReadExtensionValue(element);
+        }
+
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            ext = ReadString(source, "type", "containerType", "kind");
+        }
+
         if (string.IsNullOrWhiteSpace(ext))
         {
             ext = ReadString(element, "type", "containerType", "kind");
@@ -2472,7 +2846,21 @@ public sealed partial class NetDocumentsSyncService
             return true;
         }
 
-        return string.Equals(ext.Trim(), extension, StringComparison.OrdinalIgnoreCase);
+        var expected = extension.Trim();
+        var actual = ext.Trim();
+        if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var expectedType = NdTargetBrowserLogic.NormalizeSupportedType(expected, hasWorkspaceIdHint: false);
+        var actualType = NdTargetBrowserLogic.NormalizeSupportedType(actual, hasWorkspaceIdHint: false);
+        if (expectedType.HasValue && actualType.HasValue && expectedType == actualType)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<NdLookupValueItem> ParseLookupRows(JsonElement root)
@@ -2518,6 +2906,74 @@ public sealed partial class NetDocumentsSyncService
         yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly,ValidateWorkspaces";
         yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly";
         yield return $"/v1/Cabinet/{escaped}/folders";
+    }
+
+    private static IEnumerable<string> BuildChildExpansionSearchExtensions(bool includeFolders)
+    {
+        // Child expansion must surface folders, workspace filters, and collabspaces.
+        if (includeFolders)
+        {
+            yield return "ndfld";
+        }
+
+        yield return "ndflt";
+        yield return "ndcs";
+    }
+
+    private static IEnumerable<string?> BuildExtensionSearchListFlags(string extension)
+    {
+        var normalized = extension?.Trim();
+        if (string.Equals(normalized, "ndfld", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "ndws", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return "FoldersOnly,ValidateWorkspaces";
+        }
+        else
+        {
+            yield return "ValidateWorkspaces";
+        }
+
+        // Some tenants only return ndflt/ndcs when listflags is omitted.
+        yield return null;
+    }
+
+    private static bool ShouldForceWorkspaceChildEndpoints(
+        string? parentContainerId,
+        string? workspaceId,
+        NdTargetType? preferredType)
+    {
+        if (preferredType == NdTargetType.Workspace)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(parentContainerId))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            NormalizeContainerIdentityForDedupe(parentContainerId),
+            NormalizeContainerIdentityForDedupe(workspaceId),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsContainerIdentityEquivalent(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            NormalizeContainerIdentityForDedupe(left),
+            NormalizeContainerIdentityForDedupe(right),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AddSearchScopeCandidate(ICollection<string> candidates, string? value)
@@ -2601,18 +3057,13 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var trimmed = containerId.Trim();
+        var hasNevSuffix = trimmed.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0;
         var unversioned = TrimContainerIdVersionSuffix(trimmed);
-        if (!string.IsNullOrWhiteSpace(unversioned))
-        {
-            yield return unversioned;
-        }
-
-        yield return trimmed;
 
         if (LooksLikeStructuredContainerIdentifier(trimmed))
         {
             var withNev = EnsureNevSuffixBeforeVersion(trimmed);
-            if (!string.Equals(withNev, trimmed, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(withNev, trimmed, StringComparison.OrdinalIgnoreCase) && !hasNevSuffix)
             {
                 var withNevUnversioned = TrimContainerIdVersionSuffix(withNev);
                 if (!string.IsNullOrWhiteSpace(withNevUnversioned))
@@ -2621,10 +3072,24 @@ public sealed partial class NetDocumentsSyncService
                 }
 
                 yield return withNev;
+                yield break;
             }
 
+            if (!string.IsNullOrWhiteSpace(unversioned))
+            {
+                yield return unversioned;
+            }
+
+            yield return trimmed;
             yield break;
         }
+
+        if (!string.IsNullOrWhiteSpace(unversioned))
+        {
+            yield return unversioned;
+        }
+
+        yield return trimmed;
 
         if (!trimmed.StartsWith("^", StringComparison.Ordinal) &&
             LooksLikeLegacyEnvToken(trimmed))
@@ -2642,6 +3107,32 @@ public sealed partial class NetDocumentsSyncService
             yield return $"{trimmed}.nev";
             yield return $"^{trimmed}.nev";
         }
+    }
+
+    private static NdTargetSelection? ParseWorkspaceEndpointFallbackSelection(JsonElement element)
+    {
+        var source = SelectTargetSelectionSource(element);
+        var id = ResolveContainerIdentifier(element, source);
+        if (string.IsNullOrWhiteSpace(id) || !IsAmbiguousNevEnvelopeIdentifier(id))
+        {
+            return null;
+        }
+
+        var name = ReadPreferredContainerName(element, source);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = id;
+        }
+
+        return new NdTargetSelection
+        {
+            Id = id,
+            Name = name,
+            Type = NdTargetType.WorkspaceFilter,
+            ParentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "parentId", "workspace"),
+            Extension = "ndflt",
+            SourceFlow = NdTargetSourceFlow.Browse
+        };
     }
 
     private static bool LooksLikeStructuredContainerIdentifier(string value)
@@ -2819,6 +3310,57 @@ public sealed partial class NetDocumentsSyncService
         return normalized;
     }
 
+    private static string BuildTargetSelectionDedupeKey(NdTargetSelection selection)
+    {
+        if (selection is null)
+        {
+            return string.Empty;
+        }
+
+        var normalizedId = NormalizeContainerIdentityForDedupe(selection.Id);
+        return $"{selection.Type}:{normalizedId}";
+    }
+
+    private static string NormalizeContainerIdentityForDedupe(string? containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return string.Empty;
+        }
+
+        var normalized = Uri.UnescapeDataString(containerId.Trim());
+        var queryIndex = normalized.IndexOfAny(new[] { '?', '#' });
+        if (queryIndex >= 0)
+        {
+            normalized = normalized[..queryIndex];
+        }
+
+        normalized = TrimContainerIdVersionSuffix(normalized) ?? normalized;
+        if (normalized.StartsWith(":", StringComparison.Ordinal))
+        {
+            var segments = normalized.Split(':');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (segments[i].Length == 0)
+                {
+                    continue;
+                }
+
+                var segment = Uri.UnescapeDataString(segments[i].Trim());
+                if (i == segments.Length - 1)
+                {
+                    segment = NormalizeContainerIdToken(segment);
+                }
+
+                segments[i] = segment.ToUpperInvariant();
+            }
+
+            return string.Join(":", segments);
+        }
+
+        return NormalizeContainerIdToken(normalized).ToUpperInvariant();
+    }
+
     private static string NormalizeLookupTerm(string? term)
     {
         if (string.IsNullOrWhiteSpace(term))
@@ -2919,7 +3461,7 @@ public sealed partial class NetDocumentsSyncService
             .Replace("_", string.Empty, StringComparison.Ordinal)
             .Trim()
             .ToLowerInvariant();
-        return normalized is "workspace" or "workspacefilter" or "folder" or "ndws" or "ndflt" or "ndfld";
+        return normalized is "workspace" or "workspacefilter" or "folder" or "ndws" or "ndflt" or "ndfld" or "ndcs" or "collabspace";
     }
 
     private static bool IsWorkspaceTypeToken(string? rawType)
@@ -3060,14 +3602,8 @@ public sealed partial class NetDocumentsSyncService
 
     private static IEnumerable<string> BuildDefaultEndpointCandidates(NdTargetSelection target)
     {
-        var escaped = Uri.EscapeDataString(target.Id);
-        yield return $"/v1/Container/{escaped}/profileDefaults";
-        yield return $"/v1/Containers/{escaped}/profileDefaults";
-        yield return $"/v1/Container/{escaped}/inheritedProfileValues";
-        if (target.Type == NdTargetType.Workspace)
-        {
-            yield return $"/v1/Workspace/{escaped}/profileDefaults";
-        }
+        _ = target;
+        yield break;
     }
 
     private static bool IsClientError400Or404(Exception ex)

@@ -11,6 +11,7 @@ public class NetDocumentsTargetBrowserLogicTests
     [InlineData("ndws", NdTargetType.Workspace)]
     [InlineData("ndflt", NdTargetType.WorkspaceFilter)]
     [InlineData("ndfld", NdTargetType.Folder)]
+    [InlineData("ndcs", NdTargetType.Folder)]
     public void NormalizeSupportedType_RecognizesAllowedTypes(string raw, NdTargetType expected)
     {
         var result = NdTargetBrowserLogic.NormalizeSupportedType(raw, hasWorkspaceIdHint: false);
@@ -127,6 +128,17 @@ public class NetDocumentsTargetBrowserLogicTests
 
         Assert.Equal("\uE77B", collabspace.Glyph);
         Assert.Equal("#2B6CB0", collabspace.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveIconDescriptor_CabinetRootIdentifier_UsesFolderIconNotUnknown()
+    {
+        var cabinetRoot = NdTargetBrowserLogic.ResolveIconDescriptor(
+            type: null,
+            targetId: "cabinet-root:NG-2Q4O0ACP");
+
+        Assert.Equal("\uE8B7", cabinetRoot.Glyph);
+        Assert.Equal("#B7791F", cabinetRoot.ColorHex);
     }
 
     [Fact]

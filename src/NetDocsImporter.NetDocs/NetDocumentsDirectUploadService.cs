@@ -152,6 +152,13 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         var createCount = 0;
         Trace.WriteLine(
             $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} start files={files.Count} uniqueFolders={uniqueRelativeFolders.Count} targetType={target.Type} targetId='{target.Id}' allowCreate={context.AllowCreateFolders}.");
+        if (target.Type == NdTargetType.WorkspaceFilter)
+        {
+            issues.Add(new DirectUploadIssue(
+                DirectUploadIssueSeverity.Warning,
+                "FILTER_FLAT_UPLOAD",
+                "Workspace Filter targets cannot contain child folders. Source folder hierarchy will not be created; files will upload directly to the selected filter and inherit the filter/workspace profile values."));
+        }
 
         foreach (var relativeFolderPath in uniqueRelativeFolders)
         {
@@ -835,6 +842,12 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             return targetContainerId;
         }
 
+        if (targetType == NdTargetType.WorkspaceFilter)
+        {
+            folderPathCache[relativeFolderPath] = targetContainerId;
+            return targetContainerId;
+        }
+
         if (folderPathCache.TryGetValue(relativeFolderPath, out var cached))
         {
             return cached;
@@ -857,6 +870,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 parentContainerId: currentContainerId,
                 childName: segment,
                 isWorkspaceRoot: isFirstSegment && targetType == NdTargetType.Workspace,
+                cabinetId: cabinetId,
                 folderChildrenCache: folderChildrenCache,
                 issues: issues,
                 cancellationToken: cancellationToken);
@@ -927,6 +941,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                             parentContainerId: currentContainerId,
                             childName: createResult.RequestedName,
                             isWorkspaceRoot: isFirstSegment && targetType == NdTargetType.Workspace,
+                            cabinetId: cabinetId,
                             folderChildrenCache: folderChildrenCache,
                             issues: issues,
                             cancellationToken: cancellationToken);
@@ -941,6 +956,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                         parentContainerId: currentContainerId,
                         childName: createResult.RequestedName,
                         isWorkspaceRoot: isFirstSegment && targetType == NdTargetType.Workspace,
+                        cabinetId: cabinetId,
                         folderChildrenCache: folderChildrenCache,
                         issues: issues,
                         cancellationToken: cancellationToken);
@@ -976,6 +992,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         string parentContainerId,
         string childName,
         bool isWorkspaceRoot,
+        string cabinetId,
         IDictionary<string, Dictionary<string, string>> folderChildrenCache,
         ICollection<DirectUploadIssue> issues,
         CancellationToken cancellationToken)
@@ -1021,7 +1038,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             return new ChildLookupResult(cachedId, cachedReliability);
         }
 
-        var listResult = await LoadChildFoldersAsync(parentContainerId, isWorkspaceRoot, issues, cancellationToken);
+        var listResult = await LoadChildFoldersAsync(parentContainerId, isWorkspaceRoot, cabinetId, issues, cancellationToken);
         folderChildrenCache[parentContainerId] = listResult.Children;
         _folderListReliabilityCache[parentContainerId] = listResult.QueryReliable;
         var found = listResult.Children.TryGetValue(NormalizeFolderName(childName), out var foundId) ? foundId : null;
@@ -1036,10 +1053,18 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     private async Task<FolderListResult> LoadChildFoldersAsync(
         string parentContainerId,
         bool isWorkspaceRoot,
+        string cabinetId,
         ICollection<DirectUploadIssue> issues,
         CancellationToken cancellationToken)
     {
         var children = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!isWorkspaceRoot &&
+            NdTargetBrowserLogic.IsCollabspaceIdentifier(parentContainerId) &&
+            !string.IsNullOrWhiteSpace(cabinetId))
+        {
+            return await LoadCollabspaceChildFoldersAsync(cabinetId, parentContainerId, issues, cancellationToken);
+        }
+
         var parentForPath = isWorkspaceRoot
             ? await ResolveWorkspaceListIdAsync(parentContainerId, cancellationToken)
             : parentContainerId;
@@ -1257,6 +1282,89 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return new FolderListResult(children, true, topLevelKeys, listNode);
     }
 
+    private async Task<FolderListResult> LoadCollabspaceChildFoldersAsync(
+        string cabinetId,
+        string parentContainerId,
+        ICollection<DirectUploadIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        var children = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var escapedCabinet = Uri.EscapeDataString(cabinetId);
+        var filter = Uri.EscapeDataString("extension eq 'ndfld'");
+        var candidateContainers = new List<string>();
+        AddCandidateContainerId(candidateContainers, parentContainerId);
+        AddCandidateContainerId(candidateContainers, TrimContainerIdVersionSuffix(parentContainerId));
+
+        foreach (var containerCandidate in candidateContainers)
+        {
+            var escapedContainer = Uri.EscapeDataString(containerCandidate);
+            var encodedContainerPath = EncodeContainerIdForPath(containerCandidate);
+            var endpoints = new[]
+            {
+                $"/v2/container/{encodedContainerPath}/sub?recursive=false&max=200&listflags=FoldersOnly,ValidateWorkspaces",
+                $"/v2/container/{encodedContainerPath}?top=200&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces",
+                $"/v2/search/{escapedCabinet}?container={escapedContainer}&top=200&filter={filter}&filtertype=IncludeOnly&listflags=FoldersOnly,ValidateWorkspaces",
+            };
+
+            foreach (var endpoint in endpoints)
+            {
+                try
+                {
+                    using var document = await _apiClient.GetJsonAsync(endpoint, cancellationToken);
+                    var items = EnumerateSearchItems(document.RootElement);
+                    foreach (var item in items)
+                    {
+                        var id = ReadString(item, "id", "containerId", "envId", "nev", "folderId");
+                        if (string.IsNullOrWhiteSpace(id))
+                        {
+                            id = TryFindStringRecursive(item, "id", "containerId", "envId", "nev", "folderId") ?? string.Empty;
+                        }
+
+                        var name = ReadString(item, "name", "displayName", "title", "description");
+                        if (string.IsNullOrWhiteSpace(name))
+                        {
+                            name = TryFindStringRecursive(item, "name", "displayName", "title", "description") ?? string.Empty;
+                        }
+
+                        var extension = ReadString(item, "extension", "ext", "Ext", "type", "objectType", "fileType");
+                        if (string.IsNullOrWhiteSpace(extension))
+                        {
+                            extension = TryFindStringRecursive(item, "extension", "ext", "Ext", "type", "objectType", "fileType") ?? string.Empty;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+                        {
+                            continue;
+                        }
+
+                        if (!IsFolderItem(item, id, extension))
+                        {
+                            continue;
+                        }
+
+                        children[NormalizeFolderName(name)] = id;
+                    }
+
+                    Trace.WriteLine(
+                        $"ND-DIRECT collabspace-list success endpoint='{endpoint}' parent='{parentContainerId}' count={children.Count}.");
+                    return new FolderListResult(children, true, "search", "$.items");
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"ND-DIRECT collabspace-list failed endpoint='{endpoint}' parent='{parentContainerId}' message='{SanitizeForTrace(ex.Message)}'.");
+                }
+            }
+        }
+
+        issues.Add(new DirectUploadIssue(
+            DirectUploadIssueSeverity.Error,
+            "FOLDER_LIST_FAILED",
+            $"Unable to list collabspace children for '{parentContainerId}'.",
+            parentContainerId));
+        return new FolderListResult(children, false, string.Empty, string.Empty);
+    }
+
     private async Task<string> ResolveWorkspaceListIdAsync(string targetWorkspaceId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(targetWorkspaceId))
@@ -1345,6 +1453,36 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return path
             .Replace("\\", "/", StringComparison.Ordinal)
             .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static void AddCandidateContainerId(ICollection<string> values, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return;
+        }
+
+        if (!values.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+        {
+            values.Add(candidate);
+        }
+    }
+
+    private static string? TrimContainerIdVersionSuffix(string? containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return null;
+        }
+
+        var trimmed = containerId.Trim();
+        var pipeIndex = trimmed.IndexOf('|');
+        if (pipeIndex <= 0)
+        {
+            return null;
+        }
+
+        return trimmed[..pipeIndex];
     }
 
     private static string GetRelativeFolderPath(string relativeFilePath)
@@ -1793,6 +1931,45 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         return null;
+    }
+
+    private static IEnumerable<JsonElement> EnumerateSearchItems(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return root.EnumerateArray();
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var name in new[]
+                     {
+                         "items", "results", "data", "documents", "records", "value", "list",
+                         "standardList", "customList", "locations", "rows", "searchResults", "hits"
+                     })
+            {
+                if (!TryGetPropertyIgnoreCase(root, name, out var child))
+                {
+                    continue;
+                }
+
+                if (child.ValueKind == JsonValueKind.Array)
+                {
+                    return child.EnumerateArray();
+                }
+
+                if (child.ValueKind == JsonValueKind.Object)
+                {
+                    var nested = EnumerateSearchItems(child).ToList();
+                    if (nested.Count > 0)
+                    {
+                        return nested;
+                    }
+                }
+            }
+        }
+
+        return Array.Empty<JsonElement>();
     }
 
     private static bool IsFolderItem(JsonElement item, string id, string extensionOrType)
