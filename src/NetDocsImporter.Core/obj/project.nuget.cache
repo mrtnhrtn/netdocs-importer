@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "6sVQ/3r4ZCQ=",
+  "dgSpecHash": "ymfAJtlA0u4=",
   "success": true,
-  "projectFilePath": "C:\\dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
+  "projectFilePath": "C:\\Dev\\netdocs-importer\\src\\NetDocsImporter.Core\\NetDocsImporter.Core.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\mrtnh\\.nuget\\packages\\microsoft.data.sqlite\\10.0.2\\microsoft.data.sqlite.10.0.2.nupkg.sha512",
     "C:\\Users\\mrtnh\\.nuget\\packages\\microsoft.data.sqlite.core\\10.0.2\\microsoft.data.sqlite.core.10.0.2.nupkg.sha512",
