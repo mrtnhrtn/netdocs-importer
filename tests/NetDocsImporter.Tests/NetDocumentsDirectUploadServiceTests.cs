@@ -221,6 +221,97 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_SavedSearchResolvesUploadScopeToWorkspace()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestPaths = new List<string>();
+        const string savedSearchId = ":AU2:s:v:5:k:~190409112306006.nev";
+        const string workspaceId = ":AU2:o:w:m:v:^W200423132232851.nev";
+
+        try
+        {
+            await SeedJobWithRootFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                lock (requestPaths)
+                {
+                    requestPaths.Add(unescapedPath);
+                }
+
+                if (string.Equals(unescapedPath, $"/v2/container/{savedSearchId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "extension": "ndsq",
+                            "workspaceId": "{{workspaceId}}",
+                            "description": "DOCX Search"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(unescapedPath, $"/v2/container/{workspaceId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{workspaceId}}",
+                            "extension": "ndws",
+                            "description": "Workspace Root"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.WorkspaceFilter,
+                    Id = savedSearchId,
+                    Name = "DOCX Search",
+                    Extension = "ndsq"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    CabinetId = "NG-2Q4O0ACP",
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Single(result.Files);
+            Assert.Equal(workspaceId, result.Files[0].DestinationContainerId);
+            Assert.Contains(result.Issues, issue => issue.Code == "SAVED_SEARCH_SCOPE_INFERRED");
+            Assert.DoesNotContain(result.Issues, issue => issue.Code == "SAVED_SEARCH_SCOPE_UNRESOLVED");
+            Assert.DoesNotContain(result.Issues, issue => issue.Code == "FILTER_FLAT_UPLOAD");
+            Assert.Contains(requestPaths, path => string.Equals(path, $"/v2/container/{savedSearchId}/info", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(requestPaths, path => string.Equals(path, $"/v2/container/{workspaceId}/info", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_CollabspaceUsesV2ContainerSubListingInsteadOfFolderEndpoint()
     {
         var tempRoot = CreateTempRoot();
@@ -290,6 +381,75 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.DoesNotContain(result.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
             Assert.Contains(requestPaths, path => Uri.UnescapeDataString(path).StartsWith("/v2/container/:AU2:z:g:r:t:^C230123140133608.nev|1/sub", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(requestPaths, path => path.StartsWith("/v1/Folder/%3AAU2%3Az%3Ag%3Ar%3At%3A%5EC230123140133608.nev%7C1", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_WhenFolderCreateForbidden_ReportsExplicitPermissionIssue()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "invoices", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await SeedJobWithDoubleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (path == "/v1/Workspace/3470-9010-7660")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[{"id":"folder-client-a","name":"client_a","type":"ndfld"}]}""");
+                }
+
+                if (path == "/v1/Folder/folder-client-a")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[],"sortOrder":"name"}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v1/Folder")
+                {
+                    return JsonResponse(HttpStatusCode.Forbidden, """{"error":"No rights on parent folder to create subfolders"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = "3470-9010-7660",
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = true,
+                    CabinetId = "NG-2Q4O0ACP"
+                },
+                CancellationToken.None);
+
+            Assert.False(result.CanUpload);
+            Assert.Empty(result.Files);
+            Assert.Contains(result.Issues, issue =>
+                issue.Code == "FOLDER_CREATE_FORBIDDEN" &&
+                string.Equals(issue.RelativePath, "client_a/invoices", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(result.Issues, issue =>
+                issue.Code == "FOLDER_RESOLVE_FAILED" &&
+                string.Equals(issue.RelativePath, "client_a/invoices", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -450,6 +610,39 @@ public class NetDocumentsDirectUploadServiceTests
             DateTime.UtcNow,
             false,
             childFolderId,
+            "inherit",
+            null));
+    }
+
+    private static async Task SeedJobWithRootFileAsync(string dbPath, string jobId, string sourceRoot, string filePath)
+    {
+        var store = new JobStore(dbPath);
+        await store.InitializeAsync();
+        await store.InsertJobAsync(new JobRecord(jobId, DateTime.UtcNow, sourceRoot, "Complete"));
+
+        var rootFolderId = Guid.NewGuid().ToString("N");
+        await store.InsertFolderAsync(new FolderRecord(
+            rootFolderId,
+            jobId,
+            sourceRoot,
+            string.Empty,
+            null,
+            0,
+            true,
+            false,
+            DateTime.UtcNow,
+            "include",
+            "inherit"));
+
+        await store.InsertFileAsync(new FileRecord(
+            Guid.NewGuid().ToString("N"),
+            jobId,
+            filePath,
+            "sample.txt",
+            new FileInfo(filePath).Length,
+            DateTime.UtcNow,
+            false,
+            rootFolderId,
             "inherit",
             null));
     }

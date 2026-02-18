@@ -60,7 +60,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         bool Success,
         string? CreatedContainerId,
         string RequestedName,
-        bool DuplicateNameConflict);
+        bool DuplicateNameConflict,
+        int FailureStatusCode,
+        string FailureReason);
 
     private readonly record struct WorkspaceFolderHydrationResult(
         bool Success,
@@ -119,6 +121,42 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             };
         }
 
+        var effectiveTarget = target;
+        if (IsSavedSearchTargetSelection(target))
+        {
+            var resolvedTarget = await TryResolveSavedSearchUploadTargetAsync(target, cancellationToken);
+            if (resolvedTarget is null)
+            {
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Error,
+                    "SAVED_SEARCH_UPLOAD_SCOPE_UNRESOLVED",
+                    "Saved Search targets are metadata-only and cannot be used directly for upload. Select a Folder, Workspace, or Workspace Filter target, or choose a Saved Search whose parent scope can be resolved."));
+                return new UploadPlanResult
+                {
+                    Folders = Array.Empty<UploadPlanFolderEntry>(),
+                    Files = Array.Empty<UploadPlanFileEntry>(),
+                    Issues = issues,
+                    TotalRequestedFiles = files.Count,
+                    PlannedFiles = 0,
+                    SkippedFiles = 0,
+                    PlannedFolderCreates = 0,
+                    CanUpload = false
+                };
+            }
+
+            effectiveTarget = resolvedTarget;
+            var resolvedTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+                resolvedTarget.Type,
+                resolvedTarget.Id,
+                resolvedTarget.Extension);
+            issues.Add(new DirectUploadIssue(
+                DirectUploadIssueSeverity.Warning,
+                "SAVED_SEARCH_SCOPE_INFERRED",
+                $"Saved Search target '{target.Name}' is metadata-only for upload. Destination was resolved to '{resolvedTarget.Name}' ({resolvedTypeDisplay})."));
+            Trace.WriteLine(
+                $"ND-DIRECT saved-search target remapped sourceId='{target.Id}' sourceName='{target.Name}' destinationId='{resolvedTarget.Id}' destinationType={resolvedTarget.Type}.");
+        }
+
         var attributes = string.IsNullOrWhiteSpace(context.CabinetId)
             ? Array.Empty<NetDocumentsAttributeRecord>()
             : await _jobStore.GetNetDocumentsAttributesAsync(context.CabinetId, cancellationToken);
@@ -151,21 +189,21 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         var createCount = 0;
         Trace.WriteLine(
-            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} start files={files.Count} uniqueFolders={uniqueRelativeFolders.Count} targetType={target.Type} targetId='{target.Id}' allowCreate={context.AllowCreateFolders}.");
-        if (target.Type == NdTargetType.WorkspaceFilter)
+            $"ND-DIRECT {(context.AllowCreateFolders ? "execution-plan" : "preflight")} start files={files.Count} uniqueFolders={uniqueRelativeFolders.Count} targetType={effectiveTarget.Type} targetId='{effectiveTarget.Id}' allowCreate={context.AllowCreateFolders}.");
+        if (effectiveTarget.Type == NdTargetType.WorkspaceFilter)
         {
             issues.Add(new DirectUploadIssue(
                 DirectUploadIssueSeverity.Warning,
                 "FILTER_FLAT_UPLOAD",
-                "Workspace Filter targets cannot contain child folders. Source folder hierarchy will not be created; files will upload directly to the selected filter and inherit the filter/workspace profile values."));
+                "Workspace Filter targets cannot contain child folders. Source folder hierarchy will not be created; files will upload directly to the selected target and inherit target/workspace profile values."));
         }
 
         foreach (var relativeFolderPath in uniqueRelativeFolders)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var destinationId = await ResolveDestinationContainerAsync(
-                target.Id,
-                target.Type,
+                effectiveTarget.Id,
+                effectiveTarget.Type,
                 context.CabinetId,
                 relativeFolderPath,
                 context.AllowCreateFolders,
@@ -825,6 +863,258 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return null;
     }
 
+    private static bool IsSavedSearchTargetSelection(NdTargetSelection target)
+    {
+        return target.Type == NdTargetType.WorkspaceFilter &&
+               NdTargetBrowserLogic.IsSavedSearchTarget(target.Id, target.Extension);
+    }
+
+    private async Task<NdTargetSelection?> TryResolveSavedSearchUploadTargetAsync(
+        NdTargetSelection savedSearchTarget,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<string>();
+        AddSavedSearchScopeCandidate(candidates, savedSearchTarget.ParentWorkspaceId);
+
+        try
+        {
+            var encoded = EncodeContainerIdForPath(savedSearchTarget.Id);
+            using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info", cancellationToken);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+                dataNode.ValueKind == JsonValueKind.Object)
+            {
+                root = dataNode;
+            }
+
+            foreach (var key in new[]
+                     {
+                         "parentContainerId", "parentId", "workspaceId", "parentWorkspaceId", "workspace",
+                         "scopeId", "locationId", "folderId"
+                     })
+            {
+                AddSavedSearchScopeCandidate(candidates, ReadString(root, key));
+            }
+
+            if (TryGetPropertyIgnoreCase(root, "ancestors", out var ancestorsNode))
+            {
+                CollectSavedSearchScopeCandidatesFromJson(ancestorsNode, candidates);
+            }
+
+            CollectSavedSearchScopeCandidatesFromJson(root, candidates);
+        }
+        catch
+        {
+            // Continue with ancestry and identifier-based fallback.
+        }
+
+        try
+        {
+            var encoded = EncodeContainerIdForPath(savedSearchTarget.Id);
+            using var ancestryDocument = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/ancestry", cancellationToken);
+            var ancestryRoot = ancestryDocument.RootElement;
+            if (ancestryRoot.ValueKind == JsonValueKind.Array)
+            {
+                var ancestryItems = ancestryRoot.EnumerateArray().ToList();
+                for (var index = ancestryItems.Count - 1; index >= 0; index--)
+                {
+                    var item = ancestryItems[index];
+                    AddSavedSearchScopeCandidate(candidates, ReadString(item, "id", "containerId", "envId", "environmentId", "workspaceId", "folderId"));
+                }
+            }
+        }
+        catch
+        {
+            // Continue with available candidates.
+        }
+
+        foreach (var candidateId in candidates)
+        {
+            if (string.Equals(candidateId, savedSearchTarget.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var resolved = await TryResolveUploadScopeCandidateAsync(candidateId, savedSearchTarget.SourceFlow, cancellationToken);
+            if (resolved is null)
+            {
+                continue;
+            }
+
+            if (resolved.Type == NdTargetType.WorkspaceFilter &&
+                NdTargetBrowserLogic.IsSavedSearchTarget(resolved.Id, resolved.Extension))
+            {
+                continue;
+            }
+
+            return resolved;
+        }
+
+        return null;
+    }
+
+    private async Task<NdTargetSelection?> TryResolveUploadScopeCandidateAsync(
+        string candidateId,
+        NdTargetSourceFlow sourceFlow,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(candidateId))
+        {
+            return null;
+        }
+
+        var effectiveId = candidateId.Trim();
+        var effectiveName = effectiveId;
+        var effectiveExtension = string.Empty;
+        var resolvedType = InferUploadTargetTypeFromIdentifier(effectiveId);
+
+        try
+        {
+            var encoded = EncodeContainerIdForPath(candidateId);
+            using var document = await _apiClient.GetJsonAsync($"/v2/container/{encoded}/info", cancellationToken);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+                dataNode.ValueKind == JsonValueKind.Object)
+            {
+                root = dataNode;
+            }
+
+            var resolvedId = ReadString(root, "id", "containerId", "envId", "environmentId", "workspaceId", "folderId");
+            if (!string.IsNullOrWhiteSpace(resolvedId))
+            {
+                effectiveId = resolvedId;
+            }
+
+            effectiveExtension = ReadString(root, "extension", "ext", "Ext");
+            var rawType = string.IsNullOrWhiteSpace(effectiveExtension)
+                ? ReadString(root, "type", "containerType", "kind", "objectType", "fileType")
+                : effectiveExtension;
+            var hasWorkspaceIdHint = TryGetPropertyIgnoreCase(root, "workspaceId", out _);
+            resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(rawType, hasWorkspaceIdHint) ??
+                           InferUploadTargetTypeFromIdentifier(effectiveId) ??
+                           resolvedType;
+
+            var resolvedName = ReadString(root, "name", "displayName", "title", "description");
+            if (!string.IsNullOrWhiteSpace(resolvedName))
+            {
+                effectiveName = resolvedName;
+            }
+        }
+        catch
+        {
+            // Keep identifier-based inference fallback.
+        }
+
+        if (resolvedType is null)
+        {
+            return null;
+        }
+
+        if (resolvedType == NdTargetType.WorkspaceFilter &&
+            NdTargetBrowserLogic.IsSavedSearchTarget(effectiveId, effectiveExtension))
+        {
+            return null;
+        }
+
+        return new NdTargetSelection
+        {
+            Type = resolvedType.Value,
+            Id = effectiveId,
+            Name = string.IsNullOrWhiteSpace(effectiveName) ? effectiveId : effectiveName,
+            ParentWorkspaceId = null,
+            Extension = effectiveExtension,
+            SourceFlow = sourceFlow
+        };
+    }
+
+    private static NdTargetType? InferUploadTargetTypeFromIdentifier(string? containerId)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+        {
+            return null;
+        }
+
+        var candidate = containerId.Trim();
+        if (NdTargetBrowserLogic.IsSavedSearchIdentifier(candidate))
+        {
+            return NdTargetType.WorkspaceFilter;
+        }
+
+        if (IsLikelyFolderId(candidate))
+        {
+            return NdTargetType.Folder;
+        }
+
+        if (candidate.Contains("^W", StringComparison.OrdinalIgnoreCase) ||
+            LegacyWorkspaceIdRegex.IsMatch(candidate))
+        {
+            return NdTargetType.Workspace;
+        }
+
+        return null;
+    }
+
+    private static void AddSavedSearchScopeCandidate(ICollection<string> candidates, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var normalized = value.Trim();
+        if (candidates.Any(existing => string.Equals(existing, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        candidates.Add(normalized);
+    }
+
+    private static void CollectSavedSearchScopeCandidatesFromJson(JsonElement node, ICollection<string> candidates, int depth = 0)
+    {
+        if (depth > 6)
+        {
+            return;
+        }
+
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in node.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                {
+                    var key = property.Name;
+                    if (key.Equals("id", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("containerId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("envId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("environmentId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("workspaceId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("parentWorkspaceId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("parentContainerId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("parentId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("folderId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("workspace", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("scopeId", StringComparison.OrdinalIgnoreCase) ||
+                        key.Equals("locationId", StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddSavedSearchScopeCandidate(candidates, property.Value.GetString());
+                    }
+                }
+
+                CollectSavedSearchScopeCandidatesFromJson(property.Value, candidates, depth + 1);
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in node.EnumerateArray())
+            {
+                CollectSavedSearchScopeCandidatesFromJson(item, candidates, depth + 1);
+            }
+        }
+    }
+
     private async Task<string?> ResolveDestinationContainerAsync(
         string targetContainerId,
         NdTargetType targetType,
@@ -876,6 +1166,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 cancellationToken: cancellationToken);
             var childContainerId = lookup.ContainerId;
             var created = false;
+            var createFailureIssueAdded = false;
 
             if (string.IsNullOrWhiteSpace(childContainerId) && !lookup.QueryReliable)
             {
@@ -967,10 +1258,35 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                             $"ND-DIRECT folder-create duplicate-resolved parent='{currentContainerId}' name='{createResult.RequestedName}' id='{childContainerId}'.");
                     }
                 }
+                else if (createResult.FailureStatusCode > 0)
+                {
+                    createFailureIssueAdded = true;
+                    if (createResult.FailureStatusCode == 403)
+                    {
+                        issues.Add(new DirectUploadIssue(
+                            DirectUploadIssueSeverity.Error,
+                            "FOLDER_CREATE_FORBIDDEN",
+                            $"Cannot create folder '{currentPath}' because this account does not have rights to create subfolders under '{currentContainerId}'.",
+                            currentPath));
+                    }
+                    else
+                    {
+                        issues.Add(new DirectUploadIssue(
+                            DirectUploadIssueSeverity.Error,
+                            "FOLDER_CREATE_FAILED",
+                            $"Folder creation failed for '{currentPath}' under '{currentContainerId}' (HTTP {createResult.FailureStatusCode}).",
+                            currentPath));
+                    }
+                }
             }
 
             if (string.IsNullOrWhiteSpace(childContainerId))
             {
+                if (createFailureIssueAdded)
+                {
+                    return null;
+                }
+
                 issues.Add(new DirectUploadIssue(
                     DirectUploadIssueSeverity.Error,
                     "FOLDER_RESOLVE_FAILED",
@@ -1411,7 +1727,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     {
         if (_folderCreateSupported == false)
         {
-            return new FolderCreateResult(false, null, NormalizeCreatedFolderName(childName), false);
+            return new FolderCreateResult(false, null, NormalizeCreatedFolderName(childName), false, 0, string.Empty);
         }
 
         var requestedName = NormalizeCreatedFolderName(childName);
@@ -1434,7 +1750,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             var createdId = response is null ? null : TryExtractCreatedContainerId(response.RootElement);
             Trace.WriteLine(
                 $"ND-DIRECT folder-create success endpoint='/v1/Folder' parent='{parentContainerId}' name='{requestedName}' id='{createdId ?? string.Empty}'.");
-            return new FolderCreateResult(true, createdId, requestedName, false);
+            return new FolderCreateResult(true, createdId, requestedName, false, 0, string.Empty);
         }
         catch (Exception ex)
         {
@@ -1444,7 +1760,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                                         ex.Message.IndexOf("already contains a folder with this name", StringComparison.OrdinalIgnoreCase) >= 0;
             Trace.WriteLine(
                 $"ND-DIRECT folder-create failed endpoint='/v1/Folder' parent='{parentContainerId}' name='{requestedName}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
-            return new FolderCreateResult(false, null, requestedName, duplicateNameConflict);
+            return new FolderCreateResult(false, null, requestedName, duplicateNameConflict, status, SanitizeForTrace(ex.Message));
         }
     }
 

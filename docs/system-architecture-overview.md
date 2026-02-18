@@ -47,9 +47,9 @@
 
 ### 1b) Workspace/Container Invariants
 
-1. Child expansion under workspace/folder tree nodes must surface `ndfld`, `ndflt`, and `ndcs` when present.
-2. Only folders/collabspaces (`ndfld`, `ndcs`) are expandable; workspace filters (`ndflt`) are terminal targets (`HasChildren=false`).
-3. Saved searches (`ndsq`) are intentionally unsupported in this app and are excluded from browse targets.
+1. Child expansion under workspace/folder tree nodes must surface `ndfld`, `ndflt`, `ndsq`, and `ndcs` when present.
+2. Only folders/collabspaces (`ndfld`, `ndcs`) are expandable; workspace filters and saved searches (`ndflt`, `ndsq`) are terminal targets (`HasChildren=false`).
+3. Saved searches (`ndsq`) are in scope and follow workspace-filter upload planning behavior (flat target, no child-folder materialization).
 4. Collabspaces are modeled as folder targets in this codebase for browse/upload behavior.
 5. API calls used for target browsing/upload planning are restricted to documented REST API manual/v2 Swagger endpoint/parameter shapes. The only known exception retained is `indexpriority`.
 

@@ -15,14 +15,15 @@
 - Target destination selection now supports only:
   - `Workspace`
   - `Workspace Filter`
+  - `Saved Search`
   - `Folder`
 - Step 1 selector now includes an expandable tree for Recent, Favorites, and Go to Workspace results:
   - A cabinet-root node is always shown at the top of the tree and expands to top-level cabinet folders.
-  - Expanding workspace/folder nodes lazy-loads child folders and workspace filters.
+  - Expanding workspace/folder nodes lazy-loads child folders, workspace filters, and saved searches.
   - Recent and Favorite entries participate in the same expandable tree behavior as Go to Workspace entries.
   - Selecting a child folder/filter commits the same target contract used by Direct API upload.
 - Unsupported target types are blocked with:
-  - `Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.`
+  - `Only Workspace, Workspace Filter/Saved Search, or Folder are supported as upload destinations in this version.`
 - Target selection now syncs profile attributes and inherited/default values.
 - Inherited/default values are persisted as `EffectiveProfileDefaults` and reused by:
   - Review & Scope (read-only baseline display)

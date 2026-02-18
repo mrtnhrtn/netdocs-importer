@@ -47,7 +47,7 @@ public sealed partial class NetDocumentsSyncService
         var targets = new List<NdTargetSelection>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var extension in new[] { "ndws", "ndflt", "ndfld" })
+        foreach (var extension in new[] { "ndws", "ndflt", "ndsq", "ndfld" })
         {
             try
             {
@@ -202,6 +202,7 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
+        var workspaceFilterInfoCache = new Dictionary<string, WorkspaceFilterInfoResult?>(StringComparer.OrdinalIgnoreCase);
         foreach (var selection in selections)
         {
             if (selection is null ||
@@ -230,6 +231,22 @@ public sealed partial class NetDocumentsSyncService
                     selection.ParentWorkspaceId = hydrated.ParentWorkspaceId;
                 }
 
+                if (!string.IsNullOrWhiteSpace(hydrated.Extension) &&
+                    (string.IsNullOrWhiteSpace(selection.Extension) ||
+                     (selection.Type == NdTargetType.WorkspaceFilter &&
+                      !NdTargetBrowserLogic.IsSavedSearchExtension(selection.Extension) &&
+                      NdTargetBrowserLogic.IsSavedSearchExtension(hydrated.Extension))))
+                {
+                    selection.Extension = hydrated.Extension;
+                }
+
+                if (selection.Type == NdTargetType.WorkspaceFilter &&
+                    hydrated.SupportedType == NdTargetType.Folder &&
+                    !NdTargetBrowserLogic.IsSavedSearchTarget(selection.Id, selection.Extension))
+                {
+                    selection.Type = NdTargetType.Folder;
+                }
+
                 if (NdTargetBrowserLogic.IsCollabspaceIdentifier(hydrated.Id) &&
                     !NdTargetBrowserLogic.IsCollabspaceIdentifier(selection.Id))
                 {
@@ -242,9 +259,48 @@ public sealed partial class NetDocumentsSyncService
                 }
             }
 
-            selection.Name = ResolveFriendlyContainerName(selection.Name, selection.Id, selection.Type);
+            if (selection.Type == NdTargetType.WorkspaceFilter &&
+                (NeedsWorkspaceFilterNameResolution(selection) ||
+                 string.IsNullOrWhiteSpace(selection.Extension) ||
+                 !NdTargetBrowserLogic.IsSavedSearchExtension(selection.Extension)))
+            {
+                if (!workspaceFilterInfoCache.TryGetValue(selection.Id, out var filterInfo))
+                {
+                    filterInfo = await TryHydrateWorkspaceFilterInfoAsync(selection.Id, cancellationToken);
+                    workspaceFilterInfoCache[selection.Id] = filterInfo;
+                }
+
+                if (filterInfo is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(filterInfo.Value.DisplayName))
+                    {
+                        selection.Name = filterInfo.Value.DisplayName;
+                    }
+
+                    if (NdTargetBrowserLogic.IsSavedSearchExtension(filterInfo.Value.Extension))
+                    {
+                        selection.Extension = "ndsq";
+                    }
+                    else if (string.IsNullOrWhiteSpace(selection.Extension) &&
+                             !string.IsNullOrWhiteSpace(filterInfo.Value.Extension))
+                    {
+                        selection.Extension = filterInfo.Value.Extension;
+                    }
+                }
+            }
+
+            if (selection.Type == NdTargetType.WorkspaceFilter &&
+                string.IsNullOrWhiteSpace(selection.Extension) &&
+                NdTargetBrowserLogic.IsSavedSearchIdentifier(selection.Id))
+            {
+                selection.Extension = "ndsq";
+            }
+
+            selection.Name = ResolveFriendlyContainerName(selection.Name, selection.Id, selection.Type, selection.Extension);
         }
     }
+
+    private readonly record struct WorkspaceFilterInfoResult(string? DisplayName, string? Extension);
 
     /// <summary>
     /// Searches lookup values for a specific attribute.
@@ -645,6 +701,7 @@ public sealed partial class NetDocumentsSyncService
 
                 var acceptedPrimaryContainerRows = false;
                 var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
+                var workspaceFilterInfoCache = new Dictionary<string, WorkspaceFilterInfoResult?>(StringComparer.OrdinalIgnoreCase);
                 var seenIdentityKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var seenDisplayKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var scopeCandidate in searchScopeCandidates)
@@ -661,6 +718,7 @@ public sealed partial class NetDocumentsSyncService
                             queryResult.Items,
                             results,
                             hydratedNameCache,
+                            workspaceFilterInfoCache,
                             seenIdentityKeys,
                             seenDisplayKeys,
                             parentContainerId,
@@ -678,7 +736,7 @@ public sealed partial class NetDocumentsSyncService
                                                    !queryResult.Items.Any(item => item.Type == NdTargetType.WorkspaceFilter);
                     if (shouldRunExtensionSearch)
                     {
-                        // Some tenants omit ndflt/ndcs rows in container list responses.
+                        // Some tenants omit ndflt/ndsq/ndcs rows in container list responses.
                         // Supplement child expansion with explicit extension searches only when needed.
                         foreach (var extension in BuildChildExpansionSearchExtensions(includeFolders: !acceptedPrimaryContainerRows))
                         {
@@ -698,6 +756,7 @@ public sealed partial class NetDocumentsSyncService
                                 items,
                                 results,
                                 hydratedNameCache,
+                                workspaceFilterInfoCache,
                                 seenIdentityKeys,
                                 seenDisplayKeys,
                                 parentContainerId,
@@ -713,7 +772,7 @@ public sealed partial class NetDocumentsSyncService
                         }
 
                         // Keep merging across all container-id variants before returning.
-                        // Some tenants return ndflt/ndcs rows only for specific id shapes (for example with/without version suffix).
+                        // Some tenants return ndflt/ndsq/ndcs rows only for specific id shapes (for example with/without version suffix).
                         continue;
                     }
                 }
@@ -769,6 +828,7 @@ public sealed partial class NetDocumentsSyncService
         IReadOnlyList<NdTargetSelection> items,
         ICollection<NdContainerNode> results,
         IDictionary<string, NdContainerNode?> hydratedNameCache,
+        IDictionary<string, WorkspaceFilterInfoResult?> workspaceFilterInfoCache,
         ISet<string> seenIdentityKeys,
         ISet<string> seenDisplayKeys,
         string? parentContainerId,
@@ -784,6 +844,7 @@ public sealed partial class NetDocumentsSyncService
                 ParentId = parentContainerId ?? string.Empty,
                 ParentWorkspaceId = item.ParentWorkspaceId,
                 PathDisplay = string.Empty,
+                Extension = item.Extension,
                 SupportedType = item.Type,
                 IsSelectable = true,
                 UnsupportedReason = string.Empty,
@@ -817,14 +878,58 @@ public sealed partial class NetDocumentsSyncService
                     node.PathDisplay = string.IsNullOrWhiteSpace(node.PathDisplay) ? hydrated.PathDisplay : node.PathDisplay;
                     node.ParentWorkspaceId = string.IsNullOrWhiteSpace(node.ParentWorkspaceId) ? hydrated.ParentWorkspaceId : node.ParentWorkspaceId;
                     node.SupportedType = hydrated.SupportedType ?? node.SupportedType;
+                    if (!string.IsNullOrWhiteSpace(hydrated.Extension) &&
+                        (string.IsNullOrWhiteSpace(node.Extension) ||
+                         (node.SupportedType == NdTargetType.WorkspaceFilter &&
+                          !NdTargetBrowserLogic.IsSavedSearchExtension(node.Extension) &&
+                          NdTargetBrowserLogic.IsSavedSearchExtension(hydrated.Extension))))
+                    {
+                        node.Extension = hydrated.Extension;
+                    }
                 }
+            }
+
+            if (node.SupportedType == NdTargetType.WorkspaceFilter &&
+                (string.IsNullOrWhiteSpace(node.Extension) ||
+                 !NdTargetBrowserLogic.IsSavedSearchExtension(node.Extension)))
+            {
+                if (!workspaceFilterInfoCache.TryGetValue(node.Id, out var filterInfo))
+                {
+                    filterInfo = await TryHydrateWorkspaceFilterInfoAsync(node.Id, cancellationToken);
+                    workspaceFilterInfoCache[node.Id] = filterInfo;
+                }
+
+                if (filterInfo is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(filterInfo.Value.DisplayName))
+                    {
+                        node.Name = filterInfo.Value.DisplayName;
+                    }
+
+                    if (NdTargetBrowserLogic.IsSavedSearchExtension(filterInfo.Value.Extension))
+                    {
+                        node.Extension = "ndsq";
+                    }
+                    else if (string.IsNullOrWhiteSpace(node.Extension) &&
+                             !string.IsNullOrWhiteSpace(filterInfo.Value.Extension))
+                    {
+                        node.Extension = filterInfo.Value.Extension;
+                    }
+                }
+            }
+
+            if (node.SupportedType == NdTargetType.WorkspaceFilter &&
+                string.IsNullOrWhiteSpace(node.Extension) &&
+                NdTargetBrowserLogic.IsSavedSearchIdentifier(node.Id))
+            {
+                node.Extension = "ndsq";
             }
 
             if (string.IsNullOrWhiteSpace(node.Name))
             {
                 node.Name = node.Id;
             }
-            node.Name = ResolveFriendlyContainerName(node.Name, node.Id, node.SupportedType);
+            node.Name = ResolveFriendlyContainerName(node.Name, node.Id, node.SupportedType, node.Extension);
 
             if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
             {
@@ -914,6 +1019,11 @@ public sealed partial class NetDocumentsSyncService
                             // Workspace endpoint returns filters/saved-searches without stable type tokens in some tenants.
                             // Ambiguous ~*.nev rows from this endpoint are workspace-filter containers in practice.
                             parsed.Type = NdTargetType.WorkspaceFilter;
+                            if (string.IsNullOrWhiteSpace(parsed.Extension))
+                            {
+                                parsed.Extension = ReadExtensionValue(item);
+                            }
+
                             if (string.IsNullOrWhiteSpace(parsed.Extension))
                             {
                                 parsed.Extension = "ndflt";
@@ -1316,6 +1426,138 @@ public sealed partial class NetDocumentsSyncService
         return null;
     }
 
+    private async Task<WorkspaceFilterInfoResult?> TryHydrateWorkspaceFilterInfoAsync(
+        string filterId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(filterId))
+        {
+            return null;
+        }
+
+        var candidates = new List<string>();
+        AddSearchScopeCandidate(candidates, filterId);
+        AddSearchScopeCandidate(candidates, TrimContainerIdVersionSuffix(filterId));
+        foreach (var candidate in BuildContainerIdCandidates(filterId, NormalizeWorkspaceEnvId(filterId)))
+        {
+            AddSearchScopeCandidate(candidates, candidate);
+        }
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var encoded = Uri.EscapeDataString(candidate);
+                using var document = await _apiClient.GetJsonAsync($"/v1/Filter/{encoded}/info", cancellationToken);
+                var resolvedName = ReadWorkspaceFilterInfoName(document.RootElement);
+                var resolvedExtension = ReadWorkspaceFilterInfoExtension(document.RootElement, candidate);
+                if (string.IsNullOrWhiteSpace(resolvedName) &&
+                    string.IsNullOrWhiteSpace(resolvedExtension))
+                {
+                    continue;
+                }
+
+                Trace.WriteLine($"NetDocuments filter info resolved id='{candidate}' name='{resolvedName}' extension='{resolvedExtension}'.");
+                return new WorkspaceFilterInfoResult(resolvedName, resolvedExtension);
+            }
+            catch
+            {
+                // Try the next candidate id.
+            }
+        }
+
+        return null;
+    }
+
+    private static string ReadWorkspaceFilterInfoName(JsonElement root)
+    {
+        var source = root;
+        if (root.ValueKind == JsonValueKind.Object &&
+            TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+            dataNode.ValueKind == JsonValueKind.Object)
+        {
+            source = dataNode;
+        }
+
+        var name = ReadPreferredContainerName(source, SelectTargetSelectionSource(source));
+        if (IsValidContainerDisplayName(name) && !LooksLikeContainerIdentifier(name))
+        {
+            return name;
+        }
+
+        var fallback = ReadString(
+            source,
+            "name",
+            "displayName",
+            "description",
+            "label",
+            "title",
+            "filterName",
+            "filterDisplayName");
+        if (IsValidContainerDisplayName(fallback) && !LooksLikeContainerIdentifier(fallback))
+        {
+            return fallback;
+        }
+
+        return string.Empty;
+    }
+
+    private static string ReadWorkspaceFilterInfoExtension(JsonElement root, string? fallbackFilterId)
+    {
+        var source = root;
+        if (root.ValueKind == JsonValueKind.Object &&
+            TryGetPropertyIgnoreCase(root, "data", out var dataNode) &&
+            dataNode.ValueKind == JsonValueKind.Object)
+        {
+            source = dataNode;
+        }
+
+        foreach (var node in new[] { source, SelectTargetSelectionSource(source), root, SelectTargetSelectionSource(root) })
+        {
+            var extension = ReadExtensionValue(node);
+            if (NdTargetBrowserLogic.IsSavedSearchExtension(extension))
+            {
+                return "ndsq";
+            }
+        }
+
+        foreach (var node in new[] { source, SelectTargetSelectionSource(source), root, SelectTargetSelectionSource(root) })
+        {
+            var id = ReadString(node, "id", "filterId", "containerId", "envId");
+            if (NdTargetBrowserLogic.IsSavedSearchIdentifier(id) ||
+                NdTargetBrowserLogic.IsSavedSearchIdentifier(fallbackFilterId))
+            {
+                return "ndsq";
+            }
+
+            if (ReadBool(node, "isSavedSearch", "savedSearch", "isSavedQuery", "savedQuery"))
+            {
+                return "ndsq";
+            }
+
+            var typeToken = ReadString(node, "type", "filterType", "kind", "searchType", "itemType");
+            if (LooksLikeSavedSearchTypeToken(typeToken))
+            {
+                return "ndsq";
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static bool LooksLikeSavedSearchTypeToken(string? rawType)
+    {
+        var normalized = (rawType ?? string.Empty)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Trim()
+            .ToLowerInvariant();
+
+        return normalized is "ndsq" or "savedsearch" or "savedquery" or "search" ||
+               normalized.Contains("savedsearch", StringComparison.Ordinal);
+    }
+
     private async Task<string?> TryResolveDisplayNameFromAncestryAsync(string containerId, CancellationToken cancellationToken)
     {
         var candidates = new List<string>();
@@ -1600,7 +1842,8 @@ public sealed partial class NetDocumentsSyncService
         var ambiguousNevIdentifier = IsAmbiguousNevEnvelopeIdentifier(id);
         var defaultExtensionNormalized = (defaultExtension ?? string.Empty).Trim();
         var allowAmbiguousDefaultType = string.Equals(defaultExtensionNormalized, "ndws", StringComparison.OrdinalIgnoreCase) ||
-                                        string.Equals(defaultExtensionNormalized, "ndflt", StringComparison.OrdinalIgnoreCase);
+                                        string.Equals(defaultExtensionNormalized, "ndflt", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(defaultExtensionNormalized, "ndsq", StringComparison.OrdinalIgnoreCase);
         var hasWorkspaceIdHint =
             TryGetPropertyIgnoreCase(source, "workspaceId", out _) ||
             TryGetPropertyIgnoreCase(element, "workspaceId", out _);
@@ -1633,7 +1876,8 @@ public sealed partial class NetDocumentsSyncService
         var effectiveName = ResolveFriendlyContainerName(
             string.IsNullOrWhiteSpace(name) ? id : name,
             id,
-            resolvedType.Value);
+            resolvedType.Value,
+            string.IsNullOrWhiteSpace(extension) ? defaultExtension : extension);
         if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, resolvedType))
         {
             return null;
@@ -1714,7 +1958,7 @@ public sealed partial class NetDocumentsSyncService
             foreach (var key in new[]
                      {
                          "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames",
-                         "standardAttributes", "attributes", "profile", "filter", "filters", "workspaceFilter", "ndflt", "metadata"
+                         "standardAttributes", "attributes", "profile", "filter", "filters", "workspaceFilter", "ndflt", "ndsq", "metadata"
                      })
             {
                 if (TryGetPropertyIgnoreCase(root, key, out var nested) && nested.ValueKind == JsonValueKind.Object)
@@ -1737,7 +1981,7 @@ public sealed partial class NetDocumentsSyncService
             foreach (var key in new[]
                      {
                          "data", "item", "result", "value", "containerInfo", "container", "descriptions", "dispNames", "locations",
-                         "filter", "filters", "workspaceFilter", "ndflt", "metadata"
+                         "filter", "filters", "workspaceFilter", "ndflt", "ndsq", "metadata"
                      })
             {
                 if (TryGetPropertyIgnoreCase(root, key, out var nested))
@@ -1929,7 +2173,8 @@ public sealed partial class NetDocumentsSyncService
         var effectiveName = ResolveFriendlyContainerName(
             string.IsNullOrWhiteSpace(name) ? id : name,
             id,
-            normalizedType.Value);
+            normalizedType.Value,
+            extension);
         if (ShouldSuppressCabinetPseudoContainer(effectiveName, id, normalizedType))
         {
             return null;
@@ -2271,6 +2516,18 @@ public sealed partial class NetDocumentsSyncService
 
     private static bool ShouldHydrateSelectionName(NdTargetSelection selection)
     {
+        if (NeedsWorkspaceFilterNameResolution(selection))
+        {
+            return true;
+        }
+
+        if (selection.Type == NdTargetType.WorkspaceFilter &&
+            IsAmbiguousNevEnvelopeIdentifier(selection.Id) &&
+            !NdTargetBrowserLogic.IsSavedSearchExtension(selection.Extension))
+        {
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(selection.Name))
         {
             return true;
@@ -2287,6 +2544,31 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return LooksLikeContainerIdentifier(selection.Name);
+    }
+
+    private static bool NeedsWorkspaceFilterNameResolution(NdTargetSelection selection)
+    {
+        if (selection.Type != NdTargetType.WorkspaceFilter)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(selection.Name))
+        {
+            return true;
+        }
+
+        if (string.Equals(selection.Name, selection.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (LooksLikeContainerIdentifier(selection.Name))
+        {
+            return true;
+        }
+
+        return IsSyntheticWorkspaceFilterName(selection.Name);
     }
 
     private static IEnumerable<string> BuildRecentEndpointCandidatesV2(string? cabinetId)
@@ -2671,7 +2953,8 @@ public sealed partial class NetDocumentsSyncService
             Name = ResolveFriendlyContainerName(
                 string.IsNullOrWhiteSpace(name) ? id : name,
                 id,
-                supportedType),
+                supportedType,
+                extension),
             TypeRaw = rawType,
             Extension = extension,
             ParentId = parentId,
@@ -2953,13 +3236,14 @@ public sealed partial class NetDocumentsSyncService
 
     private static IEnumerable<string> BuildChildExpansionSearchExtensions(bool includeFolders)
     {
-        // Child expansion must surface folders, workspace filters, and collabspaces.
+        // Child expansion must surface folders, workspace filters/saved-searches, and collabspaces.
         if (includeFolders)
         {
             yield return "ndfld";
         }
 
         yield return "ndflt";
+        yield return "ndsq";
         yield return "ndcs";
     }
 
@@ -2976,7 +3260,7 @@ public sealed partial class NetDocumentsSyncService
             yield return "ValidateWorkspaces";
         }
 
-        // Some tenants only return ndflt/ndcs when listflags is omitted.
+        // Some tenants only return ndflt/ndsq/ndcs when listflags is omitted.
         yield return null;
     }
 
@@ -3161,12 +3445,23 @@ public sealed partial class NetDocumentsSyncService
             return null;
         }
 
+        var extension = ReadExtensionValue(source);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ReadExtensionValue(element);
+        }
+
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = "ndflt";
+        }
+
         var name = ReadPreferredContainerName(element, source);
         if (string.IsNullOrWhiteSpace(name))
         {
             name = id;
         }
-        name = ResolveFriendlyContainerName(name, id, NdTargetType.WorkspaceFilter);
+        name = ResolveFriendlyContainerName(name, id, NdTargetType.WorkspaceFilter, extension);
 
         return new NdTargetSelection
         {
@@ -3174,7 +3469,7 @@ public sealed partial class NetDocumentsSyncService
             Name = name,
             Type = NdTargetType.WorkspaceFilter,
             ParentWorkspaceId = ReadString(source, "parentWorkspaceId", "workspaceId", "parentId", "workspace"),
-            Extension = "ndflt",
+            Extension = extension,
             SourceFlow = NdTargetSourceFlow.Browse
         };
     }
@@ -3392,10 +3687,12 @@ public sealed partial class NetDocumentsSyncService
 
         var trimmed = name.Trim();
         return trimmed.StartsWith("Workspace Filter (", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(trimmed, "Workspace Filter (Unresolved)", StringComparison.OrdinalIgnoreCase);
+               trimmed.StartsWith("Saved Search (", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(trimmed, "Workspace Filter (Unresolved)", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(trimmed, "Saved Search (Unresolved)", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ResolveFriendlyContainerName(string? name, string? id, NdTargetType? type)
+    private static string ResolveFriendlyContainerName(string? name, string? id, NdTargetType? type, string? extension = null)
     {
         var effectiveName = (name ?? string.Empty).Trim();
         var effectiveId = id?.Trim() ?? string.Empty;
@@ -3412,10 +3709,13 @@ public sealed partial class NetDocumentsSyncService
             return effectiveName;
         }
 
+        var label = NdTargetBrowserLogic.IsSavedSearchTarget(effectiveId, extension)
+            ? "Saved Search"
+            : "Workspace Filter";
         var hint = BuildContainerNameHint(effectiveId);
         return string.IsNullOrWhiteSpace(hint)
-            ? "Workspace Filter (Unresolved)"
-            : $"Workspace Filter ({hint})";
+            ? $"{label} (Unresolved)"
+            : $"{label} ({hint})";
     }
 
     private static string BuildContainerNameHint(string? id)
@@ -3601,7 +3901,7 @@ public sealed partial class NetDocumentsSyncService
             .Replace("_", string.Empty, StringComparison.Ordinal)
             .Trim()
             .ToLowerInvariant();
-        return normalized is "workspace" or "workspacefilter" or "folder" or "ndws" or "ndflt" or "ndfld" or "ndcs" or "collabspace";
+        return normalized is "workspace" or "workspacefilter" or "savedsearch" or "folder" or "ndws" or "ndflt" or "ndsq" or "ndfld" or "ndcs" or "collabspace";
     }
 
     private static bool IsWorkspaceTypeToken(string? rawType)

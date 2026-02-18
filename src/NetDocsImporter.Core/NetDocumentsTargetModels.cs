@@ -250,7 +250,7 @@ public sealed class NdTargetProfileSnapshot
 
 public static class NdTargetBrowserLogic
 {
-    private const string UnsupportedMessage = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string UnsupportedMessage = "Only Workspace, Workspace Filter/Saved Search, or Folder are supported as upload destinations in this version.";
     private const string CabinetRootTargetPrefix = "cabinet-root:";
 
     public static string BuildTargetKey(NdTargetSelection selection)
@@ -274,9 +274,11 @@ public static class NdTargetBrowserLogic
         {
             "workspace" => NdTargetType.Workspace,
             "workspacefilter" => NdTargetType.WorkspaceFilter,
+            "savedsearch" => NdTargetType.WorkspaceFilter,
             "folder" => NdTargetType.Folder,
             "ndws" => NdTargetType.Workspace,
             "ndflt" => NdTargetType.WorkspaceFilter,
+            "ndsq" => NdTargetType.WorkspaceFilter,
             "ndfld" => NdTargetType.Folder,
             "ndcs" => NdTargetType.Folder,
             "collabspace" => NdTargetType.Folder,
@@ -331,10 +333,15 @@ public static class NdTargetBrowserLogic
 
     public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type)
     {
-        return ResolveIconDescriptor(type, targetId: null);
+        return ResolveIconDescriptor(type, targetId: null, extension: null);
     }
 
     public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId)
+    {
+        return ResolveIconDescriptor(type, targetId, extension: null);
+    }
+
+    public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId, string? extension)
     {
         if (!type.HasValue && IsCabinetRootIdentifier(targetId))
         {
@@ -345,6 +352,7 @@ public static class NdTargetBrowserLogic
         {
             NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => new NdTargetIconDescriptor("\uE77B", "#2B6CB0"),
             NdTargetType.Folder => new NdTargetIconDescriptor("\uE8B7", "#D69E2E"),
+            NdTargetType.WorkspaceFilter when IsSavedSearchTarget(targetId, extension) => new NdTargetIconDescriptor("\uE721", "#C53030"),
             NdTargetType.WorkspaceFilter => new NdTargetIconDescriptor("\uE71C", "#2B6CB0"),
             NdTargetType.Workspace => new NdTargetIconDescriptor("\uE821", "#4A5568"),
             _ => new NdTargetIconDescriptor("\uE9CE", "#718096")
@@ -353,14 +361,55 @@ public static class NdTargetBrowserLogic
 
     public static string ResolveTypeDisplay(NdTargetType type, string? targetId)
     {
+        return ResolveTypeDisplay(type, targetId, extension: null);
+    }
+
+    public static string ResolveTypeDisplay(NdTargetType type, string? targetId, string? extension)
+    {
         return type switch
         {
             NdTargetType.Workspace => "Workspace",
+            NdTargetType.WorkspaceFilter when IsSavedSearchTarget(targetId, extension) => "Saved Search",
             NdTargetType.WorkspaceFilter => "Workspace Filter",
             NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => "Collabspace",
             NdTargetType.Folder => "Folder",
             _ => type.ToString()
         };
+    }
+
+    public static bool IsSavedSearchTarget(string? targetId, string? extension)
+    {
+        return IsSavedSearchExtension(extension) || IsSavedSearchIdentifier(targetId);
+    }
+
+    public static bool IsSavedSearchExtension(string? extension)
+    {
+        return string.Equals(
+            extension?.Trim(),
+            "ndsq",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsSavedSearchIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        var decoded = Uri.UnescapeDataString(targetId.Trim());
+        if (!decoded.StartsWith(":", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var segments = decoded.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length < 2)
+        {
+            return false;
+        }
+
+        return string.Equals(segments[1], "s", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsCollabspaceIdentifier(string? targetId)

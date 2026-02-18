@@ -10,6 +10,7 @@ public class NetDocumentsTargetBrowserLogicTests
     [InlineData("folder", NdTargetType.Folder)]
     [InlineData("ndws", NdTargetType.Workspace)]
     [InlineData("ndflt", NdTargetType.WorkspaceFilter)]
+    [InlineData("ndsq", NdTargetType.WorkspaceFilter)]
     [InlineData("ndfld", NdTargetType.Folder)]
     [InlineData("ndcs", NdTargetType.Folder)]
     public void NormalizeSupportedType_RecognizesAllowedTypes(string raw, NdTargetType expected)
@@ -21,7 +22,7 @@ public class NetDocumentsTargetBrowserLogicTests
     [Fact]
     public void NormalizeSupportedType_UnsupportedTypeReturnsNull()
     {
-        var result = NdTargetBrowserLogic.NormalizeSupportedType("ndsq", hasWorkspaceIdHint: false);
+        var result = NdTargetBrowserLogic.NormalizeSupportedType("nddoc", hasWorkspaceIdHint: false);
         Assert.Null(result);
     }
 
@@ -120,6 +121,18 @@ public class NetDocumentsTargetBrowserLogicTests
     }
 
     [Fact]
+    public void ResolveIconDescriptor_SavedSearchExtension_UsesQueryIcon()
+    {
+        var icon = NdTargetBrowserLogic.ResolveIconDescriptor(
+            NdTargetType.WorkspaceFilter,
+            targetId: ":AU2:s:v:5:k:~190409112306006.nev",
+            extension: "ndsq");
+
+        Assert.Equal("\uE721", icon.Glyph);
+        Assert.Equal("#C53030", icon.ColorHex);
+    }
+
+    [Fact]
     public void ResolveIconDescriptor_FolderCollabspaceIdentifier_UsesPersonBlueIcon()
     {
         var collabspace = NdTargetBrowserLogic.ResolveIconDescriptor(
@@ -159,6 +172,27 @@ public class NetDocumentsTargetBrowserLogicTests
             ":AU2:u:3:e:p:~260209191130366.nev");
 
         Assert.Equal("Folder", typeDisplay);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_WorkspaceFilterNdsq_ReturnsSavedSearch()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.WorkspaceFilter,
+            ":AU2:s:v:5:k:~190409112306006.nev",
+            extension: "ndsq");
+
+        Assert.Equal("Saved Search", typeDisplay);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_WorkspaceFilterSavedSearchIdentifierWithoutExtension_ReturnsSavedSearch()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.WorkspaceFilter,
+            ":AU2:s:v:5:k:~190409112306006.nev");
+
+        Assert.Equal("Saved Search", typeDisplay);
     }
 
     [Fact]

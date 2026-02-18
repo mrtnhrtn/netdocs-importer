@@ -1703,6 +1703,84 @@ public class NetDocumentsSyncServiceTargetsTests
     }
 
     [Fact]
+    public async Task GetRecentTargetsAsync_ReclassifiesAmbiguousWorkspaceFilterToFolderWhenHydrationReportsFolder()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string ambiguousEnvId = ":AU2:g:q:e:s:~190619144822857.nev";
+        const string parentWorkspaceId = ":AU2:o:w:m:v:^W200423132232851.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{ambiguousEnvId}}",
+                                "description": "WILL - Will",
+                                "workspaceId": "{{parentWorkspaceId}}"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(ambiguousEnvId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{ambiguousEnvId}}",
+                            "extension": "ndfld",
+                            "dispNames": {
+                              "long": "WILL - Will"
+                            }
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(ambiguousEnvId, item.Selection.Id);
+            Assert.Equal("WILL - Will", item.Selection.Name);
+            Assert.Equal("ndfld", item.Selection.Extension);
+            Assert.Equal(NdTargetType.Folder, item.Selection.Type);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GetRecentTargetsAsync_UsesFriendlyNameWhenWorkspaceFilterMetadataIsNevOnly()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
@@ -1762,6 +1840,346 @@ public class NetDocumentsSyncServiceTargetsTests
             var item = Assert.Single(recents);
             Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
             Assert.StartsWith("Workspace Filter (", item.Selection.Name, StringComparison.Ordinal);
+            Assert.DoesNotContain(".nev", item.Selection.Name, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetRecentTargetsAsync_ResolvesWorkspaceFilterNameFromFilterInfoEndpoint()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string filterId = ":AU2:i:y:9:r:~240321180539808.nev";
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is not null)
+                {
+                    lock (requests)
+                    {
+                        requests.Add(request.RequestUri);
+                    }
+                }
+
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{filterId}}",
+                                "description": "{{filterId}}",
+                                "Ext": "ndflt"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(filterId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{filterId}}",
+                            "extension": "ndflt",
+                            "description": "{{filterId}}"
+                          }
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v1/Filter/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(filterId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": ":AU2:i:y:9:r:~240321180539808.nev",
+                            "filterDisplayName": "Assigned To Me"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
+            Assert.Equal("Assigned To Me", item.Selection.Name);
+            Assert.Contains(
+                requests,
+                uri => string.Equals(
+                    Uri.UnescapeDataString(uri.AbsolutePath),
+                    $"/v1/Filter/{filterId}/info",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetRecentTargetsAsync_UpgradesWorkspaceFilterToSavedSearchWhenFilterInfoIndicatesSavedSearch()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string savedSearchId = ":AU2:8:j:y:1:~260218204352120.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{savedSearchId}}",
+                                "description": "All emails",
+                                "Ext": "ndflt"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(savedSearchId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "extension": "ndflt",
+                            "description": "All emails"
+                          }
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v1/Filter/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(savedSearchId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": ":AU2:8:j:y:1:~260218204352120.nev",
+                            "filterDisplayName": "All emails",
+                            "isSavedSearch": true
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
+            Assert.Equal("All emails", item.Selection.Name);
+            Assert.Equal("ndsq", item.Selection.Extension);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetRecentTargetsAsync_UsesSavedSearchFallbackNameWhenNdsqMetadataIsNevOnly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string savedSearchId = ":AU2:s:v:5:k:~190409112306006.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{savedSearchId}}",
+                                "description": "{{savedSearchId}}",
+                                "Ext": "ndsq"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(savedSearchId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "extension": "ndsq",
+                            "description": "{{savedSearchId}}"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
+            Assert.Equal("ndsq", item.Selection.Extension);
+            Assert.StartsWith("Saved Search (", item.Selection.Name, StringComparison.Ordinal);
+            Assert.DoesNotContain(".nev", item.Selection.Name, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetRecentTargetsAsync_UsesSavedSearchFallbackNameWhenIdentifierIsSavedSearchButExtLooksLikeFilter()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string savedSearchId = ":AU2:s:v:5:k:~190409112306006.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var unescapedPath = Uri.UnescapeDataString(path);
+                if (path.StartsWith("/v1/User/wsRecent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "{{savedSearchId}}",
+                                "description": "{{savedSearchId}}",
+                                "Ext": "ndflt"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (unescapedPath.StartsWith("/v2/container/", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.EndsWith("/info", StringComparison.OrdinalIgnoreCase) &&
+                    unescapedPath.Contains(savedSearchId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "extension": "ndflt",
+                            "description": "{{savedSearchId}}"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var recents = await service.GetRecentTargetsAsync(cabinetId: "NG-CAB");
+
+            var item = Assert.Single(recents);
+            Assert.Equal(NdTargetType.WorkspaceFilter, item.Selection.Type);
+            Assert.StartsWith("Saved Search (", item.Selection.Name, StringComparison.Ordinal);
             Assert.DoesNotContain(".nev", item.Selection.Name, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -3154,6 +3572,136 @@ public class NetDocumentsSyncServiceTargetsTests
             Assert.Equal(2, nodes.Count);
             Assert.Equal(NdTargetType.Folder, nodes.Single(n => n.Id == "FLD-100").SupportedType);
             Assert.Equal(NdTargetType.WorkspaceFilter, nodes.Single(n => n.Id == filterId).SupportedType);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetContainerChildrenAsync_UpgradesAmbiguousWorkspaceRowsToSavedSearchWhenFilterInfoIndicatesSavedSearch()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        const string workspaceId = ":AU2:o:w:m:v:^W200423132232851.nev";
+        const string savedSearchId = ":AU2:8:j:y:1:~260218204352120.nev";
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri);
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+
+                if (string.Equals(path, $"/v2/container/{workspaceId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        { "data": { "id": "{{workspaceId}}", "description": "Workspace Root", "extension": "ndws" } }
+                        """);
+                }
+
+                if (string.Equals(path, $"/v1/Workspace/{workspaceId}", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLD-100",
+                                "description": "General",
+                                "Ext": "ndfld",
+                                "workspaceId": "{{workspaceId}}"
+                              }
+                            },
+                            {
+                              "standardAttributes": {
+                                "id": "{{savedSearchId}}",
+                                "description": "All emails",
+                                "workspaceId": "{{workspaceId}}"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, $"/v2/container/{savedSearchId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "extension": "ndflt",
+                            "description": "All emails"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, $"/v1/Filter/{savedSearchId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{savedSearchId}}",
+                            "filterDisplayName": "All emails",
+                            "isSavedSearch": true
+                          }
+                        }
+                        """);
+                }
+
+                if (path.StartsWith($"/v2/container/{workspaceId}", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("top=200", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync("NG-CAB", parentContainerId: workspaceId, workspaceId: workspaceId);
+
+            Assert.Equal(2, nodes.Count);
+            var savedSearch = nodes.Single(n => n.Id == savedSearchId);
+            Assert.Equal(NdTargetType.WorkspaceFilter, savedSearch.SupportedType);
+            Assert.Equal("All emails", savedSearch.Name);
+            Assert.Equal("ndsq", savedSearch.Extension);
+            Assert.Equal(
+                "Saved Search",
+                NdTargetBrowserLogic.ResolveTypeDisplay(savedSearch.SupportedType!.Value, savedSearch.Id, savedSearch.Extension));
+            Assert.Contains(
+                requests,
+                uri => string.Equals(
+                    Uri.UnescapeDataString(uri.AbsolutePath),
+                    $"/v1/Filter/{savedSearchId}/info",
+                    StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

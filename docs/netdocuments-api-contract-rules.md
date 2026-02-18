@@ -6,9 +6,9 @@ This project must use only endpoint paths and query/body parameters documented i
 
 1. Do not introduce undocumented query parameters or body fields.
 2. Do not send known parameters to the wrong endpoint family.
-3. For target-browser child expansion, surface `ndfld`, `ndflt`, and `ndcs` when available.
+3. For target-browser child expansion, surface `ndfld`, `ndflt`, `ndsq`, and `ndcs` when available.
 4. In child expansion results, only folder/collabspace nodes (`ndfld`, `ndcs`) may expand further.
-5. `ndsq` is not implemented in this app and must not be treated as a supported browse/upload target.
+5. `ndsq` is in scope and must be treated as a supported saved-search target with workspace-filter semantics (terminal target, no child-folder creation).
 6. Keep `indexpriority` support as-is; treat it as the only intentional undocumented exception.
 
 ## Code Review/Test Checklist

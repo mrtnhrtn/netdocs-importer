@@ -136,7 +136,10 @@ public sealed partial class MainViewModel
             var infoCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Info);
             var plannedFolderCreates = plan.PlannedFolderCreates;
             var skippedSummary = DirectUploadIssueUtilities.BuildSkippedFilesSummary(plan.Issues, maxInline: 3);
-            var firstBlockingIssue = plan.Issues.FirstOrDefault(i => i.Severity == DirectUploadIssueSeverity.Error);
+            var firstBlockingIssue = plan.Issues
+                .Where(i => i.Severity == DirectUploadIssueSeverity.Error)
+                .OrderBy(GetBlockingIssuePriority)
+                .FirstOrDefault();
 
             if (errorCount > 0)
             {
@@ -623,6 +626,16 @@ public sealed partial class MainViewModel
 
         var escaped = value.Replace("\"", "\"\"", StringComparison.Ordinal);
         return escaped.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0 ? $"\"{escaped}\"" : escaped;
+    }
+
+    private static int GetBlockingIssuePriority(DirectUploadIssue issue)
+    {
+        return issue.Code switch
+        {
+            "FOLDER_CREATE_FORBIDDEN" => 0,
+            "SAVED_SEARCH_UPLOAD_SCOPE_UNRESOLVED" => 1,
+            _ => 10
+        };
     }
 
     private static ImportExecutionMode ParseImportExecutionMode(string? rawValue)

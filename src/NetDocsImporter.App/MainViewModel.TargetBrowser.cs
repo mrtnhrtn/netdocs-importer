@@ -12,7 +12,7 @@ namespace NetDocsImporter.App;
 
 public sealed partial class MainViewModel
 {
-    private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter/Saved Search, or Folder are supported as upload destinations in this version.";
     private const string CabinetRootNodeTypeRaw = "CabinetRoot";
     private const int WorkspaceSearchMaxResults = 8;
     private const int WorkspaceSearchMaxParentCandidates = 4;
@@ -1810,7 +1810,7 @@ public sealed partial class MainViewModel
     private static string BuildBrowseChildMetadata(NdContainerNode node)
     {
         var typeDisplay = node.SupportedType.HasValue
-            ? NdTargetBrowserLogic.ResolveTypeDisplay(node.SupportedType.Value, node.Id)
+            ? NdTargetBrowserLogic.ResolveTypeDisplay(node.SupportedType.Value, node.Id, node.Extension)
             : "Container";
 
         if (!string.IsNullOrWhiteSpace(node.PathDisplay) &&
@@ -1979,7 +1979,7 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetId = selection.Id;
         SelectedNetDocumentsTargetName = string.IsNullOrWhiteSpace(selection.Name) ? selection.Id : selection.Name;
-        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(selection.Type, selection.Id);
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(selection.Type, selection.Id, selection.Extension);
 
         if (string.IsNullOrWhiteSpace(knownPath) && CanPickNetDocumentsTarget)
         {
@@ -2669,7 +2669,10 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetId = _selectedNetDocumentsTarget.Id;
         SelectedNetDocumentsTargetName = _selectedNetDocumentsTarget.Name;
-        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(_selectedNetDocumentsTarget.Type, _selectedNetDocumentsTarget.Id);
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            _selectedNetDocumentsTarget.Type,
+            _selectedNetDocumentsTarget.Id,
+            _selectedNetDocumentsTarget.Extension);
         SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(settings.SelectedTargetPath)
             ? _selectedNetDocumentsTarget.Name
             : settings.SelectedTargetPath;
@@ -2762,7 +2765,7 @@ public sealed class NetDocumentsTargetItemView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id);
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id, Selection.Extension);
 
     public string PathDisplay => string.IsNullOrWhiteSpace(Selection.ParentWorkspaceId)
         ? Selection.Name
@@ -2803,7 +2806,7 @@ public sealed class NetDocumentsWorkspaceTargetResultView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id);
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id, Selection.Extension);
 
     public string PathDisplay { get; }
 
@@ -2892,9 +2895,9 @@ public sealed class NetDocumentsBrowseNodeView
 
     public NdChildrenLoadState ChildrenLoadState { get; set; }
 
-    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id).Glyph;
+    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id, Extension).Glyph;
 
-    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id).ColorHex;
+    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id, Extension).ColorHex;
 
     public string TypeDisplay
     {
@@ -2902,7 +2905,7 @@ public sealed class NetDocumentsBrowseNodeView
         {
             if (SupportedType.HasValue)
             {
-                return NdTargetBrowserLogic.ResolveTypeDisplay(SupportedType.Value, Id);
+                return NdTargetBrowserLogic.ResolveTypeDisplay(SupportedType.Value, Id, Extension);
             }
 
             return string.IsNullOrWhiteSpace(TypeRaw) ? "Unknown" : TypeRaw;
