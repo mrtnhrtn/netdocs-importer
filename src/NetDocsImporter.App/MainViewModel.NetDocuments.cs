@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows.Forms;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
@@ -32,6 +33,10 @@ public sealed partial class MainViewModel
     private string _currentJobRepositoryId = string.Empty;
     private string _netDocumentsCurrentUserId = string.Empty;
     private NetDocumentsSyncedAttributeView? _selectedSyncedAttribute;
+    private readonly object _netDocumentsConnectLock = new();
+    private readonly SemaphoreSlim _netDocumentsConnectGate = new(1, 1);
+    private CancellationTokenSource? _netDocumentsConnectCts;
+    private bool _isNetDocumentsConnectInProgress;
 
     /// <summary>
     /// Gets the repositories available in the connected NetDocuments region.
@@ -75,6 +80,7 @@ public sealed partial class MainViewModel
 
                 OnPropertyChanged(nameof(CanSyncNetDocumentsCabinets));
                 OnPropertyChanged(nameof(CanSyncNetDocumentsAttributes));
+                OnPropertyChanged(nameof(CanDisconnectFromNetDocuments));
                 OnPropertyChanged(nameof(CanSelectSourceFolder));
                 OnPropertyChanged(nameof(IsAuthenticationRequired));
                 OnPropertyChanged(nameof(CanAccessMainFlow));
@@ -208,6 +214,20 @@ public sealed partial class MainViewModel
     public bool CanSyncNetDocumentsCabinets => IsNetDocumentsConnected;
 
     /// <summary>
+    /// Gets a value indicating whether an interactive NetDocuments sign-in attempt is in progress.
+    /// </summary>
+    public bool IsNetDocumentsConnectInProgress
+    {
+        get => _isNetDocumentsConnectInProgress;
+        private set => SetField(ref _isNetDocumentsConnectInProgress, value);
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the current NetDocuments session can be signed out.
+    /// </summary>
+    public bool CanDisconnectFromNetDocuments => IsNetDocumentsConnected;
+
+    /// <summary>
     /// Gets a value indicating whether attribute synchronization can run for the current repository and cabinet.
     /// </summary>
     public bool CanSyncNetDocumentsAttributes =>
@@ -287,12 +307,39 @@ public sealed partial class MainViewModel
     /// <returns>A task that completes when connection bootstrap finishes.</returns>
     public async Task ConnectAndSyncNetDocumentsAsync()
     {
+        if (IsNetDocumentsConnected)
+        {
+            StatusText = "Already connected to NetDocuments.";
+            return;
+        }
+
         if (!CanConnectToNetDocuments)
         {
             StatusText = "OAuth profile for this region is not installed. Contact administrator.";
             return;
         }
 
+        if (IsNetDocumentsConnectInProgress)
+        {
+            CancellationTokenSource? pendingAttempt;
+            lock (_netDocumentsConnectLock)
+            {
+                pendingAttempt = _netDocumentsConnectCts;
+            }
+
+            pendingAttempt?.Cancel();
+            StatusText = "Restarting NetDocuments sign-in...";
+        }
+
+        await _netDocumentsConnectGate.WaitAsync();
+        CancellationTokenSource connectAttemptCts;
+        lock (_netDocumentsConnectLock)
+        {
+            connectAttemptCts = new CancellationTokenSource();
+            _netDocumentsConnectCts = connectAttemptCts;
+        }
+
+        IsNetDocumentsConnectInProgress = true;
         try
         {
             InvalidateTargetBrowserContext("connect-and-sync");
@@ -300,7 +347,7 @@ public sealed partial class MainViewModel
             var auth = RequireAuthService();
             var sync = RequireSyncService();
 
-            await auth.SignInInteractiveAsync(BuildAuthContext());
+            await auth.SignInInteractiveAsync(BuildAuthContext(), connectAttemptCts.Token);
             var user = await sync.GetCurrentUserAsync();
             _netDocumentsCurrentUserId = string.IsNullOrWhiteSpace(user.UserId) ? string.Empty : user.UserId;
             NetDocumentsConnectedUser = string.IsNullOrWhiteSpace(user.DisplayName)
@@ -322,10 +369,85 @@ public sealed partial class MainViewModel
                 ? "Connected to NetDocuments."
                 : $"Connected to NetDocuments as {user.DisplayName}.";
         }
+        catch (OperationCanceledException) when (connectAttemptCts.IsCancellationRequested)
+        {
+            // A newer connect request replaced this one.
+        }
         catch (Exception ex)
         {
             StatusText = $"NetDocuments connect failed: {ex.Message}";
         }
+        finally
+        {
+            lock (_netDocumentsConnectLock)
+            {
+                if (ReferenceEquals(_netDocumentsConnectCts, connectAttemptCts))
+                {
+                    _netDocumentsConnectCts = null;
+                }
+            }
+
+            connectAttemptCts.Dispose();
+            IsNetDocumentsConnectInProgress = false;
+            _netDocumentsConnectGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Signs out of NetDocuments and clears user-scoped connection state from the UI.
+    /// </summary>
+    /// <returns>A task that completes when sign-out and local state reset are finished.</returns>
+    public async Task DisconnectFromNetDocumentsAsync()
+    {
+        if (!IsNetDocumentsConnected)
+        {
+            StatusText = "Not connected to NetDocuments.";
+            return;
+        }
+
+        try
+        {
+            var auth = RequireAuthService();
+            await auth.SignOutAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"NetDocuments log out failed: {ex.Message}";
+            return;
+        }
+
+        InvalidateTargetBrowserContext("sign-out");
+        _refreshedCabinetSchemaThisSession.Clear();
+        _targetProfileCache.Clear();
+        _workspaceLookupPairCache.Clear();
+        _workspaceLookupInvalidPairCache.Clear();
+        _workspaceSearchTargets.Clear();
+
+        _selectedNetDocumentsTarget = null;
+        _selectedNetDocumentsTargetSupported = false;
+        SelectedNetDocumentsTargetId = string.Empty;
+        SelectedNetDocumentsTargetName = string.Empty;
+        SelectedNetDocumentsTargetTypeDisplay = "Not selected";
+        SelectedNetDocumentsTargetPath = string.Empty;
+        EffectiveProfileDefaults = EffectiveProfileDefaults.Empty;
+        UpdateProfileViewCollections(Array.Empty<NetDocumentsTargetProfileAttributeView>(), Array.Empty<NetDocumentsEffectiveDefaultView>());
+        TargetProfileMetadataStatus = "No target confirmed yet.";
+        TargetBrowserMessage = string.Empty;
+        OnPropertyChanged(nameof(IsSelectedTargetFavorite));
+
+        _localRecentTargets = new List<NdTargetRecentItem>();
+        _hasLoadedRecentTargets = false;
+        _hasLoadedFavoriteTargets = false;
+        SelectedRecentTarget = null;
+        SelectedFavoriteTarget = null;
+        SelectedWorkspaceSearchTarget = null;
+        SelectedBrowseNode = null;
+        WorkspaceLookupStatus = string.Empty;
+
+        NetDocumentsConnectedUser = string.Empty;
+        _netDocumentsCurrentUserId = string.Empty;
+        IsNetDocumentsConnected = false;
+        StatusText = "Logged out of NetDocuments.";
     }
 
     private async Task RefreshRecentTargetsAfterConnectAsync()
