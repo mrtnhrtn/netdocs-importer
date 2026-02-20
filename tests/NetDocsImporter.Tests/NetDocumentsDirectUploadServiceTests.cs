@@ -163,6 +163,173 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_WorkspaceRootCreatesUseResolvedWorkspaceParentId()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "invoices", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+        const string workspaceEnvId = ":AU2:o:w:m:v:^W200423132232851.nev";
+        const string workspaceLegacyId = "3470-9010-7660";
+        const string clientFolderId = "folder-client-a-01-02";
+        const string invoicesFolderId = "folder-invoices-01-02";
+        var createParentValues = new List<string>();
+
+        try
+        {
+            await SeedJobWithDoubleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                var absolutePath = request.RequestUri?.AbsolutePath ?? string.Empty;
+                var unescapedPath = Uri.UnescapeDataString(absolutePath);
+
+                if (string.Equals(unescapedPath, $"/v2/container/{workspaceEnvId}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        {
+                          "data": {
+                            "id": "{{workspaceLegacyId}}",
+                            "extension": "ndws",
+                            "name": "Workspace Root"
+                          }
+                        }
+                        """);
+                }
+
+                if (absolutePath == $"/v1/Workspace/{workspaceLegacyId}")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[],"sortOrder":"name"}""");
+                }
+
+                if (absolutePath == $"/v1/Folder/{clientFolderId}")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[],"sortOrder":"name"}""");
+                }
+
+                if (request.Method == HttpMethod.Post && absolutePath == "/v1/Folder")
+                {
+                    var form = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? string.Empty;
+                    var parent = ReadFormUrlEncodedValue(form, "parent") ?? string.Empty;
+                    var name = ReadFormUrlEncodedValue(form, "name") ?? string.Empty;
+                    lock (createParentValues)
+                    {
+                        createParentValues.Add(parent);
+                    }
+
+                    if (string.Equals(parent, workspaceLegacyId, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(name, "client_a", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return JsonResponse(HttpStatusCode.OK, $$"""{"id":"{{clientFolderId}}","type":"ndfld"}""");
+                    }
+
+                    if (string.Equals(parent, clientFolderId, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(name, "invoices", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return JsonResponse(HttpStatusCode.OK, $$"""{"id":"{{invoicesFolderId}}","type":"ndfld"}""");
+                    }
+
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected folder create payload"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = workspaceEnvId,
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = true,
+                    CabinetId = "NG-2Q4O0ACP"
+                },
+                CancellationToken.None);
+
+            Assert.True(
+                result.CanUpload,
+                $"canUpload={result.CanUpload}, plannedFiles={result.PlannedFiles}, issues={string.Join(" | ", result.Issues.Select(i => $"{i.Code}:{i.Message}:{i.RelativePath}"))}");
+            Assert.Single(result.Files);
+            Assert.Equal(invoicesFolderId, result.Files[0].DestinationContainerId);
+            Assert.Equal(2, result.PlannedFolderCreates);
+            Assert.Equal(2, createParentValues.Count);
+            Assert.Equal(workspaceLegacyId, createParentValues[0]);
+            Assert.Equal(clientFolderId, createParentValues[1]);
+            Assert.DoesNotContain(createParentValues, parent => string.Equals(parent, workspaceEnvId, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_IncludesWorkspaceDefaultsInPlannedFileProfiles()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await SeedJobWithRootFileAsync(dbPath, jobId, sourceRoot, filePath);
+            var handler = new StubHttpHandler(_ => JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}"""));
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = "3470-9010-7660",
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    EffectiveProfileDefaults = new EffectiveProfileDefaults
+                    {
+                        ValuesByAttributeId = new Dictionary<string, NdProfileValue>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["client"] = new NdProfileValue
+                            {
+                                AttributeId = "client",
+                                AttributeName = "Client",
+                                RawValue = "ACME"
+                            }
+                        }
+                    }
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Single(result.Files);
+            Assert.Equal("3470-9010-7660", result.Files[0].DestinationContainerId);
+            Assert.Equal("ACME", result.Files[0].ProfileValues["Client"]);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_WorkspaceFilterFlattensFolderHierarchyAndWarns()
     {
         var tempRoot = CreateTempRoot();
@@ -749,6 +916,34 @@ public class NetDocumentsDirectUploadServiceTests
         {
             Directory.Delete(tempRoot, recursive: true);
         }
+    }
+
+    private static string? ReadFormUrlEncodedValue(string form, string key)
+    {
+        if (string.IsNullOrWhiteSpace(form) || string.IsNullOrWhiteSpace(key))
+        {
+            return null;
+        }
+
+        foreach (var pair in form.Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separatorIndex = pair.IndexOf('=');
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            var encodedKey = pair[..separatorIndex];
+            if (!string.Equals(Uri.UnescapeDataString(encodedKey.Replace('+', ' ')), key, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var encodedValue = pair[(separatorIndex + 1)..];
+            return Uri.UnescapeDataString(encodedValue.Replace('+', ' '));
+        }
+
+        return null;
     }
 
     private sealed class StubHttpHandler : HttpMessageHandler

@@ -1203,8 +1203,14 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
             if (string.IsNullOrWhiteSpace(childContainerId) && allowCreateFolders && lookup.QueryReliable)
             {
+                var createParentContainerId = currentContainerId;
+                if (isFirstSegment && targetType == NdTargetType.Workspace)
+                {
+                    createParentContainerId = await ResolveWorkspaceListIdAsync(currentContainerId, cancellationToken);
+                }
+
                 var createResult = await TryCreateChildFolderAsync(
-                    parentContainerId: currentContainerId,
+                    parentContainerId: createParentContainerId,
                     childName: segment,
                     cabinetId: cabinetId,
                     folderChildrenCache: folderChildrenCache,
@@ -1266,7 +1272,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                         issues.Add(new DirectUploadIssue(
                             DirectUploadIssueSeverity.Error,
                             "FOLDER_CREATE_FORBIDDEN",
-                            $"Cannot create folder '{currentPath}' because this account does not have rights to create subfolders under '{currentContainerId}'.",
+                            $"Cannot create folder '{currentPath}' because this account does not have rights to create subfolders under '{createParentContainerId}'.",
                             currentPath));
                     }
                     else
@@ -1274,7 +1280,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                         issues.Add(new DirectUploadIssue(
                             DirectUploadIssueSeverity.Error,
                             "FOLDER_CREATE_FAILED",
-                            $"Folder creation failed for '{currentPath}' under '{currentContainerId}' (HTTP {createResult.FailureStatusCode}).",
+                            $"Folder creation failed for '{currentPath}' under '{createParentContainerId}' (HTTP {createResult.FailureStatusCode}).",
                             currentPath));
                     }
                 }
@@ -1755,7 +1761,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         catch (Exception ex)
         {
             var status = TryExtractStatusCode(ex) ?? 0;
-            _folderCreateSupported = false;
+            _folderCreateSupported = status is not (404 or 405 or 415 or 501);
             var duplicateNameConflict = status == 400 &&
                                         ex.Message.IndexOf("already contains a folder with this name", StringComparison.OrdinalIgnoreCase) >= 0;
             Trace.WriteLine(
