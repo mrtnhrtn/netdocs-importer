@@ -74,6 +74,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         UploadPlanFileEntry File,
         string TransferId,
         int Attempt);
+    private readonly record struct UploadProfilePayload(string ProfileJson, string CustomAttributesJson);
 
     /// <summary>
     /// Builds a direct-upload plan for a job by resolving destination folders, validating profile requirements, and classifying skippable files.
@@ -730,8 +731,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
                 if (file.ProfileValues.Count > 0)
                 {
-                    var profileJson = JsonSerializer.Serialize(file.ProfileValues);
-                    multipart.Add(new StringContent(profileJson, Encoding.UTF8, "application/json"), "profile");
+                    var profilePayload = BuildUploadProfilePayload(file.ProfileValues);
+                    multipart.Add(new StringContent(profilePayload.ProfileJson, Encoding.UTF8, "application/json"), "profile");
+                    multipart.Add(new StringContent(profilePayload.CustomAttributesJson, Encoding.UTF8, "application/json"), "customAttributes");
                 }
 
                 var streamContent = new StreamContent(stream);
@@ -784,6 +786,45 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return $"/v1/Document?indexpriority={indexPriority.Value.ToString(CultureInfo.InvariantCulture)}";
     }
 
+    private static UploadProfilePayload BuildUploadProfilePayload(IReadOnlyDictionary<string, string> profileValues)
+    {
+        var customAttributes = new List<Dictionary<string, object>>();
+        var seenAttributeIds = new HashSet<int>();
+
+        foreach (var pair in profileValues)
+        {
+            if (!int.TryParse(pair.Key, NumberStyles.Integer, CultureInfo.InvariantCulture, out var attributeId))
+            {
+                continue;
+            }
+
+            if (!seenAttributeIds.Add(attributeId))
+            {
+                continue;
+            }
+
+            customAttributes.Add(new Dictionary<string, object>
+            {
+                ["id"] = attributeId,
+                ["value"] = pair.Value
+            });
+        }
+
+        if (customAttributes.Count == 0)
+        {
+            var fallbackJson = JsonSerializer.Serialize(profileValues);
+            return new UploadProfilePayload(fallbackJson, fallbackJson);
+        }
+
+        var profilePayload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["customAttributes"] = customAttributes
+        };
+        var profileJson = JsonSerializer.Serialize(profilePayload);
+        var customAttributesJson = JsonSerializer.Serialize(customAttributes);
+        return new UploadProfilePayload(profileJson, customAttributesJson);
+    }
+
     private async Task<Dictionary<string, string>> BuildProfileValuesForFileAsync(
         FileRecord file,
         DirectUploadPlanContext context,
@@ -797,13 +838,16 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         foreach (var profileDefault in context.EffectiveProfileDefaults.ValuesByAttributeId.Values)
         {
             var resolved = ResolveAttribute(profileDefault.AttributeId, profileDefault.AttributeName, attributeByName, attributeById, attributeByNum);
-            var key = resolved?.Name ?? profileDefault.AttributeName ?? profileDefault.AttributeId;
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(profileDefault.RawValue))
+            if (string.IsNullOrWhiteSpace(profileDefault.RawValue))
             {
                 continue;
             }
 
-            values[key] = profileDefault.RawValue;
+            AddResolvedProfileValue(
+                values,
+                resolved,
+                profileDefault.AttributeName ?? profileDefault.AttributeId,
+                profileDefault.RawValue);
         }
 
         if (!string.IsNullOrWhiteSpace(file.FolderId))
@@ -826,12 +870,42 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     resolved = ResolveAttribute(entry.Field, entry.Field, attributeByName, attributeById, attributeByNum);
                 }
 
-                var key = resolved?.Name ?? entry.Field;
-                values[key] = entry.Value ?? string.Empty;
+                AddResolvedProfileValue(
+                    values,
+                    resolved,
+                    entry.Field,
+                    entry.Value ?? string.Empty);
             }
         }
 
         return values;
+    }
+
+    private static void AddResolvedProfileValue(
+        IDictionary<string, string> values,
+        NetDocumentsAttributeRecord? resolved,
+        string? fallbackKey,
+        string value)
+    {
+        if (resolved is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(resolved.Name))
+            {
+                values[resolved.Name] = value;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolved.AttributeId))
+            {
+                values[resolved.AttributeId] = value;
+            }
+
+            values[resolved.AttributeNum.ToString(CultureInfo.InvariantCulture)] = value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackKey))
+        {
+            values[fallbackKey] = value;
+        }
     }
 
     private static NetDocumentsAttributeRecord? ResolveAttribute(

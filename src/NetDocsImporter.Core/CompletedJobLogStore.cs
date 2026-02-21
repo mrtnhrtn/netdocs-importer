@@ -35,6 +35,27 @@ public sealed record CompletedJobRunSummary
     public string RunLogFileName { get; init; } = string.Empty;
 }
 
+public sealed record DirectUploadActiveRunMarker
+{
+    public string JobId { get; init; } = string.Empty;
+
+    public DateTime StartedUtc { get; init; }
+
+    public string RunType { get; init; } = "DirectUpload";
+
+    public string TargetDisplay { get; init; } = string.Empty;
+
+    public int TotalRequestedFiles { get; init; }
+
+    public int PlannedFiles { get; init; }
+
+    public int SkippedFiles { get; init; }
+
+    public int PlannedFolderCreates { get; init; }
+}
+
+public sealed record ActiveRunMarkerEntry(string MarkerPath, DirectUploadActiveRunMarker Marker);
+
 public sealed class CompletedJobLogStore
 {
     private const string DisablePruneEnvironmentVariable = "ND_DISABLE_COMPLETED_JOBS_PRUNE";
@@ -73,6 +94,12 @@ public sealed class CompletedJobLogStore
         return Path.Combine(_directory, $"{baseName}.json");
     }
 
+    public string BuildActiveRunPath(string jobId, DateTime startedUtc)
+    {
+        var baseName = BuildBaseName(jobId, startedUtc);
+        return Path.Combine(_directory, $"{baseName}.active");
+    }
+
     public async Task<string> WriteRunLogAsync(
         string jobId,
         DateTime startedUtc,
@@ -97,6 +124,81 @@ public sealed class CompletedJobLogStore
         var json = JsonSerializer.Serialize(summary, JsonOptions);
         await File.WriteAllTextAsync(summaryPath, json, new UTF8Encoding(false), cancellationToken);
         return summaryPath;
+    }
+
+    public async Task<string> WriteActiveRunAsync(
+        DirectUploadActiveRunMarker marker,
+        CancellationToken cancellationToken = default)
+    {
+        if (marker is null)
+        {
+            throw new ArgumentNullException(nameof(marker));
+        }
+
+        var markerPath = BuildActiveRunPath(marker.JobId, marker.StartedUtc);
+        var json = JsonSerializer.Serialize(marker, JsonOptions);
+        await File.WriteAllTextAsync(markerPath, json, new UTF8Encoding(false), cancellationToken);
+        return markerPath;
+    }
+
+    public async Task<IReadOnlyList<ActiveRunMarkerEntry>> GetActiveRunsAsync(CancellationToken cancellationToken = default)
+    {
+        var results = new List<ActiveRunMarkerEntry>();
+        if (!Directory.Exists(_directory))
+        {
+            return results;
+        }
+
+        var markerFiles = Directory
+            .EnumerateFiles(_directory, "directupload-*.active", SearchOption.TopDirectoryOnly)
+            .OrderBy(File.GetLastWriteTimeUtc);
+
+        foreach (var markerFile in markerFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            DirectUploadActiveRunMarker? marker;
+            try
+            {
+                var json = await File.ReadAllTextAsync(markerFile, cancellationToken);
+                marker = JsonSerializer.Deserialize<DirectUploadActiveRunMarker>(json, JsonOptions);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (marker is null || string.IsNullOrWhiteSpace(marker.JobId))
+            {
+                continue;
+            }
+
+            results.Add(new ActiveRunMarkerEntry(markerFile, marker));
+        }
+
+        return results;
+    }
+
+    public Task DeleteActiveRunAsync(string markerPath)
+    {
+        if (string.IsNullOrWhiteSpace(markerPath))
+        {
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            if (File.Exists(markerPath))
+            {
+                File.Delete(markerPath);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup.
+        }
+
+        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyDictionary<string, CompletedJobRunSummary>> GetLatestRunsByJobAsync(

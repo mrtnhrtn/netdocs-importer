@@ -407,6 +407,12 @@ public sealed class JobStore
                    COALESCE(SUM(f.IsLargeWarning), 0) AS LargeWarnings
             FROM Jobs j
             LEFT JOIN Files f ON f.JobId = j.JobId
+            WHERE EXISTS (
+                SELECT 1
+                FROM Transfers t
+                WHERE t.JobId = j.JobId
+                  AND t.StartedUtc IS NOT NULL
+            )
             GROUP BY j.JobId, j.CreatedUtc, j.SourceRoot, j.Status, j.RepositoryId
             ORDER BY j.CreatedUtc DESC
             LIMIT $limit;
@@ -577,6 +583,29 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$finishedUtc", ToUtcString(DateTime.UtcNow));
         command.Parameters.AddWithValue("$jobId", jobId);
         command.Parameters.AddWithValue("$queued", "Queued");
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkInFlightTransfersCanceledAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Transfers
+            SET Status = $status,
+                FinishedUtc = $finishedUtc
+            WHERE JobId = $jobId
+              AND (Status = $queued OR Status = $running);
+            """;
+
+        command.Parameters.AddWithValue("$status", "Canceled");
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(DateTime.UtcNow));
+        command.Parameters.AddWithValue("$jobId", jobId);
+        command.Parameters.AddWithValue("$queued", "Queued");
+        command.Parameters.AddWithValue("$running", "Running");
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

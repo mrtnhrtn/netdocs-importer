@@ -82,6 +82,44 @@ public sealed class CompletedJobLogStoreTests
         }
     }
 
+    [Fact]
+    public async Task ActiveRunMarkers_CanBeWrittenReadAndDeleted()
+    {
+        var tempRoot = CreateTempRoot();
+        try
+        {
+            var store = new CompletedJobLogStore(tempRoot, TimeSpan.FromDays(30));
+            var startedUtc = new DateTime(2026, 2, 12, 9, 0, 0, DateTimeKind.Utc);
+
+            var markerPath = await store.WriteActiveRunAsync(new DirectUploadActiveRunMarker
+            {
+                JobId = "job-active",
+                StartedUtc = startedUtc,
+                TargetDisplay = "workspace-a",
+                TotalRequestedFiles = 100,
+                PlannedFiles = 95,
+                SkippedFiles = 5,
+                PlannedFolderCreates = 2
+            });
+
+            Assert.True(File.Exists(markerPath));
+
+            var markers = await store.GetActiveRunsAsync();
+            var marker = Assert.Single(markers);
+            Assert.Equal(markerPath, marker.MarkerPath);
+            Assert.Equal("job-active", marker.Marker.JobId);
+            Assert.Equal(startedUtc, marker.Marker.StartedUtc);
+            Assert.Equal(95, marker.Marker.PlannedFiles);
+
+            await store.DeleteActiveRunAsync(markerPath);
+            Assert.False(File.Exists(markerPath));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-completed-jobs-tests", Guid.NewGuid().ToString("N"));

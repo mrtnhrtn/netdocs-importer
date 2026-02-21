@@ -28,6 +28,15 @@ public partial class MainWindow : Window
 
     public async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            await _viewModel.RecoverInterruptedDirectUploadsAsync();
+        }
+        catch
+        {
+            // Recovery is best-effort only.
+        }
+
         await _viewModel.LoadRecentJobsAsync();
         await _viewModel.LoadNdImportSettingsAsync();
         _recentJobsRefreshTimer.Start();
@@ -285,6 +294,11 @@ public partial class MainWindow : Window
         await _viewModel.RunDirectUploadAsync();
     }
 
+    public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CancelDirectUpload();
+    }
+
     public void OnBrowseNdImportExecutable(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
@@ -303,6 +317,11 @@ public partial class MainWindow : Window
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();
+    }
+
+    public async void OnDisconnectFromNetDocuments(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.DisconnectFromNetDocumentsAsync();
     }
 
     public void OnNetDocumentsBootstrapClientSecretPasswordChanged(object sender, RoutedEventArgs e)

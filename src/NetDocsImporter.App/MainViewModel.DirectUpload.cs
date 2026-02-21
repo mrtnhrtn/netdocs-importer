@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using NetDocsImporter.Core;
+using NetDocsImporter.Data;
 
 namespace NetDocsImporter.App;
 
@@ -24,6 +25,8 @@ public sealed partial class MainViewModel
     private double _directUploadProgressPercent;
     private string? _lastDirectUploadLogPath;
     private string? _lastDirectUploadReportPath;
+    private CancellationTokenSource? _directUploadCancellation;
+    private int _directUploadRecoveryCompleted;
 
     public IReadOnlyList<ImportExecutionMode> ImportExecutionModeOptions => _importExecutionModeOptions;
 
@@ -63,6 +66,7 @@ public sealed partial class MainViewModel
             if (SetField(ref _isDirectUploadBusy, value))
             {
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                OnPropertyChanged(nameof(CanCancelDirectUpload));
             }
         }
     }
@@ -92,6 +96,11 @@ public sealed partial class MainViewModel
         IsDirectUploadPlanAlignedWithCurrentContext() &&
         _directUploadPlan.CanUpload &&
         _directUploadPlan.Files.Count > 0;
+
+    public bool CanCancelDirectUpload =>
+        IsDirectUploadBusy &&
+        _directUploadCancellation is not null &&
+        !_directUploadCancellation.IsCancellationRequested;
 
     public async Task RefreshDirectUploadPreflightAsync(bool forceRescan = false)
     {
@@ -183,6 +192,19 @@ public sealed partial class MainViewModel
         }
     }
 
+    public void CancelDirectUpload()
+    {
+        if (!CanCancelDirectUpload)
+        {
+            return;
+        }
+
+        _directUploadCancellation?.Cancel();
+        StatusText = "Canceling direct upload...";
+        DirectUploadStatus = "Cancel requested. Waiting for active uploads to stop...";
+        OnPropertyChanged(nameof(CanCancelDirectUpload));
+    }
+
     public async Task RunDirectUploadAsync()
     {
         if (!IsDirectApiMode)
@@ -228,6 +250,13 @@ public sealed partial class MainViewModel
             return;
         }
 
+        CancellationTokenSource? runCancellation = null;
+        UploadPlanResult? executionPlan = null;
+        string currentJobId = string.Empty;
+        string? activeRunMarkerPath = null;
+        var runStartedUtc = DateTime.UtcNow;
+        var completedFiles = 0;
+
         try
         {
             IsDirectUploadBusy = true;
@@ -237,14 +266,14 @@ public sealed partial class MainViewModel
             var service = RequireDirectUploadService();
             DirectUploadStatus = "Materializing direct upload plan...";
             var executionContext = BuildDirectUploadPlanContext(allowCreateFolders: true);
-            var currentJobId = CurrentJobId;
+            currentJobId = CurrentJobId ?? string.Empty;
             if (string.IsNullOrWhiteSpace(currentJobId))
             {
                 StatusText = "Direct upload plan is unavailable.";
                 return;
             }
 
-            var executionPlan = await service.BuildPlanAsync(currentJobId, _selectedNetDocumentsTarget!, executionContext);
+            executionPlan = await service.BuildPlanAsync(currentJobId, _selectedNetDocumentsTarget!, executionContext);
             SetDirectUploadPlan(executionPlan);
 
             if (!executionPlan.CanUpload || executionPlan.Files.Count == 0)
@@ -253,10 +282,26 @@ public sealed partial class MainViewModel
                 return;
             }
 
-            var runStartedUtc = DateTime.UtcNow;
+            runStartedUtc = DateTime.UtcNow;
+            runCancellation = new CancellationTokenSource();
+            _directUploadCancellation = runCancellation;
+            OnPropertyChanged(nameof(CanCancelDirectUpload));
+
+            activeRunMarkerPath = await _completedJobLogStore.WriteActiveRunAsync(new DirectUploadActiveRunMarker
+            {
+                JobId = currentJobId,
+                StartedUtc = runStartedUtc,
+                RunType = "DirectUpload",
+                TargetDisplay = SelectedNetDocumentsTargetName ?? string.Empty,
+                TotalRequestedFiles = executionPlan.TotalRequestedFiles,
+                PlannedFiles = executionPlan.PlannedFiles,
+                SkippedFiles = executionPlan.SkippedFiles,
+                PlannedFolderCreates = executionPlan.PlannedFolderCreates
+            });
 
             var progress = new Progress<DirectUploadProgress>(p =>
             {
+                completedFiles = p.CompletedFiles;
                 var percent = p.PercentComplete;
                 if (percent <= 0 && p.TotalFiles > 0)
                 {
@@ -268,7 +313,7 @@ public sealed partial class MainViewModel
                 DirectUploadStatus = $"Uploading {p.CompletedFiles:N0}/{p.TotalFiles:N0} ({percent:0.##}%): {p.CurrentRelativePath}";
             });
 
-            var result = await service.UploadAsync(executionPlan, executionContext, progress);
+            var result = await service.UploadAsync(executionPlan, executionContext, progress, runCancellation.Token);
             var reportPath = await WriteDirectUploadReportAsync(executionPlan, result, runStartedUtc);
             var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath, runStartedUtc);
             _lastDirectUploadReportPath = reportPath;
@@ -319,6 +364,71 @@ public sealed partial class MainViewModel
                     $"{result.SucceededFiles:N0}/{result.TotalRequestedFiles:N0} complete; skipped {result.SkippedFiles:N0}; {reason}: {skippedIssue.RelativePath ?? string.Empty}"));
             }
 
+            await _completedJobLogStore.DeleteActiveRunAsync(activeRunMarkerPath);
+            activeRunMarkerPath = null;
+            await LoadRecentJobsAsync();
+        }
+        catch (OperationCanceledException) when (runCancellation is not null && runCancellation.IsCancellationRequested)
+        {
+            if (!string.IsNullOrWhiteSpace(currentJobId))
+            {
+                await _jobStore.MarkInFlightTransfersCanceledAsync(currentJobId, CancellationToken.None);
+            }
+
+            long succeededTransfers = 0;
+            long failedTransfers = 0;
+            long canceledTransfers = 0;
+            if (!string.IsNullOrWhiteSpace(currentJobId))
+            {
+                var counts = await _jobStore.GetTransferCountsAsync(currentJobId, CancellationToken.None);
+                succeededTransfers = counts.Succeeded;
+                failedTransfers = counts.Failed;
+                canceledTransfers = counts.Canceled;
+            }
+
+            var plannedFiles = executionPlan?.PlannedFiles ?? 0;
+            if (plannedFiles > 0)
+            {
+                completedFiles = Math.Clamp(completedFiles, 0, plannedFiles);
+            }
+            else
+            {
+                completedFiles = 0;
+            }
+
+            var runStatus = "DirectUpload Canceled";
+            var runSummaryText = plannedFiles > 0
+                ? $"Canceled by user at {completedFiles:N0}/{plannedFiles:N0}; canceled transfers={canceledTransfers:N0}. Run direct upload again to resume."
+                : "Canceled by user before any files were uploaded.";
+            StatusText = "Direct upload canceled.";
+            DirectUploadStatus = runSummaryText;
+            NdImportSessions.Insert(0, new NdImportSessionView(
+                DateTime.Now,
+                runStatus,
+                runSummaryText));
+
+            if (!string.IsNullOrWhiteSpace(currentJobId))
+            {
+                await _completedJobLogStore.WriteSummaryAsync(new CompletedJobRunSummary
+                {
+                    JobId = currentJobId,
+                    StartedUtc = runStartedUtc,
+                    RunType = "DirectUpload",
+                    Status = runStatus,
+                    Summary = runSummaryText,
+                    RequestedFiles = executionPlan?.TotalRequestedFiles ?? 0,
+                    PlannedFiles = executionPlan?.PlannedFiles ?? 0,
+                    UploadedFiles = succeededTransfers,
+                    FailedFiles = failedTransfers,
+                    SkippedFiles = executionPlan?.SkippedFiles ?? 0,
+                    ResumedFiles = 0,
+                    CreatedFolders = executionPlan?.PlannedFolderCreates ?? 0,
+                    ReportFileName = string.Empty,
+                    RunLogFileName = string.Empty
+                });
+                _completedJobLogStore.PruneExpired(DateTime.UtcNow);
+            }
+
             await LoadRecentJobsAsync();
         }
         catch (Exception ex)
@@ -327,8 +437,100 @@ public sealed partial class MainViewModel
         }
         finally
         {
+            if (!string.IsNullOrWhiteSpace(activeRunMarkerPath))
+            {
+                await _completedJobLogStore.DeleteActiveRunAsync(activeRunMarkerPath);
+            }
+
+            runCancellation?.Dispose();
+            if (ReferenceEquals(_directUploadCancellation, runCancellation))
+            {
+                _directUploadCancellation = null;
+            }
+
+            OnPropertyChanged(nameof(CanCancelDirectUpload));
             IsDirectUploadBusy = false;
         }
+    }
+
+    public async Task RecoverInterruptedDirectUploadsAsync()
+    {
+        if (Interlocked.Exchange(ref _directUploadRecoveryCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        var activeRuns = await _completedJobLogStore.GetActiveRunsAsync();
+        if (activeRuns.Count == 0)
+        {
+            return;
+        }
+
+        await _jobStore.InitializeAsync();
+        foreach (var activeRun in activeRuns)
+        {
+            try
+            {
+                var existingSummaryPath = _completedJobLogStore.BuildSummaryPath(activeRun.Marker.JobId, activeRun.Marker.StartedUtc);
+                if (File.Exists(existingSummaryPath))
+                {
+                    continue;
+                }
+
+                await _jobStore.MarkInFlightTransfersCanceledAsync(activeRun.Marker.JobId, CancellationToken.None);
+                var counts = await _jobStore.GetTransferCountsAsync(activeRun.Marker.JobId, CancellationToken.None);
+                var plannedFiles = activeRun.Marker.PlannedFiles;
+                var completedFiles = plannedFiles > 0
+                    ? (int)Math.Clamp(counts.Succeeded + counts.Failed + counts.Canceled, 0, plannedFiles)
+                    : 0;
+
+                var runStatus = "DirectUpload Interrupted";
+                var runSummaryText = plannedFiles > 0
+                    ? $"Recovered interrupted upload at startup ({completedFiles:N0}/{plannedFiles:N0} processed before app closed). Run direct upload again to resume."
+                    : "Recovered interrupted upload at startup after app closed before completion.";
+
+                var runLogPath = await _completedJobLogStore.WriteRunLogAsync(
+                    activeRun.Marker.JobId,
+                    activeRun.Marker.StartedUtc,
+                    BuildRecoveredInterruptedRunLog(activeRun.Marker, counts, runSummaryText));
+
+                await _completedJobLogStore.WriteSummaryAsync(new CompletedJobRunSummary
+                {
+                    JobId = activeRun.Marker.JobId,
+                    StartedUtc = activeRun.Marker.StartedUtc,
+                    RunType = activeRun.Marker.RunType,
+                    Status = runStatus,
+                    Summary = runSummaryText,
+                    RequestedFiles = activeRun.Marker.TotalRequestedFiles,
+                    PlannedFiles = activeRun.Marker.PlannedFiles,
+                    UploadedFiles = counts.Succeeded,
+                    FailedFiles = counts.Failed,
+                    SkippedFiles = activeRun.Marker.SkippedFiles,
+                    ResumedFiles = 0,
+                    CreatedFolders = activeRun.Marker.PlannedFolderCreates,
+                    ReportFileName = string.Empty,
+                    RunLogFileName = Path.GetFileName(runLogPath)
+                });
+
+                var shortJobId = activeRun.Marker.JobId.Length > 8
+                    ? activeRun.Marker.JobId[..8]
+                    : activeRun.Marker.JobId;
+                NdImportSessions.Insert(0, new NdImportSessionView(
+                    DateTime.Now,
+                    runStatus,
+                    $"Job {shortJobId}: {runSummaryText}"));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"ND-DIRECT recovery failed for marker '{activeRun.MarkerPath}': {ex.Message}");
+            }
+            finally
+            {
+                await _completedJobLogStore.DeleteActiveRunAsync(activeRun.MarkerPath);
+            }
+        }
+
+        _completedJobLogStore.PruneExpired(DateTime.UtcNow);
     }
 
     private DirectUploadPlanContext BuildDirectUploadPlanContext(bool allowCreateFolders)
@@ -487,6 +689,28 @@ public sealed partial class MainViewModel
         }
 
         return await _completedJobLogStore.WriteRunLogAsync(job, runStartedUtc, builder.ToString());
+    }
+
+    private static string BuildRecoveredInterruptedRunLog(
+        DirectUploadActiveRunMarker marker,
+        TransferStatusCounts counts,
+        string summary)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("|       NetDocs Importer Recovered Interrupted Upload       |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine($" Started: {marker.StartedUtc.ToLocalTime():g}");
+        builder.AppendLine($" Job Id: {marker.JobId}");
+        builder.AppendLine($" Target: {marker.TargetDisplay}");
+        builder.AppendLine($" Requested: {marker.TotalRequestedFiles:N0}");
+        builder.AppendLine($" Planned: {marker.PlannedFiles:N0}");
+        builder.AppendLine($" Succeeded: {counts.Succeeded:N0}");
+        builder.AppendLine($" Failed: {counts.Failed:N0}");
+        builder.AppendLine($" Canceled: {counts.Canceled:N0}");
+        builder.AppendLine($" Summary: {summary}");
+        builder.AppendLine("+------------------------------------------------------------+");
+        return builder.ToString();
     }
 
     private static string GetSkippedFileReason(string? issueCode)

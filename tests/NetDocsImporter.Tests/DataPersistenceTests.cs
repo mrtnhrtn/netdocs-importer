@@ -168,6 +168,240 @@ public class DataPersistenceTests
         }
     }
 
+    [Fact]
+    public async Task GetRecentJobsReturnsOnlyJobsWithStartedUploads()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-importer-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+
+        try
+        {
+            var store = new JobStore(dbPath);
+            await store.InitializeAsync();
+
+            var created = new DateTime(2026, 2, 2, 12, 30, 0, DateTimeKind.Utc);
+            var startedJobId = Guid.NewGuid().ToString("N");
+            var queuedOnlyJobId = Guid.NewGuid().ToString("N");
+            var noTransferJobId = Guid.NewGuid().ToString("N");
+
+            await store.InsertJobAsync(new JobRecord(startedJobId, created, "C:\\data\\started", "Complete"));
+            await store.InsertJobAsync(new JobRecord(queuedOnlyJobId, created.AddMinutes(1), "C:\\data\\queued", "Complete"));
+            await store.InsertJobAsync(new JobRecord(noTransferJobId, created.AddMinutes(2), "C:\\data\\none", "Complete"));
+
+            var startedFile = new FileRecord(
+                Guid.NewGuid().ToString("N"),
+                startedJobId,
+                "C:\\data\\started\\file-a.txt",
+                "file-a.txt",
+                120,
+                created,
+                false,
+                null,
+                "inherit",
+                null);
+            var queuedOnlyFile = new FileRecord(
+                Guid.NewGuid().ToString("N"),
+                queuedOnlyJobId,
+                "C:\\data\\queued\\file-b.txt",
+                "file-b.txt",
+                256,
+                created.AddMinutes(1),
+                false,
+                null,
+                "inherit",
+                null);
+
+            await store.InsertFileAsync(startedFile);
+            await store.InsertFileAsync(queuedOnlyFile);
+
+            var startedTransferId = Guid.NewGuid().ToString("N");
+            await store.UpsertTransferQueuedAsync(new TransferRecord(
+                startedTransferId,
+                startedJobId,
+                startedFile.FileId,
+                1,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+            await store.UpdateTransferRunningAsync(startedTransferId, 1, created.AddMinutes(3), 1);
+
+            var queuedTransferId = Guid.NewGuid().ToString("N");
+            await store.UpsertTransferQueuedAsync(new TransferRecord(
+                queuedTransferId,
+                queuedOnlyJobId,
+                queuedOnlyFile.FileId,
+                1,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+
+            var recentJobs = await store.GetRecentJobsAsync(10);
+
+            var recentJob = Assert.Single(recentJobs);
+            Assert.Equal(startedJobId, recentJob.JobId);
+            Assert.Equal(1, recentJob.FileCount);
+            Assert.Equal(120, recentJob.TotalBytes);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task MarkInFlightTransfersCanceledAsync_CancelsQueuedAndRunningTransfers()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-importer-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobs.db");
+
+        try
+        {
+            var store = new JobStore(dbPath);
+            await store.InitializeAsync();
+
+            var created = new DateTime(2026, 2, 2, 12, 30, 0, DateTimeKind.Utc);
+            var jobId = Guid.NewGuid().ToString("N");
+            await store.InsertJobAsync(new JobRecord(jobId, created, "C:\\data\\job", "Complete"));
+
+            var fileQueued = new FileRecord(
+                Guid.NewGuid().ToString("N"),
+                jobId,
+                "C:\\data\\job\\queued.txt",
+                "queued.txt",
+                120,
+                created,
+                false,
+                null,
+                "inherit",
+                null);
+            var fileRunning = new FileRecord(
+                Guid.NewGuid().ToString("N"),
+                jobId,
+                "C:\\data\\job\\running.txt",
+                "running.txt",
+                256,
+                created,
+                false,
+                null,
+                "inherit",
+                null);
+            var fileSucceeded = new FileRecord(
+                Guid.NewGuid().ToString("N"),
+                jobId,
+                "C:\\data\\job\\succeeded.txt",
+                "succeeded.txt",
+                512,
+                created,
+                false,
+                null,
+                "inherit",
+                null);
+
+            await store.InsertFileAsync(fileQueued);
+            await store.InsertFileAsync(fileRunning);
+            await store.InsertFileAsync(fileSucceeded);
+
+            var queuedTransferId = Guid.NewGuid().ToString("N");
+            await store.UpsertTransferQueuedAsync(new TransferRecord(
+                queuedTransferId,
+                jobId,
+                fileQueued.FileId,
+                1,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+
+            var runningTransferId = Guid.NewGuid().ToString("N");
+            await store.UpsertTransferQueuedAsync(new TransferRecord(
+                runningTransferId,
+                jobId,
+                fileRunning.FileId,
+                1,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+            await store.UpdateTransferRunningAsync(runningTransferId, 1, created.AddMinutes(2), 1);
+
+            var succeededTransferId = Guid.NewGuid().ToString("N");
+            await store.UpsertTransferQueuedAsync(new TransferRecord(
+                succeededTransferId,
+                jobId,
+                fileSucceeded.FileId,
+                1,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+            await store.UpdateTransferRunningAsync(succeededTransferId, 1, created.AddMinutes(3), 1);
+            await store.UpdateTransferFinishedAsync(
+                succeededTransferId,
+                "Succeeded",
+                finishedUtc: created.AddMinutes(3).AddMilliseconds(400),
+                durationMs: 400,
+                error: null,
+                httpStatus: 200,
+                responseSnippet: "ok",
+                simulatedDelayMs: null);
+
+            await store.MarkInFlightTransfersCanceledAsync(jobId);
+
+            var summaries = await store.GetLatestTransfersAsync(jobId, 10);
+            Assert.Equal(3, summaries.Count);
+
+            var queuedSummary = Assert.Single(summaries, s => s.FileId == fileQueued.FileId);
+            Assert.Equal("Canceled", queuedSummary.Status);
+
+            var runningSummary = Assert.Single(summaries, s => s.FileId == fileRunning.FileId);
+            Assert.Equal("Canceled", runningSummary.Status);
+
+            var succeededSummary = Assert.Single(summaries, s => s.FileId == fileSucceeded.FileId);
+            Assert.Equal("Succeeded", succeededSummary.Status);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, true);
+            }
+        }
+    }
+
     private static async Task<HashSet<string>> GetNamesAsync(SqliteConnection connection, string type)
     {
         await using var command = connection.CreateCommand();

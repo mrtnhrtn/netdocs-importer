@@ -400,6 +400,11 @@
                                         Click="OnSyncNetDocumentsCabinets"
                                         IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
                                         Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Log out"
+                                        Width="90"
+                                        Click="OnDisconnectFromNetDocuments"
+                                        IsEnabled="{Binding CanDisconnectFromNetDocuments}"
+                                        Style="{StaticResource SecondaryButton}" />
                             </StackPanel>
                             <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" TextWrapping="Wrap" />
                         </StackPanel>

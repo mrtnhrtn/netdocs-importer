@@ -330,6 +330,81 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_IncludesAttributeNumberKeysWhenAttributeMetadataExists()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+
+        var jobId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await SeedJobWithRootFileAsync(dbPath, jobId, sourceRoot, filePath);
+            var store = new JobStore(dbPath);
+            await store.InitializeAsync();
+            await store.ReplaceNetDocumentsAttributesAsync(
+                "NG-CAB",
+                new[]
+                {
+                    new NetDocumentsAttributeRecord("NG-CAB", "NG-REPO", 2, "2", "Client", "lookup", true, false, true, null, false, DateTime.UtcNow),
+                    new NetDocumentsAttributeRecord("NG-CAB", "NG-REPO", 3, "3", "Matter", "lookup", true, false, true, 2, true, DateTime.UtcNow)
+                });
+
+            var handler = new StubHttpHandler(_ => JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}"""));
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = "3470-9010-7660",
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    CabinetId = "NG-CAB",
+                    AllowCreateFolders = false,
+                    EffectiveProfileDefaults = new EffectiveProfileDefaults
+                    {
+                        ValuesByAttributeId = new Dictionary<string, NdProfileValue>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["2"] = new NdProfileValue
+                            {
+                                AttributeId = "2",
+                                AttributeName = "Client",
+                                RawValue = "0004"
+                            },
+                            ["3"] = new NdProfileValue
+                            {
+                                AttributeId = "3",
+                                AttributeName = "Matter",
+                                RawValue = "002"
+                            }
+                        }
+                    }
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.Single(result.Files);
+            Assert.Equal("0004", result.Files[0].ProfileValues["Client"]);
+            Assert.Equal("002", result.Files[0].ProfileValues["Matter"]);
+            Assert.Equal("0004", result.Files[0].ProfileValues["2"]);
+            Assert.Equal("002", result.Files[0].ProfileValues["3"]);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_WorkspaceFilterFlattensFolderHierarchyAndWarns()
     {
         var tempRoot = CreateTempRoot();
@@ -704,6 +779,84 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.Single(requests);
             Assert.Equal("/v1/Document", requests[0].AbsolutePath);
             Assert.Equal("indexpriority=7", requests[0].Query.TrimStart('?'));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_IncludesCustomAttributesPayloadForNumericAttributeKeys()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        string? requestBody = null;
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method == HttpMethod.Post &&
+                    string.Equals(request.RequestUri?.AbsolutePath, "/v1/Document", StringComparison.OrdinalIgnoreCase))
+                {
+                    requestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = new UploadPlanResult
+            {
+                TotalRequestedFiles = 1,
+                PlannedFiles = 1,
+                SkippedFiles = 0,
+                CanUpload = true,
+                Files = new[]
+                {
+                    new UploadPlanFileEntry(
+                        FileId: Guid.NewGuid().ToString("N"),
+                        RelativePath: "sample.txt",
+                        FullPath: filePath,
+                        SizeBytes: new FileInfo(filePath).Length,
+                        DestinationContainerId: "D-DESTINATION",
+                        ProfileValues: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["2"] = "0004",
+                            ["3"] = "002",
+                            ["Client"] = "0004",
+                            ["Matter"] = "002"
+                        },
+                        Acl: null,
+                        UseMultipartUpload: false)
+                }
+            };
+
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.False(string.IsNullOrWhiteSpace(requestBody));
+            Assert.True(
+                requestBody!.Contains("name=\"profile\"", StringComparison.OrdinalIgnoreCase) ||
+                requestBody.Contains("name=profile", StringComparison.OrdinalIgnoreCase));
+            Assert.True(
+                requestBody.Contains("name=\"customAttributes\"", StringComparison.OrdinalIgnoreCase) ||
+                requestBody.Contains("name=customAttributes", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("\"customAttributes\"", requestBody!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"id\":2", requestBody!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"id\":3", requestBody!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"value\":\"0004\"", requestBody!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"value\":\"002\"", requestBody!, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

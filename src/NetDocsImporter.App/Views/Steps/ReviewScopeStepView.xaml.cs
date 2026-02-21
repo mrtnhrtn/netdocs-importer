@@ -44,6 +44,14 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnCancelDirectUpload(sender, e);
+        }
+    }
+
     public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)
