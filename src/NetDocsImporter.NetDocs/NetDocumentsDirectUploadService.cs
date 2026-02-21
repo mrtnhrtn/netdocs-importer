@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using System.Linq;
 using NetDocsImporter.Core;
@@ -74,7 +75,13 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         UploadPlanFileEntry File,
         string TransferId,
         int Attempt);
-    private readonly record struct UploadProfilePayload(string ProfileJson, string CustomAttributesJson);
+    private readonly record struct UploadProfilePayload(
+        string ProfileJson,
+        string CustomAttributesJson,
+        IReadOnlyList<int> NumericAttributeIds);
+
+    private readonly record struct MultipartInitiatePayload(
+        string UploadId);
 
     /// <summary>
     /// Builds a direct-upload plan for a job by resolving destination folders, validating profile requirements, and classifying skippable files.
@@ -335,6 +342,32 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 context.EnableMultipartUpload &&
                 sizeBytes >= context.MultipartThresholdBytes &&
                 sizeBytes <= context.MultipartMaxFileSizeBytes;
+
+            if (sizeBytes >= context.MultipartThresholdBytes && context.EnableMultipartUpload)
+            {
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Info,
+                    "MULTIPART_REQUIRED",
+                    "File size meets the multipart threshold and will use v2 multipart upload.",
+                    file.RelativePath));
+            }
+            else if (sizeBytes >= context.MultipartThresholdBytes && !context.EnableMultipartUpload)
+            {
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Error,
+                    "MULTIPART_DISABLED_FOR_LARGE_FILE",
+                    "File size meets the multipart threshold, but multipart upload is disabled.",
+                    file.RelativePath));
+            }
+
+            if (sizeBytes > context.MultipartMaxFileSizeBytes)
+            {
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Error,
+                    "MULTIPART_MAX_SIZE_EXCEEDED",
+                    $"File size exceeds the multipart maximum size ({context.MultipartMaxFileSizeBytes.ToString(CultureInfo.InvariantCulture)} bytes).",
+                    file.RelativePath));
+            }
 
             fileEntries.Add(new UploadPlanFileEntry(
                 file.FileId,
@@ -695,6 +728,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         DirectUploadPlanContext context,
         CancellationToken cancellationToken)
     {
+        if (file.UseMultipartUpload)
+        {
+            return await TryUploadFileMultipartAsync(file, context, cancellationToken);
+        }
+
         var v1DocumentPath = BuildV1DocumentUploadPath(context.V1DocumentIndexPriority);
         var candidateEndpoints = new[]
         {
@@ -732,8 +770,17 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 if (file.ProfileValues.Count > 0)
                 {
                     var profilePayload = BuildUploadProfilePayload(file.ProfileValues);
-                    multipart.Add(new StringContent(profilePayload.ProfileJson, Encoding.UTF8, "application/json"), "profile");
-                    multipart.Add(new StringContent(profilePayload.CustomAttributesJson, Encoding.UTF8, "application/json"), "customAttributes");
+                    // v1/Document profiling expects a "profile" form value and failOnError=true for strict validation.
+                    multipart.Add(new StringContent(profilePayload.ProfileJson, Encoding.UTF8), "profile");
+                    multipart.Add(new StringContent("true", Encoding.UTF8), "partialProfiling");
+                    multipart.Add(new StringContent("true", Encoding.UTF8), "failOnError");
+                    Trace.WriteLine(
+                        $"ND-DIRECT upload request endpoint='{candidate.Path}' relativePath='{file.RelativePath}' profileKeys={file.ProfileValues.Count} customAttributeCount={profilePayload.NumericAttributeIds.Count} customAttributeIds='{string.Join(",", profilePayload.NumericAttributeIds)}' profileFallbackMap={profilePayload.NumericAttributeIds.Count == 0} partialProfiling=true failOnError=true.");
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"ND-DIRECT upload request endpoint='{candidate.Path}' relativePath='{file.RelativePath}' profileKeys=0 customAttributeCount=0 customAttributeIds='' profileFallbackMap=False partialProfiling=false failOnError=false.");
                 }
 
                 var streamContent = new StreamContent(stream);
@@ -745,7 +792,16 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     multipart.Add(new StringContent(file.Acl, Encoding.UTF8), "acl");
                 }
 
-                await _apiClient.PostAsync(candidate.Path, multipart, cancellationToken, retryOnThrottle: false);
+                TimeSpan? requestTimeout = file.UseMultipartUpload
+                    ? context.MultipartPartTimeout
+                    : null;
+
+                await _apiClient.PostAsync(
+                    candidate.Path,
+                    multipart,
+                    cancellationToken,
+                    retryOnThrottle: false,
+                    requestTimeout: requestTimeout);
                 Trace.WriteLine(
                     $"ND-DIRECT upload success endpoint='{candidate.Path}' relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
                 return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
@@ -774,6 +830,326 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             failureMessages.Count > 0
                 ? $"No supported upload endpoint accepted the request for this destination ({string.Join(",", failureMessages)})."
                 : "No supported upload endpoint accepted the request for this destination.");
+    }
+
+    private async Task<DirectUploadFileResult> TryUploadFileMultipartAsync(
+        UploadPlanFileEntry file,
+        DirectUploadPlanContext context,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var initiateResult = await InitiateMultipartUploadAsync(file, context, cancellationToken);
+            if (string.IsNullOrWhiteSpace(initiateResult.UploadId))
+            {
+                return new DirectUploadFileResult(
+                    file.RelativePath,
+                    false,
+                    0,
+                    "Multipart initiate failed: missing uploadId in response.");
+            }
+
+            var uploadId = initiateResult.UploadId;
+            var partChecksums = new List<(int PartNum, string Checksum)>();
+            using var fullChecksum = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var chunkSize = NormalizeMultipartChunkSize(context.MultipartChunkSizeBytes);
+            var fileLength = new FileInfo(file.FullPath).Length;
+
+            await using var stream = File.OpenRead(file.FullPath);
+            var buffer = new byte[chunkSize];
+            var partNum = 1;
+
+            while (true)
+            {
+                var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, chunkSize), cancellationToken);
+                if (bytesRead <= 0)
+                {
+                    break;
+                }
+
+                var partBytes = new byte[bytesRead];
+                Buffer.BlockCopy(buffer, 0, partBytes, 0, bytesRead);
+                fullChecksum.AppendData(partBytes);
+
+                var partChecksum = Convert.ToHexString(SHA256.HashData(partBytes)).ToLowerInvariant();
+                var isLast = stream.Position >= fileLength;
+                var partUpload = await UploadMultipartPartWithRetryAsync(
+                    file,
+                    uploadId,
+                    partNum,
+                    partBytes,
+                    partChecksum,
+                    isLast,
+                    context,
+                    cancellationToken);
+                if (!partUpload.Succeeded)
+                {
+                    return partUpload;
+                }
+
+                partChecksums.Add((partNum, partChecksum));
+                partNum++;
+            }
+
+            var fullChecksumValue = Convert.ToHexString(fullChecksum.GetHashAndReset()).ToLowerInvariant();
+            var completeResult = await CompleteMultipartUploadAsync(
+                file,
+                uploadId,
+                partChecksums,
+                fullChecksumValue,
+                context,
+                cancellationToken);
+            if (!completeResult.Succeeded)
+            {
+                return completeResult;
+            }
+
+            Trace.WriteLine(
+                $"ND-DIRECT multipart upload success relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count}.");
+            return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
+        }
+        catch (Exception ex)
+        {
+            var status = TryExtractStatusCode(ex);
+            return new DirectUploadFileResult(
+                file.RelativePath,
+                false,
+                status ?? 0,
+                $"Multipart upload failed: {ex.Message}");
+        }
+    }
+
+    private async Task<MultipartInitiatePayload> InitiateMultipartUploadAsync(
+        UploadPlanFileEntry file,
+        DirectUploadPlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var extension = Path.GetExtension(file.FullPath).TrimStart('.');
+        var body = new MultipartFormDataContent
+        {
+            { new StringContent(file.SizeBytes.ToString(CultureInfo.InvariantCulture), Encoding.UTF8), "totalSize" },
+            { new StringContent("upload", Encoding.UTF8), "action" },
+            { new StringContent(extension, Encoding.UTF8), "extension" }
+        };
+
+        var initiatePath = $"/v2/document/{Uri.EscapeDataString(file.DestinationContainerId)}/1/initiate";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Checksum-Algorithm"] = "SHA256"
+        };
+
+        try
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT multipart initiate start relativePath='{file.RelativePath}' path='{initiatePath}'.");
+            var response = await _apiClient.PostForStringAsync(
+                initiatePath,
+                body,
+                cancellationToken,
+                retryOnThrottle: false,
+                requestHeaders: headers,
+                requestTimeout: context.MultipartPartTimeout);
+            var uploadId = TryExtractUploadId(response);
+            Trace.WriteLine(
+                $"ND-DIRECT multipart initiate success relativePath='{file.RelativePath}' path='{initiatePath}' uploadId='{uploadId}'.");
+            return new MultipartInitiatePayload(uploadId);
+        }
+        catch (Exception ex)
+        {
+            var status = TryExtractStatusCode(ex) ?? 0;
+            Trace.WriteLine(
+                $"ND-DIRECT multipart initiate failed relativePath='{file.RelativePath}' path='{initiatePath}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
+            throw new InvalidOperationException($"Multipart initiate failed: {ex.Message}", ex);
+        }
+    }
+
+    private async Task<DirectUploadFileResult> UploadMultipartPartWithRetryAsync(
+        UploadPlanFileEntry file,
+        string uploadId,
+        int partNum,
+        byte[] partBytes,
+        string checksum,
+        bool isLast,
+        DirectUploadPlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var path = $"/v2/document/upload/{Uri.EscapeDataString(uploadId)}/part/{partNum}";
+        var maxAttempts = Math.Max(1, context.MultipartPartMaxRetryAttempts);
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                using var multipart = new MultipartFormDataContent();
+                multipart.Add(new StringContent(isLast ? "true" : "false", Encoding.UTF8), "isLast");
+                var partContent = new ByteArrayContent(partBytes);
+                partContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                multipart.Add(partContent, "file", $"part-{partNum:D5}.bin");
+
+                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Content-Checksum-Algorithm"] = "SHA256",
+                    ["Content-Checksum"] = checksum
+                };
+
+                Trace.WriteLine(
+                    $"ND-DIRECT multipart part start relativePath='{file.RelativePath}' uploadId='{uploadId}' part={partNum} attempt={attempt}/{maxAttempts} isLast={isLast}.");
+                await _apiClient.PutForStringAsync(
+                    path,
+                    multipart,
+                    cancellationToken,
+                    retryOnThrottle: false,
+                    requestHeaders: headers,
+                    requestTimeout: context.MultipartPartTimeout);
+                Trace.WriteLine(
+                    $"ND-DIRECT multipart part success relativePath='{file.RelativePath}' uploadId='{uploadId}' part={partNum} attempt={attempt}/{maxAttempts}.");
+                return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
+            }
+            catch (Exception ex)
+            {
+                var status = TryExtractStatusCode(ex) ?? 0;
+                var transient = IsTransientUploadStatus(status);
+                Trace.WriteLine(
+                    $"ND-DIRECT multipart part failed relativePath='{file.RelativePath}' uploadId='{uploadId}' part={partNum} attempt={attempt}/{maxAttempts} status={status} transient={transient} message='{SanitizeForTrace(ex.Message)}'.");
+                if (!transient || attempt >= maxAttempts)
+                {
+                    return new DirectUploadFileResult(
+                        file.RelativePath,
+                        false,
+                        status,
+                        $"Multipart part {partNum} failed: {ex.Message}");
+                }
+
+                var delay = TimeSpan.FromMilliseconds(500 * Math.Pow(2, attempt - 1));
+                Trace.WriteLine(
+                    $"ND-DIRECT multipart part retry relativePath='{file.RelativePath}' uploadId='{uploadId}' part={partNum} nextAttempt={attempt + 1}/{maxAttempts} delayMs={delay.TotalMilliseconds:F0}.");
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        return new DirectUploadFileResult(
+            file.RelativePath,
+            false,
+            0,
+            $"Multipart part {partNum} failed.");
+    }
+
+    private async Task<DirectUploadFileResult> CompleteMultipartUploadAsync(
+        UploadPlanFileEntry file,
+        string uploadId,
+        IReadOnlyList<(int PartNum, string Checksum)> partChecksums,
+        string fullChecksum,
+        DirectUploadPlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var path = $"/v2/document/complete/{Uri.EscapeDataString(uploadId)}";
+        using var form = new MultipartFormDataContent();
+        for (var i = 0; i < partChecksums.Count; i++)
+        {
+            form.Add(
+                new StringContent(partChecksums[i].PartNum.ToString(CultureInfo.InvariantCulture), Encoding.UTF8),
+                $"partsChecksums[{i}].PartNum");
+            form.Add(
+                new StringContent(partChecksums[i].Checksum, Encoding.UTF8),
+                $"partsChecksums[{i}].Checksum");
+        }
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Checksum"] = fullChecksum
+        };
+
+        try
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT multipart complete start relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count}.");
+            await _apiClient.PostForStringAsync(
+                path,
+                form,
+                cancellationToken,
+                retryOnThrottle: false,
+                requestHeaders: headers,
+                requestTimeout: context.MultipartPartTimeout);
+            Trace.WriteLine(
+                $"ND-DIRECT multipart complete success relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count}.");
+            return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
+        }
+        catch (Exception ex)
+        {
+            var status = TryExtractStatusCode(ex) ?? 0;
+            Trace.WriteLine(
+                $"ND-DIRECT multipart complete failed relativePath='{file.RelativePath}' uploadId='{uploadId}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
+            return new DirectUploadFileResult(
+                file.RelativePath,
+                false,
+                status,
+                $"Multipart complete failed: {ex.Message}");
+        }
+    }
+
+    private static int NormalizeMultipartChunkSize(long configuredChunkSize)
+    {
+        const int defaultChunkSize = 100 * 1024 * 1024;
+        var normalized = configuredChunkSize <= 0 ? defaultChunkSize : configuredChunkSize;
+        if (normalized > int.MaxValue)
+        {
+            return int.MaxValue;
+        }
+
+        return (int)normalized;
+    }
+
+    private static string TryExtractUploadId(string? responseContent)
+    {
+        if (string.IsNullOrWhiteSpace(responseContent))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(responseContent);
+            if (TryReadUploadIdFromJsonElement(json.RootElement, out var parsed))
+            {
+                return parsed;
+            }
+        }
+        catch
+        {
+            // Ignore parse failures and use text fallback below.
+        }
+
+        var trimmed = responseContent.Trim().Trim('"');
+        return trimmed;
+    }
+
+    private static bool TryReadUploadIdFromJsonElement(JsonElement element, out string uploadId)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var key in new[] { "uploadId", "UploadId", "id", "Id" })
+            {
+                if (element.TryGetProperty(key, out var value) &&
+                    value.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(value.GetString()))
+                {
+                    uploadId = value.GetString()!;
+                    return true;
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryReadUploadIdFromJsonElement(property.Value, out uploadId))
+                {
+                    return true;
+                }
+            }
+        }
+
+        uploadId = string.Empty;
+        return false;
     }
 
     private static string BuildV1DocumentUploadPath(int? indexPriority)
@@ -813,7 +1189,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         if (customAttributes.Count == 0)
         {
             var fallbackJson = JsonSerializer.Serialize(profileValues);
-            return new UploadProfilePayload(fallbackJson, fallbackJson);
+            return new UploadProfilePayload(fallbackJson, fallbackJson, Array.Empty<int>());
         }
 
         var profilePayload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
@@ -822,7 +1198,13 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         };
         var profileJson = JsonSerializer.Serialize(profilePayload);
         var customAttributesJson = JsonSerializer.Serialize(customAttributes);
-        return new UploadProfilePayload(profileJson, customAttributesJson);
+        return new UploadProfilePayload(
+            profileJson,
+            customAttributesJson,
+            customAttributes
+                .Select(item => item.TryGetValue("id", out var idValue) && idValue is int id ? id : 0)
+                .Where(id => id > 0)
+                .ToList());
     }
 
     private async Task<Dictionary<string, string>> BuildProfileValuesForFileAsync(

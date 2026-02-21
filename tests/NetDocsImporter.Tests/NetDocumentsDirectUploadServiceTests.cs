@@ -850,8 +850,12 @@ public class NetDocumentsDirectUploadServiceTests
                 requestBody!.Contains("name=\"profile\"", StringComparison.OrdinalIgnoreCase) ||
                 requestBody.Contains("name=profile", StringComparison.OrdinalIgnoreCase));
             Assert.True(
-                requestBody.Contains("name=\"customAttributes\"", StringComparison.OrdinalIgnoreCase) ||
-                requestBody.Contains("name=customAttributes", StringComparison.OrdinalIgnoreCase));
+                requestBody.Contains("name=\"partialProfiling\"", StringComparison.OrdinalIgnoreCase) ||
+                requestBody.Contains("name=partialProfiling", StringComparison.OrdinalIgnoreCase));
+            Assert.True(
+                requestBody.Contains("name=\"failOnError\"", StringComparison.OrdinalIgnoreCase) ||
+                requestBody.Contains("name=failOnError", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("true", requestBody!, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("\"customAttributes\"", requestBody!, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("\"id\":2", requestBody!, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("\"id\":3", requestBody!, StringComparison.OrdinalIgnoreCase);
@@ -864,7 +868,253 @@ public class NetDocumentsDirectUploadServiceTests
         }
     }
 
-    private static UploadPlanResult CreatePlan(string filePath)
+    [Fact]
+    public async Task BuildPlanAsync_AddsMultipartIssueCodesForLargeFiles()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "large.bin");
+        Directory.CreateDirectory(sourceRoot);
+        await File.WriteAllBytesAsync(filePath, new byte[15]);
+        var jobId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await SeedJobWithRootFileAsync(dbPath, jobId, sourceRoot, filePath);
+            var service = CreateDirectUploadService(
+                new StubHttpHandler(_ => JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""")),
+                dbPath);
+
+            var multipartEnabled = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection { Type = NdTargetType.Folder, Id = "D-DESTINATION", Name = "Destination" },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    EnableMultipartUpload = true,
+                    MultipartThresholdBytes = 10,
+                    MultipartMaxFileSizeBytes = 20
+                },
+                CancellationToken.None);
+            Assert.Contains(multipartEnabled.Issues, issue => issue.Code == "MULTIPART_REQUIRED");
+            Assert.True(multipartEnabled.Files[0].UseMultipartUpload);
+
+            var multipartDisabled = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection { Type = NdTargetType.Folder, Id = "D-DESTINATION", Name = "Destination" },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    EnableMultipartUpload = false,
+                    MultipartThresholdBytes = 10,
+                    MultipartMaxFileSizeBytes = 20
+                },
+                CancellationToken.None);
+            Assert.Contains(multipartDisabled.Issues, issue => issue.Code == "MULTIPART_DISABLED_FOR_LARGE_FILE");
+            Assert.Contains(multipartDisabled.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
+
+            var multipartTooLarge = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection { Type = NdTargetType.Folder, Id = "D-DESTINATION", Name = "Destination" },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false,
+                    EnableMultipartUpload = true,
+                    MultipartThresholdBytes = 10,
+                    MultipartMaxFileSizeBytes = 14
+                },
+                CancellationToken.None);
+            Assert.Contains(multipartTooLarge.Issues, issue => issue.Code == "MULTIPART_MAX_SIZE_EXCEEDED");
+            Assert.Contains(multipartTooLarge.Issues, issue => issue.Severity == DirectUploadIssueSeverity.Error);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_UsesV2MultipartEndpointsWhenUseMultipartUploadTrue()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)1, 8).ToArray());
+        var requests = new List<(string Method, string Path)>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                lock (requests)
+                {
+                    requests.Add((request.Method.Method, path));
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-1"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-1/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: true);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Contains(requests, r => r == ("POST", "/v2/document/D-DESTINATION/1/initiate"));
+            Assert.Contains(requests, r => r == ("PUT", "/v2/document/upload/up-1/part/1"));
+            Assert.Contains(requests, r => r == ("POST", "/v2/document/complete/up-1"));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_MultipartPartRetriesOnTransientFailure()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)3, 16).ToArray());
+        var partAttempts = 0;
+        var completeCalls = 0;
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-retry"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-retry/part/1")
+                {
+                    partAttempts++;
+                    if (partAttempts == 1)
+                    {
+                        return JsonResponse(HttpStatusCode.ServiceUnavailable, """{"error":"try again"}""");
+                    }
+
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-retry")
+                {
+                    completeCalls++;
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: true);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartPartMaxRetryAttempts = 2,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Equal(2, partAttempts);
+            Assert.Equal(1, completeCalls);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_DoesNotCallCompleteWhenMultipartPartFails()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)7, 16).ToArray());
+        var completeCalls = 0;
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-fail"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-fail/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.InternalServerError, """{"error":"part failed"}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-fail")
+                {
+                    completeCalls++;
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: true);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartPartMaxRetryAttempts = 1,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Files[0].Succeeded);
+            Assert.Equal(0, completeCalls);
+            Assert.Contains("Multipart part 1 failed", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    private static UploadPlanResult CreatePlan(string filePath, bool useMultipartUpload = false)
     {
         return new UploadPlanResult
         {
@@ -882,7 +1132,7 @@ public class NetDocumentsDirectUploadServiceTests
                     DestinationContainerId: "D-DESTINATION",
                     ProfileValues: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                     Acl: null,
-                    UseMultipartUpload: false)
+                    UseMultipartUpload: useMultipartUpload)
             }
         };
     }

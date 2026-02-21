@@ -38,6 +38,8 @@ public sealed class NetDocumentsApiClient
             innerHandler ?? new HttpClientHandler());
 
         _client = new HttpClient(handler, disposeHandler: true);
+        // Use caller-provided cancellation/request timeouts instead of HttpClient's 100-second default.
+        _client.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     /// <summary>
@@ -111,12 +113,16 @@ public sealed class NetDocumentsApiClient
         string relativeOrAbsolutePath,
         HttpContent content,
         CancellationToken cancellationToken = default,
-        bool retryOnThrottle = true)
+        bool retryOnThrottle = true,
+        TimeSpan? requestTimeout = null)
     {
         var requestUri = BuildUri(relativeOrAbsolutePath);
         var stopwatch = Stopwatch.StartNew();
         using var response = retryOnThrottle
-            ? await SendWithRetryAsync(await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, null, cancellationToken), cancellationToken)
+            ? await SendWithRetryAsync(
+                await BuildBufferedRequestFactoryAsync(HttpMethod.Post, requestUri, content, null, cancellationToken),
+                cancellationToken,
+                requestTimeout)
             : await SendOnceAsync(() =>
             {
                 var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -125,7 +131,7 @@ public sealed class NetDocumentsApiClient
                 };
                 request.Headers.TryAddWithoutValidation("Accept", "application/json");
                 return request;
-            }, cancellationToken);
+            }, cancellationToken, requestTimeout);
         stopwatch.Stop();
         var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 

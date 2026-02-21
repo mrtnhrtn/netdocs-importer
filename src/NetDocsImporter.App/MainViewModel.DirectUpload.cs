@@ -144,6 +144,9 @@ public sealed partial class MainViewModel
             var warningCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Warning);
             var infoCount = plan.Issues.Count(i => i.Severity == DirectUploadIssueSeverity.Info);
             var plannedFolderCreates = plan.PlannedFolderCreates;
+            var multipartFileCount = plan.Files.Count(f => f.UseMultipartUpload);
+            var v1FileCount = plan.Files.Count - multipartFileCount;
+            var uploadPathSummary = $"Path split: v2 multipart={multipartFileCount:N0}, v1 document={v1FileCount:N0}.";
             var skippedSummary = DirectUploadIssueUtilities.BuildSkippedFilesSummary(plan.Issues, maxInline: 3);
             var firstBlockingIssue = plan.Issues
                 .Where(i => i.Severity == DirectUploadIssueSeverity.Error)
@@ -178,6 +181,8 @@ public sealed partial class MainViewModel
             {
                 DirectUploadStatus = $"{DirectUploadStatus} {skippedSummary}";
             }
+
+            DirectUploadStatus = $"{DirectUploadStatus} {uploadPathSummary}";
 
             Trace.WriteLine($"ND-DIRECT preflight status '{DirectUploadStatus}'.");
         }
@@ -858,6 +863,8 @@ public sealed partial class MainViewModel
         {
             "FOLDER_CREATE_FORBIDDEN" => 0,
             "SAVED_SEARCH_UPLOAD_SCOPE_UNRESOLVED" => 1,
+            "MULTIPART_MAX_SIZE_EXCEEDED" => 2,
+            "MULTIPART_DISABLED_FOR_LARGE_FILE" => 3,
             _ => 10
         };
     }
