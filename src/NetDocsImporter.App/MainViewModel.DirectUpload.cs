@@ -10,6 +10,13 @@ namespace NetDocsImporter.App;
 
 public sealed partial class MainViewModel
 {
+    private const string DevForceMultipartEnvVar = "ND_DIRECTUPLOAD_DEV_FORCE_MULTIPART";
+    private const string DevMultipartPayloadBytesEnvVar = "ND_DIRECTUPLOAD_DEV_MULTIPART_PAYLOAD_BYTES";
+    private const string DevMultipartChunkBytesEnvVar = "ND_DIRECTUPLOAD_DEV_MULTIPART_CHUNK_BYTES";
+    private const string DevAddToRecentsEnvVar = "ND_DIRECTUPLOAD_DEV_ADD_TO_RECENTS";
+    private const int MaxDevMultipartPayloadBytes = 256 * 1024 * 1024;
+    private const int MaxDevMultipartChunkBytes = 128 * 1024 * 1024;
+
     private readonly ObservableCollection<DirectUploadIssueView> _directUploadPreflightIssues = new();
     private readonly IReadOnlyList<ImportExecutionMode> _importExecutionModeOptions =
         new[] { ImportExecutionMode.NdImportCsv, ImportExecutionMode.DirectApi };
@@ -547,6 +554,20 @@ public sealed partial class MainViewModel
             v1DocumentIndexPriority = 400;
         }
 
+        var forceMultipartForTesting =
+            IsDeveloperMode &&
+            IsEnvironmentFlagEnabled(DevForceMultipartEnvVar);
+        var testPayloadBytes = IsDeveloperMode
+            ? ParseEnvironmentBoundedInt(DevMultipartPayloadBytesEnvVar, 1, MaxDevMultipartPayloadBytes)
+            : 0;
+        var multipartChunkSizeBytes = IsDeveloperMode
+            ? ParseEnvironmentBoundedInt(DevMultipartChunkBytesEnvVar, 1, MaxDevMultipartChunkBytes)
+            : 0;
+        var addToRecents = IsDeveloperMode
+            ? ParseEnvironmentOptionalBool(DevAddToRecentsEnvVar)
+            : null;
+        var multipartThresholdBytes = forceMultipartForTesting ? 1 : 2L * 1024 * 1024 * 1024;
+
         return new DirectUploadPlanContext
         {
             JobId = CurrentJobId ?? string.Empty,
@@ -557,7 +578,79 @@ public sealed partial class MainViewModel
             RequireAcl = false,
             MaxConcurrency = Math.Clamp(MaxConcurrency, 1, 8),
             MaxRetryAttempts = 4,
+            MultipartThresholdBytes = multipartThresholdBytes,
+            MultipartChunkSizeBytes = multipartChunkSizeBytes > 0
+                ? multipartChunkSizeBytes
+                : 100L * 1024 * 1024,
+            AddToRecents = addToRecents,
+            ForceMultipartUploadForTesting = forceMultipartForTesting,
+            MultipartTestPayloadBytes = testPayloadBytes,
             V1DocumentIndexPriority = v1DocumentIndexPriority
+        };
+    }
+
+    private static bool IsEnvironmentFlagEnabled(string variableName)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        return raw.Trim() switch
+        {
+            "1" => true,
+            "true" => true,
+            "TRUE" => true,
+            "yes" => true,
+            "YES" => true,
+            "on" => true,
+            "ON" => true,
+            _ => false
+        };
+    }
+
+    private static int ParseEnvironmentBoundedInt(string variableName, int minValue, int maxValue)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return 0;
+        }
+
+        if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return 0;
+        }
+
+        return Math.Clamp(parsed, minValue, maxValue);
+    }
+
+    private static bool? ParseEnvironmentOptionalBool(string variableName)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return raw.Trim() switch
+        {
+            "1" => true,
+            "true" => true,
+            "TRUE" => true,
+            "yes" => true,
+            "YES" => true,
+            "on" => true,
+            "ON" => true,
+            "0" => false,
+            "false" => false,
+            "FALSE" => false,
+            "no" => false,
+            "NO" => false,
+            "off" => false,
+            "OFF" => false,
+            _ => null
         };
     }
 
@@ -604,7 +697,7 @@ public sealed partial class MainViewModel
 
         var lines = new List<string>
         {
-            "RELATIVE PATH,STATUS,HTTP STATUS,MESSAGE"
+            "RELATIVE PATH,STATUS,HTTP STATUS,DOCUMENT ID,MESSAGE"
         };
         foreach (var file in result.Files)
         {
@@ -613,6 +706,7 @@ public sealed partial class MainViewModel
                 EscapeCsv(file.RelativePath),
                 file.Succeeded ? "Succeeded" : "Failed",
                 file.HttpStatus.ToString(CultureInfo.InvariantCulture),
+                EscapeCsv(file.DocumentId ?? string.Empty),
                 EscapeCsv(file.Message)
             }));
         }
@@ -674,7 +768,7 @@ public sealed partial class MainViewModel
         {
             var status = file.Succeeded ? "OK" : "FAIL";
             builder.AppendLine($" [{status}] {file.RelativePath}");
-            builder.AppendLine($"       http={file.HttpStatus} message={file.Message}");
+            builder.AppendLine($"       http={file.HttpStatus} documentId={file.DocumentId ?? string.Empty} message={file.Message}");
         }
 
         builder.AppendLine("+------------------------------------------------------------+");

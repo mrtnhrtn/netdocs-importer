@@ -86,6 +86,12 @@ public sealed class DirectUploadPlanContext
     public int MultipartPartMaxRetryAttempts { get; init; } = 4;
 
     public int? V1DocumentIndexPriority { get; init; }
+
+    public bool? AddToRecents { get; init; }
+
+    public bool ForceMultipartUploadForTesting { get; init; }
+
+    public int MultipartTestPayloadBytes { get; init; }
 }
 
 public sealed record DirectUploadProgress(
@@ -98,7 +104,8 @@ public sealed record DirectUploadFileResult(
     string RelativePath,
     bool Succeeded,
     int HttpStatus,
-    string Message);
+    string Message,
+    string? DocumentId = null);
 
 public sealed class DirectUploadRunResult
 {

@@ -23,6 +23,19 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     private const int DefaultMaxUploadConcurrency = 8;
     private const int MaxUploadConcurrency = 8;
     private const int DefaultMaxUploadAttempts = 4;
+    private static readonly HashSet<string> BlockedUploadExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "exe",
+        "com",
+        "bat",
+        "js",
+        "vbs",
+        "pif",
+        "cmd",
+        "dll",
+        "ocx",
+        "pwl"
+    };
     private static readonly bool EnablePermissiveAmbiguousFolderListFallback =
         !string.Equals(
             Environment.GetEnvironmentVariable("ND_DIRECTUPLOAD_DISABLE_PERMISSIVE_AMBIGUOUS_FOLDER_LIST"),
@@ -303,6 +316,20 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 continue;
             }
 
+            var extensionToken = extension.TrimStart('.');
+            if (BlockedUploadExtensions.Contains(extensionToken))
+            {
+                skippedCount++;
+                Trace.WriteLine(
+                    $"ND-DIRECT preflight file blocked reason='blocked-extension' relativePath='{file.RelativePath}' extension='{extensionToken}'.");
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Error,
+                    "BLOCKED_FILE_EXTENSION",
+                    $"File type '.{extensionToken}' is blocked by NetDocuments security policy and cannot be imported.",
+                    file.RelativePath));
+                continue;
+            }
+
             var relativeFolderPath = GetRelativeFolderPath(file.RelativePath);
             if (!resolvedFolders.TryGetValue(relativeFolderPath, out var destinationId) || string.IsNullOrWhiteSpace(destinationId))
             {
@@ -338,12 +365,26 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     file.RelativePath));
             }
 
+            var forceMultipartForTesting =
+                context.ForceMultipartUploadForTesting &&
+                context.MultipartTestPayloadBytes > 0;
+            var qualifiesForMultipart =
+                forceMultipartForTesting ||
+                sizeBytes >= context.MultipartThresholdBytes;
             var useMultipartUpload =
                 context.EnableMultipartUpload &&
-                sizeBytes >= context.MultipartThresholdBytes &&
+                qualifiesForMultipart &&
                 sizeBytes <= context.MultipartMaxFileSizeBytes;
 
-            if (sizeBytes >= context.MultipartThresholdBytes && context.EnableMultipartUpload)
+            if (forceMultipartForTesting && context.EnableMultipartUpload)
+            {
+                issues.Add(new DirectUploadIssue(
+                    DirectUploadIssueSeverity.Info,
+                    "MULTIPART_FORCED_DEV_TEST",
+                    $"Developer multipart test mode is active; this file will use v2 multipart upload with a synthetic payload of {context.MultipartTestPayloadBytes.ToString(CultureInfo.InvariantCulture)} bytes.",
+                    file.RelativePath));
+            }
+            else if (sizeBytes >= context.MultipartThresholdBytes && context.EnableMultipartUpload)
             {
                 issues.Add(new DirectUploadIssue(
                     DirectUploadIssueSeverity.Info,
@@ -733,6 +774,15 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             return await TryUploadFileMultipartAsync(file, context, cancellationToken);
         }
 
+        return await TryUploadFileV1Async(file, context, null, cancellationToken);
+    }
+
+    private async Task<DirectUploadFileResult> TryUploadFileV1Async(
+        UploadPlanFileEntry file,
+        DirectUploadPlanContext context,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
         var v1DocumentPath = BuildV1DocumentUploadPath(context.V1DocumentIndexPriority);
         var candidateEndpoints = new[]
         {
@@ -752,6 +802,8 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 {
                     multipart.Add(new StringContent("upload", Encoding.UTF8), "action");
                 }
+
+                multipart.Add(new StringContent("standardAttributes", Encoding.UTF8), "return");
 
                 multipart.Add(new StringContent(Path.GetFileNameWithoutExtension(file.FullPath), Encoding.UTF8), "name");
                 var extension = Path.GetExtension(file.FullPath).TrimStart('.');
@@ -792,19 +844,28 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                     multipart.Add(new StringContent(file.Acl, Encoding.UTF8), "acl");
                 }
 
-                TimeSpan? requestTimeout = file.UseMultipartUpload
-                    ? context.MultipartPartTimeout
-                    : null;
+                if (context.AddToRecents.HasValue)
+                {
+                    multipart.Add(
+                        new StringContent(context.AddToRecents.Value ? "true" : "false", Encoding.UTF8),
+                        "addToRecents");
+                }
 
-                await _apiClient.PostAsync(
+                var response = await _apiClient.PostForStringAsync(
                     candidate.Path,
                     multipart,
                     cancellationToken,
                     retryOnThrottle: false,
                     requestTimeout: requestTimeout);
+                var documentId = TryExtractDocumentId(response);
                 Trace.WriteLine(
-                    $"ND-DIRECT upload success endpoint='{candidate.Path}' relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
-                return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
+                    $"ND-DIRECT upload success endpoint='{candidate.Path}' relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}' documentId='{documentId}' addToRecents={context.AddToRecents?.ToString() ?? "default"}.");
+                return new DirectUploadFileResult(
+                    file.RelativePath,
+                    true,
+                    200,
+                    "Uploaded",
+                    string.IsNullOrWhiteSpace(documentId) ? null : documentId);
             }
             catch (Exception ex)
             {
@@ -839,7 +900,18 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     {
         try
         {
-            var initiateResult = await InitiateMultipartUploadAsync(file, context, cancellationToken);
+            var documentId = await CreateMultipartDocumentShellAsync(file, context, cancellationToken);
+            if (string.IsNullOrWhiteSpace(documentId))
+            {
+                return new DirectUploadFileResult(
+                    file.RelativePath,
+                    false,
+                    0,
+                    "Multipart upload failed: unable to determine created document id.");
+            }
+
+            var uploadPayloadSizeBytes = ResolveMultipartPayloadSize(file, context);
+            var initiateResult = await InitiateMultipartUploadAsync(file, documentId, uploadPayloadSizeBytes, context, cancellationToken);
             if (string.IsNullOrWhiteSpace(initiateResult.UploadId))
             {
                 return new DirectUploadFileResult(
@@ -853,11 +925,16 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             var partChecksums = new List<(int PartNum, string Checksum)>();
             using var fullChecksum = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var chunkSize = NormalizeMultipartChunkSize(context.MultipartChunkSizeBytes);
-            var fileLength = new FileInfo(file.FullPath).Length;
-
-            await using var stream = File.OpenRead(file.FullPath);
+            var fileLength = uploadPayloadSizeBytes;
+            using var stream = CreateMultipartPayloadStream(file, context);
             var buffer = new byte[chunkSize];
             var partNum = 1;
+
+            if (context.ForceMultipartUploadForTesting && context.MultipartTestPayloadBytes > 0)
+            {
+                Trace.WriteLine(
+                    $"ND-DIRECT multipart dev-test mode relativePath='{file.RelativePath}' sourcePath='{file.FullPath}' simulatedPayloadBytes={fileLength}.");
+            }
 
             while (true)
             {
@@ -901,12 +978,20 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 cancellationToken);
             if (!completeResult.Succeeded)
             {
-                return completeResult;
+                return completeResult with
+                {
+                    DocumentId = documentId
+                };
             }
 
             Trace.WriteLine(
-                $"ND-DIRECT multipart upload success relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count}.");
-            return new DirectUploadFileResult(file.RelativePath, true, 200, "Uploaded");
+                $"ND-DIRECT multipart upload success relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count} documentId='{documentId}'.");
+            return new DirectUploadFileResult(
+                file.RelativePath,
+                true,
+                200,
+                "Uploaded",
+                documentId);
         }
         catch (Exception ex)
         {
@@ -919,20 +1004,88 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
     }
 
+    private async Task<string> CreateMultipartDocumentShellAsync(
+        UploadPlanFileEntry file,
+        DirectUploadPlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var extension = Path.GetExtension(file.FullPath).TrimStart('.');
+        using var body = new MultipartFormDataContent
+        {
+            { new StringContent("create", Encoding.UTF8), "action" },
+            { new StringContent(Path.GetFileNameWithoutExtension(file.FullPath), Encoding.UTF8), "name" }
+        };
+
+        if (!string.IsNullOrWhiteSpace(extension))
+        {
+            body.Add(new StringContent(extension, Encoding.UTF8), "extension");
+        }
+
+        if (!string.IsNullOrWhiteSpace(file.DestinationContainerId))
+        {
+            body.Add(new StringContent(file.DestinationContainerId, Encoding.UTF8), "destination");
+        }
+        else if (!string.IsNullOrWhiteSpace(context.CabinetId))
+        {
+            body.Add(new StringContent(context.CabinetId, Encoding.UTF8), "cabinet");
+        }
+
+        if (file.ProfileValues.Count > 0)
+        {
+            var profilePayload = BuildUploadProfilePayload(file.ProfileValues);
+            body.Add(new StringContent(profilePayload.ProfileJson, Encoding.UTF8), "profile");
+            body.Add(new StringContent("true", Encoding.UTF8), "partialProfiling");
+            body.Add(new StringContent("true", Encoding.UTF8), "failOnError");
+        }
+
+        body.Add(new StringContent("standardAttributes", Encoding.UTF8), "return");
+        if (context.AddToRecents.HasValue)
+        {
+            body.Add(
+                new StringContent(context.AddToRecents.Value ? "true" : "false", Encoding.UTF8),
+                "addToRecents");
+        }
+
+        try
+        {
+            Trace.WriteLine(
+                $"ND-DIRECT multipart create start relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
+            var response = await _apiClient.PostForStringAsync(
+                "/v1/Document",
+                body,
+                cancellationToken,
+                retryOnThrottle: false,
+                requestTimeout: context.MultipartPartTimeout);
+            var documentId = TryExtractDocumentId(response);
+            Trace.WriteLine(
+                $"ND-DIRECT multipart create success relativePath='{file.RelativePath}' documentId='{documentId}'.");
+            return documentId;
+        }
+        catch (Exception ex)
+        {
+            var status = TryExtractStatusCode(ex) ?? 0;
+            Trace.WriteLine(
+                $"ND-DIRECT multipart create failed relativePath='{file.RelativePath}' status={status} message='{SanitizeForTrace(ex.Message)}'.");
+            throw new InvalidOperationException($"Multipart create failed: {ex.Message}", ex);
+        }
+    }
+
     private async Task<MultipartInitiatePayload> InitiateMultipartUploadAsync(
         UploadPlanFileEntry file,
+        string documentId,
+        long totalSizeBytes,
         DirectUploadPlanContext context,
         CancellationToken cancellationToken)
     {
         var extension = Path.GetExtension(file.FullPath).TrimStart('.');
         var body = new MultipartFormDataContent
         {
-            { new StringContent(file.SizeBytes.ToString(CultureInfo.InvariantCulture), Encoding.UTF8), "totalSize" },
+            { new StringContent(totalSizeBytes.ToString(CultureInfo.InvariantCulture), Encoding.UTF8), "totalSize" },
             { new StringContent("upload", Encoding.UTF8), "action" },
             { new StringContent(extension, Encoding.UTF8), "extension" }
         };
 
-        var initiatePath = $"/v2/document/{Uri.EscapeDataString(file.DestinationContainerId)}/1/initiate";
+        var initiatePath = $"/v2/document/{Uri.EscapeDataString(documentId)}/1/initiate";
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Checksum-Algorithm"] = "SHA256"
@@ -1045,15 +1198,12 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
     {
         var path = $"/v2/document/complete/{Uri.EscapeDataString(uploadId)}";
         using var form = new MultipartFormDataContent();
-        for (var i = 0; i < partChecksums.Count; i++)
-        {
-            form.Add(
-                new StringContent(partChecksums[i].PartNum.ToString(CultureInfo.InvariantCulture), Encoding.UTF8),
-                $"partsChecksums[{i}].PartNum");
-            form.Add(
-                new StringContent(partChecksums[i].Checksum, Encoding.UTF8),
-                $"partsChecksums[{i}].Checksum");
-        }
+        var payload = partChecksums
+            .Select(p => new { partNum = p.PartNum, checksum = p.Checksum })
+            .ToList();
+        var payloadJson = JsonSerializer.Serialize(payload);
+        using var payloadContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+        form.Add(payloadContent, "partsChecksums");
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1100,6 +1250,34 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         return (int)normalized;
     }
 
+    private static long ResolveMultipartPayloadSize(UploadPlanFileEntry file, DirectUploadPlanContext context)
+    {
+        if (context.ForceMultipartUploadForTesting && context.MultipartTestPayloadBytes > 0)
+        {
+            return context.MultipartTestPayloadBytes;
+        }
+
+        return new FileInfo(file.FullPath).Length;
+    }
+
+    private static Stream CreateMultipartPayloadStream(UploadPlanFileEntry file, DirectUploadPlanContext context)
+    {
+        if (context.ForceMultipartUploadForTesting && context.MultipartTestPayloadBytes > 0)
+        {
+            var payloadLength = context.MultipartTestPayloadBytes;
+            var payload = new byte[payloadLength];
+            var seed = SHA256.HashData(Encoding.UTF8.GetBytes(file.RelativePath));
+            for (var i = 0; i < payloadLength; i++)
+            {
+                payload[i] = seed[i % seed.Length];
+            }
+
+            return new MemoryStream(payload, writable: false);
+        }
+
+        return File.OpenRead(file.FullPath);
+    }
+
     private static string TryExtractUploadId(string? responseContent)
     {
         if (string.IsNullOrWhiteSpace(responseContent))
@@ -1122,6 +1300,49 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         var trimmed = responseContent.Trim().Trim('"');
         return trimmed;
+    }
+
+    private static string TryExtractDocumentId(string? responseContent)
+    {
+        if (string.IsNullOrWhiteSpace(responseContent))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(responseContent);
+            var root = json.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("standardAttributes", out var standardAttributes))
+            {
+                var standardId = ReadString(standardAttributes, "id", "Id");
+                if (!string.IsNullOrWhiteSpace(standardId))
+                {
+                    return standardId;
+                }
+            }
+
+            var rootId = ReadString(root, "id", "Id", "documentId", "DocumentId");
+            if (!string.IsNullOrWhiteSpace(rootId))
+            {
+                return rootId;
+            }
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                var stringValue = root.GetString();
+                return string.IsNullOrWhiteSpace(stringValue) ? string.Empty : stringValue;
+            }
+
+            return string.Empty;
+        }
+        catch
+        {
+            // Ignore parse failures and use text fallback below.
+        }
+
+        return responseContent.Trim().Trim('"');
     }
 
     private static bool TryReadUploadIdFromJsonElement(JsonElement element, out string uploadId)

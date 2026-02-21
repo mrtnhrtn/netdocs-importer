@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.IO.Compression;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 using NetDocsImporter.NetDocs;
@@ -322,6 +323,54 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.Single(result.Files);
             Assert.Equal("3470-9010-7660", result.Files[0].DestinationContainerId);
             Assert.Equal("ACME", result.Files[0].ProfileValues["Client"]);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_BlocksSecurityRestrictedFileExtensions()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "payload.EXE");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "not-a-real-executable");
+
+        var jobId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await SeedJobWithRootFileAsync(dbPath, jobId, sourceRoot, filePath);
+            var handler = new StubHttpHandler(_ => JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}"""));
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Workspace,
+                    Id = "3470-9010-7660",
+                    Name = "Workspace"
+                },
+                new DirectUploadPlanContext
+                {
+                    JobId = jobId,
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.False(result.CanUpload);
+            Assert.Equal(0, result.PlannedFiles);
+            Assert.Equal(1, result.SkippedFiles);
+            Assert.Contains(
+                result.Issues,
+                issue => issue.Code == "BLOCKED_FILE_EXTENSION" &&
+                         issue.Severity == DirectUploadIssueSeverity.Error &&
+                         issue.Message.Contains(".EXE", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -743,6 +792,153 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_V1Upload_ExtractsDocumentIdFromStandardAttributes()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        string? requestBody = null;
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method == HttpMethod.Post &&
+                    string.Equals(request.RequestUri?.AbsolutePath, "/v1/Document", StringComparison.OrdinalIgnoreCase))
+                {
+                    requestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-V1-123"}}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Equal("D-V1-123", result.Files[0].DocumentId);
+            Assert.False(string.IsNullOrWhiteSpace(requestBody));
+            Assert.True(
+                requestBody!.Contains("name=\"return\"", StringComparison.OrdinalIgnoreCase) ||
+                requestBody.Contains("name=return", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("standardAttributes", requestBody!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_RespectsAddToRecentsFlagForV1AndMultipartCreate()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)5, 8).ToArray());
+        var v1DocumentBodies = new List<string>();
+        var v1DocumentCallCount = 0;
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    var body = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                    if (!string.IsNullOrWhiteSpace(body))
+                    {
+                        lock (v1DocumentBodies)
+                        {
+                            v1DocumentBodies.Add(body);
+                        }
+                    }
+
+                    v1DocumentCallCount++;
+                    return v1DocumentCallCount == 1
+                        ? JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-V1-ADDRECENTS"}}""")
+                        : JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-MP-ADDRECENTS"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-MP-ADDRECENTS/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-addrecents"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-addrecents/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-addrecents")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+
+            var v1Result = await service.UploadAsync(
+                CreatePlan(filePath, useMultipartUpload: false),
+                new DirectUploadPlanContext
+                {
+                    MaxConcurrency = 1,
+                    MaxRetryAttempts = 1,
+                    AddToRecents = true
+                },
+                cancellationToken: CancellationToken.None);
+
+            Assert.Single(v1Result.Files);
+            Assert.True(v1Result.Files[0].Succeeded);
+            Assert.Equal("D-V1-ADDRECENTS", v1Result.Files[0].DocumentId);
+            Assert.True(v1DocumentBodies.Count >= 1);
+            var v1Body = v1DocumentBodies[0];
+            Assert.True(
+                v1Body.Contains("name=\"addToRecents\"", StringComparison.OrdinalIgnoreCase) ||
+                v1Body.Contains("name=addToRecents", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("true", v1Body, StringComparison.OrdinalIgnoreCase);
+
+            var multipartResult = await service.UploadAsync(
+                CreatePlan(filePath, useMultipartUpload: true),
+                new DirectUploadPlanContext
+                {
+                    MaxConcurrency = 1,
+                    MaxRetryAttempts = 1,
+                    MultipartChunkSizeBytes = 1024 * 1024,
+                    AddToRecents = false
+                },
+                cancellationToken: CancellationToken.None);
+
+            Assert.Single(multipartResult.Files);
+            Assert.True(multipartResult.Files[0].Succeeded);
+            Assert.Equal("D-MP-ADDRECENTS", multipartResult.Files[0].DocumentId);
+            Assert.True(v1DocumentBodies.Count >= 2);
+            var multipartCreateBody = v1DocumentBodies[1];
+            Assert.True(
+                multipartCreateBody.Contains("name=\"addToRecents\"", StringComparison.OrdinalIgnoreCase) ||
+                multipartCreateBody.Contains("name=addToRecents", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("false", multipartCreateBody, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_AppendsIndexPriorityQueryWhenConfigured()
     {
         var tempRoot = CreateTempRoot();
@@ -956,7 +1152,12 @@ public class NetDocumentsDirectUploadServiceTests
                     requests.Add((request.Method.Method, path));
                 }
 
-                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-CREATED"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-CREATED/1/initiate")
                 {
                     return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-1"}""");
                 }
@@ -987,9 +1188,80 @@ public class NetDocumentsDirectUploadServiceTests
 
             Assert.Single(result.Files);
             Assert.True(result.Files[0].Succeeded);
-            Assert.Contains(requests, r => r == ("POST", "/v2/document/D-DESTINATION/1/initiate"));
+            Assert.Equal("D-CREATED", result.Files[0].DocumentId);
+            Assert.Contains(requests, r => r == ("POST", "/v1/Document"));
+            Assert.Contains(requests, r => r == ("POST", "/v2/document/D-CREATED/1/initiate"));
             Assert.Contains(requests, r => r == ("PUT", "/v2/document/upload/up-1/part/1"));
             Assert.Contains(requests, r => r == ("POST", "/v2/document/complete/up-1"));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_MultipartInitiate_UsesCreatedDocumentIdInsteadOfDestinationId()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)4, 8).ToArray());
+        var requests = new List<(string Method, string Path)>();
+        const string destinationId = ":AU1:8:3:1:o:^W160802111732575.nev";
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                lock (requests)
+                {
+                    requests.Add((request.Method.Method, path));
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-NEWDOC"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-NEWDOC/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-raw"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-raw/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-raw")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: true, destinationContainerId: destinationId);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Contains(requests, r => r == ("POST", "/v1/Document"));
+            Assert.Contains(requests, r => r == ("POST", "/v2/document/D-NEWDOC/1/initiate"));
+            Assert.DoesNotContain(
+                requests,
+                r => r.Method == "POST" &&
+                     Uri.UnescapeDataString(r.Path).Contains(destinationId, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -1012,7 +1284,12 @@ public class NetDocumentsDirectUploadServiceTests
             var handler = new StubHttpHandler(request =>
             {
                 var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-RETRY"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-RETRY/1/initiate")
                 {
                     return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-retry"}""");
                 }
@@ -1073,7 +1350,12 @@ public class NetDocumentsDirectUploadServiceTests
             var handler = new StubHttpHandler(request =>
             {
                 var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-                if (request.Method == HttpMethod.Post && path == "/v2/document/D-DESTINATION/1/initiate")
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-FAIL"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-FAIL/1/initiate")
                 {
                     return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-fail"}""");
                 }
@@ -1114,7 +1396,67 @@ public class NetDocumentsDirectUploadServiceTests
         }
     }
 
-    private static UploadPlanResult CreatePlan(string filePath, bool useMultipartUpload = false)
+    [Fact]
+    public async Task UploadAsync_MultipartCompleteFailure_ReportsDecodedCompressedSnippet()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)9, 8).ToArray());
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-COMPRESS"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-COMPRESS/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-compress"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-compress/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-compress")
+                {
+                    return GzipJsonResponse(HttpStatusCode.BadRequest, """{"error":"finalize failed"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: true);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Files[0].Succeeded);
+            Assert.Equal(400, result.Files[0].HttpStatus);
+            Assert.Contains("finalize failed", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    private static UploadPlanResult CreatePlan(
+        string filePath,
+        bool useMultipartUpload = false,
+        string destinationContainerId = "D-DESTINATION")
     {
         return new UploadPlanResult
         {
@@ -1129,7 +1471,7 @@ public class NetDocumentsDirectUploadServiceTests
                     RelativePath: "sample.txt",
                     FullPath: filePath,
                     SizeBytes: new FileInfo(filePath).Length,
-                    DestinationContainerId: "D-DESTINATION",
+                    DestinationContainerId: destinationContainerId,
                     ProfileValues: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                     Acl: null,
                     UseMultipartUpload: useMultipartUpload)
@@ -1302,6 +1644,25 @@ public class NetDocumentsDirectUploadServiceTests
         return new HttpResponseMessage(status)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpResponseMessage GzipJsonResponse(HttpStatusCode status, string payload)
+    {
+        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+        using var buffer = new MemoryStream();
+        using (var gzip = new GZipStream(buffer, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(payloadBytes, 0, payloadBytes.Length);
+        }
+
+        var content = new ByteArrayContent(buffer.ToArray());
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        content.Headers.ContentEncoding.Add("gzip");
+
+        return new HttpResponseMessage(status)
+        {
+            Content = content
         };
     }
 
