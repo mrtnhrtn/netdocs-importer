@@ -18,6 +18,7 @@ namespace NetDocsImporter.NetDocs;
 /// </summary>
 public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 {
+    private const int DefaultV1DocumentIndexPriority = 250;
     private static readonly Regex StatusCodeRegex = new(@"\((?<status>\d{3})\s", RegexOptions.Compiled);
     private static readonly Regex LegacyWorkspaceIdRegex = new(@"^\d{4}-\d{4}-\d{4}$", RegexOptions.Compiled);
     private const int DefaultMaxUploadConcurrency = 8;
@@ -1375,12 +1376,10 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
     private static string BuildV1DocumentUploadPath(int? indexPriority)
     {
-        if (!indexPriority.HasValue || indexPriority.Value <= 0)
-        {
-            return "/v1/Document";
-        }
-
-        return $"/v1/Document?indexpriority={indexPriority.Value.ToString(CultureInfo.InvariantCulture)}";
+        var effectiveIndexPriority = (!indexPriority.HasValue || indexPriority.Value <= 0)
+            ? DefaultV1DocumentIndexPriority
+            : indexPriority.Value;
+        return $"/v1/Document?indexpriority={effectiveIndexPriority.ToString(CultureInfo.InvariantCulture)}";
     }
 
     private static UploadProfilePayload BuildUploadProfilePayload(IReadOnlyDictionary<string, string> profileValues)

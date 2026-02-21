@@ -74,5 +74,5 @@ public sealed class NetDocumentsConnectionSettings
 
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
 
-    public int? DirectUploadV1DocumentIndexPriority { get; set; } = 400;
+    public int? DirectUploadV1DocumentIndexPriority { get; set; } = 250;
 }

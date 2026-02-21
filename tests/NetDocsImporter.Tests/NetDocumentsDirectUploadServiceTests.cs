@@ -749,7 +749,7 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
-    public async Task UploadAsync_UsesV1DocumentPathWithoutIndexPriorityByDefault()
+    public async Task UploadAsync_UsesDefaultIndexPriorityWhenNotConfigured()
     {
         var tempRoot = CreateTempRoot();
         var dbPath = Path.Combine(tempRoot, "jobstore.db");
@@ -783,7 +783,7 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.True(result.Files[0].Succeeded);
             Assert.Single(requests);
             Assert.Equal("/v1/Document", requests[0].AbsolutePath);
-            Assert.True(string.IsNullOrWhiteSpace(requests[0].Query));
+            Assert.Equal("indexpriority=250", requests[0].Query.TrimStart('?'));
         }
         finally
         {
@@ -1397,6 +1397,60 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_DocumentCreateAkamaiBlock_ReportsSingleLineDecodedSnippet()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)6, 8).ToArray());
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    const string akamaiHtml = """
+                        <HTML><HEAD>
+                        <TITLE>Access Denied</TITLE>
+                        </HEAD><BODY>
+                        <H1>Access Denied</H1>
+                        You don't have permission to access ""http&#58;&#47;&#47;api&#46;au&#46;netdocuments&#46;com&#47;v1&#47;Document&#63;"" on this server.<P>
+                        Reference&#32;&#35;18&
+                        </BODY></HTML>
+                        """;
+                    return HtmlResponse(HttpStatusCode.Forbidden, akamaiHtml);
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath, useMultipartUpload: false);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Files[0].Succeeded);
+            Assert.Equal(403, result.Files[0].HttpStatus);
+            Assert.Contains("Akamai WAF Access Denied", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("http://api.au.netdocuments.com/v1/Document?", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("reference='18'", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain('\r', result.Files[0].Message);
+            Assert.DoesNotContain('\n', result.Files[0].Message);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_MultipartCompleteFailure_ReportsDecodedCompressedSnippet()
     {
         var tempRoot = CreateTempRoot();
@@ -1644,6 +1698,14 @@ public class NetDocumentsDirectUploadServiceTests
         return new HttpResponseMessage(status)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpResponseMessage HtmlResponse(HttpStatusCode status, string payload)
+    {
+        return new HttpResponseMessage(status)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "text/html")
         };
     }
 

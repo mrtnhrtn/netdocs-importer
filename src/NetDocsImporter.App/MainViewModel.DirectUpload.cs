@@ -551,7 +551,7 @@ public sealed partial class MainViewModel
         int? v1DocumentIndexPriority = netDocuments.DirectUploadV1DocumentIndexPriority;
         if (!v1DocumentIndexPriority.HasValue || v1DocumentIndexPriority.Value <= 0)
         {
-            v1DocumentIndexPriority = 400;
+            v1DocumentIndexPriority = 250;
         }
 
         var forceMultipartForTesting =
