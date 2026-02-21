@@ -1,7 +1,10 @@
 using System.Net;
 using System.Text.Json;
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Text;
 using System.Linq;
+using System.Text.RegularExpressions;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.NetDocs;
@@ -11,6 +14,11 @@ namespace NetDocsImporter.NetDocs;
 /// </summary>
 public sealed class NetDocumentsApiClient
 {
+    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex HtmlTagRegex = new("<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex UrlRegex = new(@"https?://[^\s""'<>]+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ReferenceRegex = new(@"Reference\s*#\s*(?<value>[^\s<]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly HttpClient _client;
     private readonly Func<NetDocumentsAuthContext> _authContextAccessor;
     private readonly Func<string> _apiBaseUrlAccessor;
@@ -61,7 +69,7 @@ public sealed class NetDocumentsApiClient
         }, cancellationToken);
         stopwatch.Stop();
 
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var content = await ReadContentAsStringAsync(response.Content, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, content);
@@ -133,7 +141,7 @@ public sealed class NetDocumentsApiClient
                 return request;
             }, cancellationToken, requestTimeout);
         stopwatch.Stop();
-        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseContent = await ReadContentAsStringAsync(response.Content, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -175,7 +183,7 @@ public sealed class NetDocumentsApiClient
                 return request;
             }, cancellationToken);
         stopwatch.Stop();
-        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseContent = await ReadContentAsStringAsync(response.Content, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -284,7 +292,7 @@ public sealed class NetDocumentsApiClient
                 return request;
             }, cancellationToken, requestTimeout);
         stopwatch.Stop();
-        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseContent = await ReadContentAsStringAsync(response.Content, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -372,8 +380,166 @@ public sealed class NetDocumentsApiClient
             return string.Empty;
         }
 
-        var snippet = text.Length > 240 ? text[..240] : text;
+        var decoded = WebUtility.HtmlDecode(text);
+        if (LooksLikeAkamaiAccessDenied(decoded))
+        {
+            var akamaiSnippet = BuildAkamaiSnippet(decoded);
+            return SensitiveDataRedactor.RedactBearerTokens(akamaiSnippet);
+        }
+
+        var normalized = NormalizeWhitespace(decoded);
+        var snippet = normalized.Length > 360 ? normalized[..360] : normalized;
         return SensitiveDataRedactor.RedactBearerTokens(snippet);
+    }
+
+    private static bool LooksLikeAkamaiAccessDenied(string text)
+    {
+        return text.IndexOf("Access Denied", StringComparison.OrdinalIgnoreCase) >= 0 &&
+               text.IndexOf("permission to access", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static string BuildAkamaiSnippet(string htmlOrText)
+    {
+        var plainText = NormalizeWhitespace(HtmlTagRegex.Replace(htmlOrText, " "));
+        var urlMatch = UrlRegex.Match(plainText);
+        var url = urlMatch.Success ? urlMatch.Value : string.Empty;
+        var reference = TryExtractReferenceToken(plainText);
+
+        var snippet = "Akamai WAF Access Denied";
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            snippet += $" url='{url}'";
+        }
+
+        if (!string.IsNullOrWhiteSpace(reference))
+        {
+            snippet += $" reference='{reference}'";
+        }
+
+        if (snippet.Length > 360)
+        {
+            snippet = snippet[..360];
+        }
+
+        return snippet;
+    }
+
+    private static string TryExtractReferenceToken(string text)
+    {
+        var match = ReferenceRegex.Match(text);
+        if (!match.Success)
+        {
+            return string.Empty;
+        }
+
+        var value = match.Groups["value"].Value
+            .Trim()
+            .Trim('"', '\'', '.', ',', ';', ':', ')', '(');
+
+        if (value.EndsWith("&", StringComparison.Ordinal))
+        {
+            value = value[..^1];
+        }
+
+        return value;
+    }
+
+    private static string NormalizeWhitespace(string text)
+    {
+        return WhitespaceRegex.Replace(text, " ").Trim();
+    }
+
+    private static async Task<string> ReadContentAsStringAsync(HttpContent? content, CancellationToken cancellationToken)
+    {
+        if (content is null)
+        {
+            return string.Empty;
+        }
+
+        var bytes = await content.ReadAsByteArrayAsync(cancellationToken);
+        if (bytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var encodings = content.Headers.ContentEncoding
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .ToList();
+
+        if (encodings.Count == 0 && LooksLikeGzip(bytes))
+        {
+            encodings.Add("gzip");
+        }
+
+        if (encodings.Count > 0)
+        {
+            try
+            {
+                using var compressedStream = new MemoryStream(bytes, writable: false);
+                using var decodedStream = WrapDecodeStream(compressedStream, encodings);
+                using var reader = new StreamReader(
+                    decodedStream,
+                    ResolveTextEncoding(content.Headers.ContentType?.CharSet),
+                    detectEncodingFromByteOrderMarks: true);
+                return await reader.ReadToEndAsync();
+            }
+            catch (InvalidDataException)
+            {
+                // Fall back to decoding raw bytes below.
+            }
+            catch (NotSupportedException)
+            {
+                // Fall back to decoding raw bytes below.
+            }
+        }
+
+        return DecodeBytes(bytes, content.Headers.ContentType?.CharSet);
+    }
+
+    private static Stream WrapDecodeStream(Stream baseStream, IReadOnlyList<string> encodings)
+    {
+        Stream stream = baseStream;
+        for (var i = encodings.Count - 1; i >= 0; i--)
+        {
+            stream = encodings[i].ToLowerInvariant() switch
+            {
+                "gzip" => new GZipStream(stream, CompressionMode.Decompress, leaveOpen: false),
+                "deflate" => new DeflateStream(stream, CompressionMode.Decompress, leaveOpen: false),
+                "br" => new BrotliStream(stream, CompressionMode.Decompress, leaveOpen: false),
+                _ => stream
+            };
+        }
+
+        return stream;
+    }
+
+    private static bool LooksLikeGzip(byte[] bytes)
+    {
+        return bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B;
+    }
+
+    private static string DecodeBytes(byte[] bytes, string? charset)
+    {
+        var encoding = ResolveTextEncoding(charset);
+        return encoding.GetString(bytes);
+    }
+
+    private static Encoding ResolveTextEncoding(string? charset)
+    {
+        if (!string.IsNullOrWhiteSpace(charset))
+        {
+            try
+            {
+                return Encoding.GetEncoding(charset.Trim('"'));
+            }
+            catch (ArgumentException)
+            {
+                // Ignore invalid charset and fall back to UTF-8.
+            }
+        }
+
+        return Encoding.UTF8;
     }
 
     private static async Task<Func<HttpRequestMessage>> BuildBufferedRequestFactoryAsync(
