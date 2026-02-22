@@ -28,3 +28,12 @@
 - Skipped
 - Resumed
 - CreatedFolders
+
+## ND-DIRECT trace fields
+- `ND-DIRECT upload request ... profileKeys={n} customAttributeCount={n} profileFallbackMap={bool}` is emitted before each direct upload request.
+- `profileFallbackMap` indicates whether profile serialization fell back to a raw key/value map instead of NetDocuments `customAttributes`.
+- `profileFallbackMap=False` means fallback is not used.
+- Interpret it with related fields:
+  - `profileKeys > 0` and `customAttributeCount > 0`: profile values were sent as `customAttributes` (normal path).
+  - `profileKeys > 0` and `customAttributeCount = 0` with `profileFallbackMap=True`: fallback map serialization was used because no numeric attribute IDs were resolved from profile keys.
+  - `profileKeys = 0`: no profile payload was sent for that file.

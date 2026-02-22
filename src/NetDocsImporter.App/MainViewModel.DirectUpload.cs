@@ -568,6 +568,9 @@ public sealed partial class MainViewModel
             : null;
         var multipartThresholdBytes = forceMultipartForTesting ? 1 : 2L * 1024 * 1024 * 1024;
 
+        Trace.WriteLine(
+            $"ND-DIRECT-ANCHOR context jobId='{CurrentJobId ?? string.Empty}' allowCreate={allowCreateFolders} indexPriority={v1DocumentIndexPriority.Value} settingsPath='{_paths.SettingsPath}' process='{Environment.ProcessPath ?? string.Empty}'.");
+
         return new DirectUploadPlanContext
         {
             JobId = CurrentJobId ?? string.Empty,

@@ -45,6 +45,8 @@ public partial class App : System.Windows.Application
         Trace.Listeners.Clear();
         Trace.Listeners.Add(new TimestampedTextWriterTraceListener(tracePath));
         Trace.AutoFlush = true;
+        Trace.WriteLine(
+            $"ND-TRACE-ANCHOR startup process='{Environment.ProcessPath ?? string.Empty}' baseDir='{AppContext.BaseDirectory}' settings='{new AppPaths().SettingsPath}' trace='{tracePath}'.");
     }
 
     private static void PruneTraceLog(string tracePath, TimeSpan retention)
