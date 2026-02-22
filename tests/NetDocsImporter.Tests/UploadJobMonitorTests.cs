@@ -54,6 +54,51 @@ public class UploadJobMonitorTests
         Assert.DoesNotContain(runner.StartedJobs, j => j.SourceJobId == "stale-running");
     }
 
+    [Fact]
+    public async Task TickOnceAsync_WhenMarkCompletedThrows_FailsJobForRecovery()
+    {
+        using var fixture = new QueueStoreFixture();
+        var now = DateTime.UtcNow;
+        var queued = await fixture.Store.CreateUploadQueueJobAsync(
+            "job-a",
+            @"C:\source",
+            CreateSnapshotJson("job-a"),
+            now,
+            scheduledForUtc: null);
+
+        var flakyStore = new FlakyQueueStore(fixture.Store)
+        {
+            ThrowOnFirstMarkCompleted = true
+        };
+        var monitor = new UploadJobMonitor(flakyStore, new RecordingRunner(_ => new UploadRunnerResult(true)), new FakeClock(now));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => monitor.TickOnceAsync());
+
+        Assert.Null(await fixture.Store.GetRunningJobAsync());
+        Assert.Equal("Failed", await GetQueueJobStateAsync(fixture.DbPath, queued.QueueJobId));
+    }
+
+    [Fact]
+    public async Task TickOnceAsync_RecoversAndContinuesAfterTransientStoreException()
+    {
+        using var fixture = new QueueStoreFixture();
+        var now = DateTime.UtcNow;
+        await fixture.Store.CreateUploadQueueJobAsync("job-a", @"C:\source", CreateSnapshotJson("job-a"), now, scheduledForUtc: null);
+
+        var flakyStore = new FlakyQueueStore(fixture.Store)
+        {
+            ThrowOnFirstAcquire = true
+        };
+        var runner = new RecordingRunner(_ => new UploadRunnerResult(true));
+        var monitor = new UploadJobMonitor(flakyStore, runner, new FakeClock(now));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => monitor.TickOnceAsync());
+        await monitor.TickOnceAsync();
+
+        Assert.Single(runner.StartedJobs);
+        Assert.Null(await fixture.Store.GetRunningJobAsync());
+    }
+
     private static string CreateSnapshotJson(string sourceJobId)
     {
         return $$"""{"sourceJobId":"{{sourceJobId}}","capturedUtc":"{{DateTime.UtcNow:O}}"}""";
@@ -115,9 +160,12 @@ public class UploadJobMonitorTests
         {
             _tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-importer-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempRoot);
-            Store = new JobStore(Path.Combine(_tempRoot, "jobs.db"));
+            DbPath = Path.Combine(_tempRoot, "jobs.db");
+            Store = new JobStore(DbPath);
             Store.InitializeAsync().GetAwaiter().GetResult();
         }
+
+        public string DbPath { get; }
 
         public JobStore Store { get; }
 
@@ -129,5 +177,84 @@ public class UploadJobMonitorTests
                 Directory.Delete(_tempRoot, true);
             }
         }
+    }
+
+    private sealed class FlakyQueueStore : IUploadQueueStore
+    {
+        private readonly IUploadQueueStore _inner;
+
+        public FlakyQueueStore(IUploadQueueStore inner)
+        {
+            _inner = inner;
+        }
+
+        public bool ThrowOnFirstAcquire { get; set; }
+
+        public bool ThrowOnFirstMarkCompleted { get; set; }
+
+        public async Task<int> PromoteDueScheduledJobsAsync(DateTime utcNow, CancellationToken cancellationToken = default)
+        {
+            return await _inner.PromoteDueScheduledJobsAsync(utcNow, cancellationToken);
+        }
+
+        public async Task<int> FailRunningJobsAsync(DateTime utcNow, string reason, CancellationToken cancellationToken = default)
+        {
+            return await _inner.FailRunningJobsAsync(utcNow, reason, cancellationToken);
+        }
+
+        public async Task<UploadQueueJobRecord?> TryAcquireNextQueuedJobAsync(DateTime utcNow, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnFirstAcquire)
+            {
+                ThrowOnFirstAcquire = false;
+                throw new InvalidOperationException("simulated acquire failure");
+            }
+
+            return await _inner.TryAcquireNextQueuedJobAsync(utcNow, cancellationToken);
+        }
+
+        public async Task MarkJobCompletedAsync(string queueJobId, DateTime utcNow, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnFirstMarkCompleted)
+            {
+                ThrowOnFirstMarkCompleted = false;
+                throw new InvalidOperationException("simulated mark completion failure");
+            }
+
+            await _inner.MarkJobCompletedAsync(queueJobId, utcNow, cancellationToken);
+        }
+
+        public async Task MarkJobFailedAsync(string queueJobId, DateTime utcNow, string error, CancellationToken cancellationToken = default)
+        {
+            await _inner.MarkJobFailedAsync(queueJobId, utcNow, error, cancellationToken);
+        }
+
+        public async Task<UploadQueueJobRecord?> GetRunningJobAsync(CancellationToken cancellationToken = default)
+        {
+            return await _inner.GetRunningJobAsync(cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<UploadQueueJobRecord>> GetQueueViewAsync(int take, CancellationToken cancellationToken = default)
+        {
+            return await _inner.GetQueueViewAsync(take, cancellationToken);
+        }
+    }
+
+    private static async Task<string?> GetQueueJobStateAsync(string dbPath, string queueJobId)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT State
+            FROM UploadQueueJobs
+            WHERE QueueJobId = $queueJobId;
+            """;
+        command.Parameters.AddWithValue("$queueJobId", queueJobId);
+        var state = await command.ExecuteScalarAsync();
+        return state as string;
     }
 }

@@ -250,6 +250,16 @@ public sealed partial class MainViewModel
             return new UploadRunnerResult(false, "Job snapshot missing source job id.");
         }
 
+        if (!UploadQueueContextValidator.TryValidate(
+                snapshot,
+                SelectedNetDocumentsRepositoryId ?? string.Empty,
+                SelectedNetDocumentsCabinetId ?? string.Empty,
+                GetApiBaseUrl(),
+                out var contextError))
+        {
+            return new UploadRunnerResult(false, contextError);
+        }
+
         var runStartedUtc = DateTime.UtcNow;
         try
         {

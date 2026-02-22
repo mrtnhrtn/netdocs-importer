@@ -124,6 +124,50 @@ public class JobQueueStoreTests
         Assert.Null(second);
     }
 
+    [Fact]
+    public async Task TryAcquireNextQueuedJob_ConcurrentAttempts_KeepSingleRunningInvariant()
+    {
+        using var fixture = new QueueStoreFixture();
+        var now = DateTime.UtcNow;
+        await fixture.Store.CreateUploadQueueJobAsync("a", @"C:\source", CreateSnapshotJson("a"), now, scheduledForUtc: null);
+        await fixture.Store.CreateUploadQueueJobAsync("b", @"C:\source", CreateSnapshotJson("b"), now.AddSeconds(1), scheduledForUtc: null);
+
+        var storeB = new JobStore(fixture.DbPath);
+        await storeB.InitializeAsync();
+
+        var acquireA = fixture.Store.TryAcquireNextQueuedJobAsync(now.AddMinutes(1));
+        var acquireB = storeB.TryAcquireNextQueuedJobAsync(now.AddMinutes(1));
+        var results = await Task.WhenAll(acquireA, acquireB);
+
+        var acquiredCount = results.Count(r => r is not null);
+        Assert.Equal(1, acquiredCount);
+        Assert.Equal(1, await CountRunningJobsAsync(fixture.DbPath));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_CreatesPartialUniqueIndex_ForRunningJobState()
+    {
+        using var fixture = new QueueStoreFixture();
+
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fixture.DbPath
+        }.ToString());
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND name = 'IX_UploadQueueJobs_SingleRunning'
+              AND sql LIKE '%WHERE State = ''Running''%';
+            """;
+
+        var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+        Assert.Equal(1, count);
+    }
+
     private static string CreateSnapshotJson(string sourceJobId)
     {
         return $$"""{"sourceJobId":"{{sourceJobId}}","capturedUtc":"{{DateTime.UtcNow:O}}"}""";
@@ -137,9 +181,12 @@ public class JobQueueStoreTests
         {
             _tempRoot = Path.Combine(Path.GetTempPath(), "netdocs-importer-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempRoot);
-            Store = new JobStore(Path.Combine(_tempRoot, "jobs.db"));
+            DbPath = Path.Combine(_tempRoot, "jobs.db");
+            Store = new JobStore(DbPath);
             Store.InitializeAsync().GetAwaiter().GetResult();
         }
+
+        public string DbPath { get; }
 
         public JobStore Store { get; }
 
@@ -151,5 +198,21 @@ public class JobQueueStoreTests
                 Directory.Delete(_tempRoot, true);
             }
         }
+    }
+
+    private static async Task<int> CountRunningJobsAsync(string dbPath)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM UploadQueueJobs
+            WHERE State = 'Running';
+            """;
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 }

@@ -1027,6 +1027,50 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_V1Timeout_IsBoundedAndRetriedAsTransient()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        var requestCount = 0;
+
+        try
+        {
+            var handler = new TimeoutAwareStubHttpHandler(async (_, cancellationToken) =>
+            {
+                requestCount++;
+                if (requestCount == 1)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-TIMEOUT-RETRY"}}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath);
+            var plan = CreatePlan(filePath);
+            var context = new DirectUploadPlanContext
+            {
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 2,
+                V1UploadRequestTimeout = TimeSpan.FromMilliseconds(60)
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Equal("D-TIMEOUT-RETRY", result.Files[0].DocumentId);
+            Assert.Equal(2, requestCount);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_MultipartEndpoints_UseDerivedUploadHost()
     {
         var tempRoot = CreateTempRoot();
@@ -2048,6 +2092,21 @@ public class NetDocumentsDirectUploadServiceTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromResult(_responder(request));
+        }
+    }
+
+    private sealed class TimeoutAwareStubHttpHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _responder;
+
+        public TimeoutAwareStubHttpHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
+        {
+            _responder = responder ?? throw new ArgumentNullException(nameof(responder));
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return _responder(request, cancellationToken);
         }
     }
 

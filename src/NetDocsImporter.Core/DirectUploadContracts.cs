@@ -89,6 +89,8 @@ public sealed class DirectUploadPlanContext
 
     public int? V1DocumentIndexPriority { get; init; }
 
+    public TimeSpan V1UploadRequestTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
     public bool? AddToRecents { get; init; }
 
     public bool ForceMultipartUploadForTesting { get; init; }

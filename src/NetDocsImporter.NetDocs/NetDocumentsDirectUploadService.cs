@@ -775,7 +775,10 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             return await TryUploadFileMultipartAsync(file, context, cancellationToken);
         }
 
-        return await TryUploadFileV1Async(file, context, null, cancellationToken);
+        var v1Timeout = context.V1UploadRequestTimeout <= TimeSpan.Zero
+            ? TimeSpan.FromMinutes(30)
+            : context.V1UploadRequestTimeout;
+        return await TryUploadFileV1Async(file, context, v1Timeout, cancellationToken);
     }
 
     private async Task<DirectUploadFileResult> TryUploadFileV1Async(
@@ -874,7 +877,12 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             }
             catch (Exception ex)
             {
-                var status = TryExtractStatusCode(ex);
+                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                var status = TryExtractHttpStatus(ex, cancellationToken);
                 if (status is 400 or 404 or 405 or 415 or 500 or 501)
                 {
                     failureMessages.Add($"{candidate.Path}:{status}");
@@ -2801,6 +2809,16 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         }
 
         return null;
+    }
+
+    private static int? TryExtractHttpStatus(Exception ex, CancellationToken cancellationToken)
+    {
+        if (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return 408;
+        }
+
+        return TryExtractStatusCode(ex);
     }
 
     private static string NormalizeCreatedFolderName(string value)

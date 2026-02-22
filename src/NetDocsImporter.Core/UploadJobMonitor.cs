@@ -1,4 +1,5 @@
 using NetDocsImporter.Data;
+using System.Diagnostics;
 
 namespace NetDocsImporter.Core;
 
@@ -43,15 +44,20 @@ public sealed class UploadJobMonitor : IAsyncDisposable
     public async Task TickOnceAsync(CancellationToken cancellationToken = default)
     {
         await _tickGate.WaitAsync(cancellationToken);
+        string stage = "promote-due";
+        string? queueJobId = null;
         try
         {
             await _store.PromoteDueScheduledJobsAsync(_clock.UtcNow, cancellationToken);
+            stage = "acquire";
             var acquired = await _store.TryAcquireNextQueuedJobAsync(_clock.UtcNow, cancellationToken);
             if (acquired is null)
             {
                 return;
             }
 
+            queueJobId = acquired.QueueJobId;
+            stage = "run";
             UploadRunnerResult result;
             try
             {
@@ -59,21 +65,39 @@ public sealed class UploadJobMonitor : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                Trace.WriteLine(
+                    $"QUEUE-MONITOR runner exception queueJobId='{queueJobId}' stage='{stage}' error='{ex.Message}'.");
                 result = new UploadRunnerResult(false, ex.Message);
             }
 
             if (result.Succeeded)
             {
+                stage = "mark-completed";
                 await _store.MarkJobCompletedAsync(acquired.QueueJobId, _clock.UtcNow, cancellationToken);
+                Trace.WriteLine($"QUEUE-MONITOR completed queueJobId='{queueJobId}'.");
             }
             else
             {
+                stage = "mark-failed";
                 await _store.MarkJobFailedAsync(
                     acquired.QueueJobId,
                     _clock.UtcNow,
                     result.Error ?? "Upload runner reported failure.",
                     cancellationToken);
+                Trace.WriteLine(
+                    $"QUEUE-MONITOR failed queueJobId='{queueJobId}' error='{result.Error ?? "Upload runner reported failure."}'.");
             }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Trace.WriteLine(
+                $"QUEUE-MONITOR tick exception stage='{stage}' queueJobId='{queueJobId ?? string.Empty}' error='{ex.Message}'.");
+            if (!string.IsNullOrWhiteSpace(queueJobId))
+            {
+                await TryMarkCurrentJobFailedAsync(queueJobId, stage, ex, cancellationToken);
+            }
+
+            throw;
         }
         finally
         {
@@ -93,12 +117,53 @@ public sealed class UploadJobMonitor : IAsyncDisposable
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // Keep monitor alive; next poll can recover.
+                Trace.WriteLine($"QUEUE-MONITOR loop exception error='{ex.Message}'.");
+                await TryRecoveryTickAsync(cancellationToken);
             }
 
             await _clock.DelayAsync(_pollInterval, cancellationToken);
+        }
+    }
+
+    private async Task TryRecoveryTickAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var promoted = await _store.PromoteDueScheduledJobsAsync(_clock.UtcNow, cancellationToken);
+            Trace.WriteLine($"QUEUE-MONITOR recovery tick promotedDue={promoted}.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Ignore on shutdown.
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"QUEUE-MONITOR recovery failed error='{ex.Message}'.");
+        }
+    }
+
+    private async Task TryMarkCurrentJobFailedAsync(
+        string queueJobId,
+        string stage,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _store.MarkJobFailedAsync(
+                queueJobId,
+                _clock.UtcNow,
+                $"Queue monitor exception during '{stage}': {exception.Message}",
+                cancellationToken);
+            Trace.WriteLine(
+                $"QUEUE-MONITOR recovered by failing queueJobId='{queueJobId}' stage='{stage}'.");
+        }
+        catch (Exception markEx) when (!cancellationToken.IsCancellationRequested)
+        {
+            Trace.WriteLine(
+                $"QUEUE-MONITOR failed to recover queueJobId='{queueJobId}' stage='{stage}' error='{markEx.Message}'.");
         }
     }
 

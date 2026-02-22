@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace NetDocsImporter.Data;
@@ -215,10 +216,15 @@ public sealed class JobStore : IUploadQueueStore
         await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceJobId", "TEXT NOT NULL DEFAULT ''", cancellationToken);
         await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceRoot", "TEXT NOT NULL DEFAULT ''", cancellationToken);
 
+        await EnsureSingleRunningQueueInvariantAsync(connection, cancellationToken);
+
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText = """
             CREATE INDEX IF NOT EXISTS IX_Files_FolderId ON Files(FolderId);
             CREATE UNIQUE INDEX IF NOT EXISTS IX_FolderProfiles_FolderId ON FolderProfiles(FolderId);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_UploadQueueJobs_SingleRunning
+            ON UploadQueueJobs(State)
+            WHERE State = 'Running';
             """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
 
@@ -559,84 +565,96 @@ public sealed class JobStore : IUploadQueueStore
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var transaction = connection.BeginTransaction();
+        await BeginImmediateTransactionAsync(connection, cancellationToken);
 
-        await using var runningCheck = connection.CreateCommand();
-        runningCheck.Transaction = transaction;
-        runningCheck.CommandText = """
-            SELECT COUNT(*)
-            FROM UploadQueueJobs
-            WHERE State = $running;
-            """;
-        runningCheck.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
-        var runningCount = Convert.ToInt32(await runningCheck.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        if (runningCount > 0)
+        try
         {
-            await transaction.CommitAsync(cancellationToken);
+            await using var runningCheck = connection.CreateCommand();
+            runningCheck.CommandText = """
+                SELECT COUNT(*)
+                FROM UploadQueueJobs
+                WHERE State = $running;
+                """;
+            runningCheck.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+            var runningCount = Convert.ToInt32(await runningCheck.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+            if (runningCount > 0)
+            {
+                await CommitTransactionAsync(connection, cancellationToken);
+                return null;
+            }
+
+            await using var select = connection.CreateCommand();
+            select.CommandText = """
+                SELECT QueueJobId, CreatedUtc, ScheduledForUtc, SourceJobId, SourceRoot, SnapshotJson
+                FROM UploadQueueJobs
+                WHERE State = $queued
+                ORDER BY CASE WHEN ScheduledForUtc IS NULL THEN 1 ELSE 0 END,
+                         ScheduledForUtc ASC,
+                         CreatedUtc ASC
+                LIMIT 1;
+                """;
+            select.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                await CommitTransactionAsync(connection, cancellationToken);
+                return null;
+            }
+
+            var queueJobId = reader.GetString(0);
+            var createdUtc = ParseUtc(reader.GetString(1));
+            DateTime? scheduledForUtc = reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2));
+            var sourceJobId = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+            var sourceRoot = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+            var snapshotJson = reader.GetString(5);
+
+            await reader.DisposeAsync();
+
+            await using var update = connection.CreateCommand();
+            update.CommandText = """
+                UPDATE UploadQueueJobs
+                SET State = $running,
+                    StartedUtc = $startedUtc,
+                    UpdatedUtc = $updatedUtc
+                WHERE QueueJobId = $queueJobId
+                  AND State = $queued;
+                """;
+            update.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+            update.Parameters.AddWithValue("$startedUtc", ToUtcString(utcNow));
+            update.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+            update.Parameters.AddWithValue("$queueJobId", queueJobId);
+            update.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+            var affected = await update.ExecuteNonQueryAsync(cancellationToken);
+            if (affected != 1)
+            {
+                await CommitTransactionAsync(connection, cancellationToken);
+                return null;
+            }
+
+            await CommitTransactionAsync(connection, cancellationToken);
+            return new UploadQueueJobRecord(
+                queueJobId,
+                createdUtc,
+                scheduledForUtc,
+                UploadQueueJobState.Running,
+                sourceJobId,
+                sourceRoot,
+                snapshotJson,
+                StartedUtc: utcNow);
+        }
+        catch (SqliteException ex) when (IsConstraintViolation(ex))
+        {
+            Trace.WriteLine(
+                $"QUEUE-STORE acquire conflict: single-running invariant blocked transition; code={ex.SqliteErrorCode} extended={ex.SqliteExtendedErrorCode} message='{ex.Message}'.");
+            await RollbackTransactionAsync(connection, cancellationToken);
             return null;
         }
-
-        await using var select = connection.CreateCommand();
-        select.Transaction = transaction;
-        select.CommandText = """
-            SELECT QueueJobId, CreatedUtc, ScheduledForUtc, SourceJobId, SourceRoot, SnapshotJson
-            FROM UploadQueueJobs
-            WHERE State = $queued
-            ORDER BY CASE WHEN ScheduledForUtc IS NULL THEN 1 ELSE 0 END,
-                     ScheduledForUtc ASC,
-                     CreatedUtc ASC
-            LIMIT 1;
-            """;
-        select.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
-
-        await using var reader = await select.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        catch
         {
-            await transaction.CommitAsync(cancellationToken);
-            return null;
+            await RollbackTransactionAsync(connection, cancellationToken);
+            throw;
         }
-
-        var queueJobId = reader.GetString(0);
-        var createdUtc = ParseUtc(reader.GetString(1));
-        DateTime? scheduledForUtc = reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2));
-        var sourceJobId = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
-        var sourceRoot = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
-        var snapshotJson = reader.GetString(5);
-
-        await reader.DisposeAsync();
-
-        await using var update = connection.CreateCommand();
-        update.Transaction = transaction;
-        update.CommandText = """
-            UPDATE UploadQueueJobs
-            SET State = $running,
-                StartedUtc = $startedUtc,
-                UpdatedUtc = $updatedUtc
-            WHERE QueueJobId = $queueJobId
-              AND State = $queued;
-            """;
-        update.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
-        update.Parameters.AddWithValue("$startedUtc", ToUtcString(utcNow));
-        update.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
-        update.Parameters.AddWithValue("$queueJobId", queueJobId);
-        update.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
-        var affected = await update.ExecuteNonQueryAsync(cancellationToken);
-        if (affected != 1)
-        {
-            await transaction.CommitAsync(cancellationToken);
-            return null;
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-        return new UploadQueueJobRecord(
-            queueJobId,
-            createdUtc,
-            scheduledForUtc,
-            UploadQueueJobState.Running,
-            sourceJobId,
-            sourceRoot,
-            snapshotJson,
-            StartedUtc: utcNow);
     }
 
     public async Task MarkJobCompletedAsync(string queueJobId, DateTime utcNow, CancellationToken cancellationToken = default)
@@ -2354,6 +2372,81 @@ public sealed class JobStore : IUploadQueueStore
     private static string ToStateString(UploadQueueJobState state)
     {
         return state.ToString();
+    }
+
+    private static async Task BeginImmediateTransactionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "BEGIN IMMEDIATE;";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task CommitTransactionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "COMMIT;";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task RollbackTransactionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "ROLLBACK;";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static bool IsConstraintViolation(SqliteException exception)
+    {
+        return exception.SqliteErrorCode == 19;
+    }
+
+    private async Task EnsureSingleRunningQueueInvariantAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var countCommand = connection.CreateCommand();
+        countCommand.CommandText = """
+            SELECT COUNT(*)
+            FROM UploadQueueJobs
+            WHERE State = $running;
+            """;
+        countCommand.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        var runningCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        if (runningCount <= 1)
+        {
+            return;
+        }
+
+        var utcNow = DateTime.UtcNow;
+        await using var repairCommand = connection.CreateCommand();
+        repairCommand.CommandText = """
+            WITH ranked AS (
+                SELECT QueueJobId,
+                       ROW_NUMBER() OVER (
+                           ORDER BY CASE WHEN StartedUtc IS NULL THEN 1 ELSE 0 END,
+                                    StartedUtc ASC,
+                                    CreatedUtc ASC
+                       ) AS RowNum
+                FROM UploadQueueJobs
+                WHERE State = $running
+            )
+            UPDATE UploadQueueJobs
+            SET State = $failed,
+                FinishedUtc = $finishedUtc,
+                Error = $error,
+                UpdatedUtc = $updatedUtc
+            WHERE QueueJobId IN (
+                SELECT QueueJobId
+                FROM ranked
+                WHERE RowNum > 1
+            );
+            """;
+        repairCommand.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        repairCommand.Parameters.AddWithValue("$failed", ToStateString(UploadQueueJobState.Failed));
+        repairCommand.Parameters.AddWithValue("$finishedUtc", ToUtcString(utcNow));
+        repairCommand.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+        repairCommand.Parameters.AddWithValue("$error", "Queue invariant repair: additional running jobs were failed.");
+        var repaired = await repairCommand.ExecuteNonQueryAsync(cancellationToken);
+        Trace.WriteLine(
+            $"QUEUE-STORE repaired running invariant violations: originalRunning={runningCount} failed={repaired}.");
     }
 
     private static UploadQueueJobState? ParseQueueJobState(string raw)
