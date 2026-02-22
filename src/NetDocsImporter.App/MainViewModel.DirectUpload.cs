@@ -573,6 +573,7 @@ public sealed partial class MainViewModel
 
         return new DirectUploadPlanContext
         {
+            ApiBaseUrl = GetApiBaseUrl(),
             JobId = CurrentJobId ?? string.Empty,
             CabinetId = SelectedNetDocumentsCabinetId,
             RepositoryId = SelectedNetDocumentsRepositoryId,

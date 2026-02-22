@@ -785,9 +785,13 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         CancellationToken cancellationToken)
     {
         var v1DocumentPath = BuildV1DocumentUploadPath(context.V1DocumentIndexPriority);
+        var v1DocumentEndpoint = BuildUploadEndpointPath(
+            context,
+            v1DocumentPath,
+            "v1-document-upload");
         var candidateEndpoints = new[]
         {
-            (Path: v1DocumentPath, IncludeAction: true)
+            (Path: v1DocumentEndpoint, IncludeAction: true)
         };
 
         var failureMessages = new List<string>();
@@ -1051,8 +1055,9 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
         {
             Trace.WriteLine(
                 $"ND-DIRECT multipart create start relativePath='{file.RelativePath}' destination='{file.DestinationContainerId}'.");
+            var createPath = BuildUploadEndpointPath(context, "/v1/Document", "multipart-create");
             var response = await _apiClient.PostForStringAsync(
-                "/v1/Document",
+                createPath,
                 body,
                 cancellationToken,
                 retryOnThrottle: false,
@@ -1094,10 +1099,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         try
         {
+            var initiateEndpoint = BuildUploadEndpointPath(context, initiatePath, "multipart-initiate");
             Trace.WriteLine(
                 $"ND-DIRECT multipart initiate start relativePath='{file.RelativePath}' path='{initiatePath}'.");
             var response = await _apiClient.PostForStringAsync(
-                initiatePath,
+                initiateEndpoint,
                 body,
                 cancellationToken,
                 retryOnThrottle: false,
@@ -1135,6 +1141,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                var endpoint = BuildUploadEndpointPath(context, path, "multipart-part");
                 using var multipart = new MultipartFormDataContent();
                 multipart.Add(new StringContent(isLast ? "true" : "false", Encoding.UTF8), "isLast");
                 var partContent = new ByteArrayContent(partBytes);
@@ -1150,7 +1157,7 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
                 Trace.WriteLine(
                     $"ND-DIRECT multipart part start relativePath='{file.RelativePath}' uploadId='{uploadId}' part={partNum} attempt={attempt}/{maxAttempts} isLast={isLast}.");
                 await _apiClient.PutForStringAsync(
-                    path,
+                    endpoint,
                     multipart,
                     cancellationToken,
                     retryOnThrottle: false,
@@ -1213,10 +1220,11 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
 
         try
         {
+            var completeEndpoint = BuildUploadEndpointPath(context, path, "multipart-complete");
             Trace.WriteLine(
                 $"ND-DIRECT multipart complete start relativePath='{file.RelativePath}' uploadId='{uploadId}' parts={partChecksums.Count}.");
             await _apiClient.PostForStringAsync(
-                path,
+                completeEndpoint,
                 form,
                 cancellationToken,
                 retryOnThrottle: false,
@@ -1380,6 +1388,86 @@ public sealed class NetDocumentsDirectUploadService : IDirectUploadService
             ? DefaultV1DocumentIndexPriority
             : indexPriority.Value;
         return $"/v1/Document?indexpriority={effectiveIndexPriority.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    private static string BuildUploadEndpointPath(
+        DirectUploadPlanContext context,
+        string relativePathOrPathWithQuery,
+        string operation)
+    {
+        if (TryBuildUploadBaseUri(context.ApiBaseUrl, out var uploadBaseUri, out var reason))
+        {
+            var endpoint = BuildUploadEndpointUrl(uploadBaseUri, relativePathOrPathWithQuery);
+            Trace.WriteLine(
+                $"ND-DIRECT upload host route operation='{operation}' apiBaseUrl='{context.ApiBaseUrl}' resolvedBase='{uploadBaseUri}' reason='{reason}' endpoint='{endpoint}'.");
+            return endpoint;
+        }
+
+        Trace.WriteLine(
+            $"ND-DIRECT upload host route operation='{operation}' apiBaseUrl='{context.ApiBaseUrl}' reason='{reason}' fallback='api-client-base' relativePath='{relativePathOrPathWithQuery}'.");
+        return relativePathOrPathWithQuery;
+    }
+
+    private static bool TryBuildUploadBaseUri(
+        string apiBaseUrl,
+        out Uri uploadBaseUri,
+        out string reason)
+    {
+        uploadBaseUri = default!;
+        reason = "api-base-missing";
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(apiBaseUrl, UriKind.Absolute, out var parsedApiBaseUri))
+        {
+            reason = "api-base-invalid";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(parsedApiBaseUri.Host))
+        {
+            reason = "api-host-missing";
+            return false;
+        }
+
+        var builder = new UriBuilder(parsedApiBaseUri)
+        {
+            Query = string.Empty,
+            Fragment = string.Empty,
+            Path = "/"
+        };
+
+        if (parsedApiBaseUri.Host.StartsWith("api.", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Host = "upload." + parsedApiBaseUri.Host["api.".Length..];
+            uploadBaseUri = builder.Uri;
+            reason = "derived-upload-host";
+            return true;
+        }
+
+        uploadBaseUri = builder.Uri;
+        reason = "fallback-api-host";
+        return true;
+    }
+
+    private static string BuildUploadEndpointUrl(Uri uploadBaseUri, string relativePathOrPathWithQuery)
+    {
+        if (Uri.TryCreate(relativePathOrPathWithQuery, UriKind.Absolute, out var absolute))
+        {
+            return absolute.ToString();
+        }
+
+        if (string.IsNullOrWhiteSpace(relativePathOrPathWithQuery))
+        {
+            return uploadBaseUri.ToString();
+        }
+
+        var normalized = relativePathOrPathWithQuery.StartsWith("/", StringComparison.Ordinal)
+            ? relativePathOrPathWithQuery
+            : "/" + relativePathOrPathWithQuery;
+        return new Uri(uploadBaseUri, normalized).ToString();
     }
 
     private static UploadProfilePayload BuildUploadProfilePayload(IReadOnlyDictionary<string, string> profileValues)

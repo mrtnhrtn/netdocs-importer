@@ -55,6 +55,8 @@ public sealed class UploadPlanResult
 
 public sealed class DirectUploadPlanContext
 {
+    public string ApiBaseUrl { get; init; } = string.Empty;
+
     public string JobId { get; init; } = string.Empty;
 
     public string CabinetId { get; init; } = string.Empty;

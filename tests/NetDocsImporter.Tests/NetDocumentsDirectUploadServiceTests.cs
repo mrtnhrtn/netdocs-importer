@@ -983,6 +983,266 @@ public class NetDocumentsDirectUploadServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_V1Document_UsesDerivedUploadHost()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath, "https://api.au.netdocuments.com");
+            var plan = CreatePlan(filePath);
+            var context = new DirectUploadPlanContext
+            {
+                ApiBaseUrl = "https://api.au.netdocuments.com",
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Single(requests);
+            Assert.Equal("upload.au.netdocuments.com", requests[0].Host);
+            Assert.Equal("/v1/Document", requests[0].AbsolutePath);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_MultipartEndpoints_UseDerivedUploadHost()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.bin");
+        await File.WriteAllBytesAsync(filePath, Enumerable.Repeat((byte)1, 8).ToArray());
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (request.Method == HttpMethod.Post && path == "/v1/Document")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardAttributes":{"id":"D-CREATED"}}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/D-CREATED/1/initiate")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"uploadId":"up-1"}""");
+                }
+
+                if (request.Method == HttpMethod.Put && path == "/v2/document/upload/up-1/part/1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                if (request.Method == HttpMethod.Post && path == "/v2/document/complete/up-1")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"unexpected request"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath, "https://api.au.netdocuments.com");
+            var plan = CreatePlan(filePath, useMultipartUpload: true);
+            var context = new DirectUploadPlanContext
+            {
+                ApiBaseUrl = "https://api.au.netdocuments.com",
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1,
+                MultipartChunkSizeBytes = 1024 * 1024
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Contains(requests, r => r.AbsolutePath == "/v1/Document" && r.Host == "upload.au.netdocuments.com");
+            Assert.Contains(requests, r => r.AbsolutePath == "/v2/document/D-CREATED/1/initiate" && r.Host == "upload.au.netdocuments.com");
+            Assert.Contains(requests, r => r.AbsolutePath == "/v2/document/upload/up-1/part/1" && r.Host == "upload.au.netdocuments.com");
+            Assert.Contains(requests, r => r.AbsolutePath == "/v2/document/complete/up-1" && r.Host == "upload.au.netdocuments.com");
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_NonUploadApiCallsRemainOnApiHost()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var sourceRoot = Path.Combine(tempRoot, "source");
+        var filePath = Path.Combine(sourceRoot, "client_a", "sample.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "sample content");
+        var jobId = Guid.NewGuid().ToString("N");
+        var requestUris = new List<Uri>();
+
+        try
+        {
+            await SeedJobWithSingleNestedFileAsync(dbPath, jobId, sourceRoot, filePath);
+
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is not null)
+                {
+                    lock (requestUris)
+                    {
+                        requestUris.Add(request.RequestUri);
+                    }
+                }
+
+                if (request.RequestUri?.AbsolutePath == "/v1/Folder/3470-9157-8890")
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"list":[{"envId":":AU2:i:e:9:8:~211201092644749.nev","type":"doc"}],"sortOrder":"name"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath, "https://api.au.netdocuments.com");
+            var result = await service.BuildPlanAsync(
+                jobId,
+                new NdTargetSelection
+                {
+                    Type = NdTargetType.Folder,
+                    Id = "3470-9157-8890",
+                    Name = "Top level folder"
+                },
+                new DirectUploadPlanContext
+                {
+                    ApiBaseUrl = "https://api.au.netdocuments.com",
+                    JobId = jobId,
+                    AllowCreateFolders = false
+                },
+                CancellationToken.None);
+
+            Assert.True(result.CanUpload);
+            Assert.NotEmpty(requestUris);
+            Assert.All(requestUris, uri => Assert.Equal("api.au.netdocuments.com", uri.Host));
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_DerivationFallback_UsesApiHostWhenApiHostNotApiPrefixed()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath, "https://custom.example.com");
+            var plan = CreatePlan(filePath);
+            var context = new DirectUploadPlanContext
+            {
+                ApiBaseUrl = "https://custom.example.com",
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Single(requests);
+            Assert.Equal("custom.example.com", requests[0].Host);
+            Assert.Equal("/v1/Document", requests[0].AbsolutePath);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task UploadAsync_Derivation_WorksForNetvoyageVaultHost()
+    {
+        var tempRoot = CreateTempRoot();
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var filePath = Path.Combine(tempRoot, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "sample content");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri!);
+                }
+
+                return JsonResponse(HttpStatusCode.OK, """{"ok":true}""");
+            });
+
+            var service = CreateDirectUploadService(handler, dbPath, "https://api.vault.netvoyage.com");
+            var plan = CreatePlan(filePath);
+            var context = new DirectUploadPlanContext
+            {
+                ApiBaseUrl = "https://api.vault.netvoyage.com",
+                MaxConcurrency = 1,
+                MaxRetryAttempts = 1
+            };
+
+            var result = await service.UploadAsync(plan, context, cancellationToken: CancellationToken.None);
+
+            Assert.Single(result.Files);
+            Assert.True(result.Files[0].Succeeded);
+            Assert.Single(requests);
+            Assert.Equal("upload.vault.netvoyage.com", requests[0].Host);
+            Assert.Equal("/v1/Document", requests[0].AbsolutePath);
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task UploadAsync_IncludesCustomAttributesPayloadForNumericAttributeKeys()
     {
         var tempRoot = CreateTempRoot();
@@ -1416,7 +1676,7 @@ public class NetDocumentsDirectUploadServiceTests
                         <TITLE>Access Denied</TITLE>
                         </HEAD><BODY>
                         <H1>Access Denied</H1>
-                        You don't have permission to access ""http&#58;&#47;&#47;api&#46;au&#46;netdocuments&#46;com&#47;v1&#47;Document&#63;"" on this server.<P>
+                        You don't have permission to access ""http&#58;&#47;&#47;upload&#46;au&#46;netdocuments&#46;com&#47;v1&#47;Document&#63;"" on this server.<P>
                         Reference&#32;&#35;18&
                         </BODY></HTML>
                         """;
@@ -1430,6 +1690,7 @@ public class NetDocumentsDirectUploadServiceTests
             var plan = CreatePlan(filePath, useMultipartUpload: false);
             var context = new DirectUploadPlanContext
             {
+                ApiBaseUrl = "https://api.au.netdocuments.com",
                 MaxConcurrency = 1,
                 MaxRetryAttempts = 1
             };
@@ -1439,7 +1700,7 @@ public class NetDocumentsDirectUploadServiceTests
             Assert.False(result.Files[0].Succeeded);
             Assert.Equal(403, result.Files[0].HttpStatus);
             Assert.Contains("Akamai WAF Access Denied", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("http://api.au.netdocuments.com/v1/Document?", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("http://upload.au.netdocuments.com/v1/Document?", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("reference='18'", result.Files[0].Message, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain('\r', result.Files[0].Message);
             Assert.DoesNotContain('\n', result.Files[0].Message);
@@ -1674,7 +1935,10 @@ public class NetDocumentsDirectUploadServiceTests
             null));
     }
 
-    private static NetDocumentsDirectUploadService CreateDirectUploadService(HttpMessageHandler handler, string dbPath)
+    private static NetDocumentsDirectUploadService CreateDirectUploadService(
+        HttpMessageHandler handler,
+        string dbPath,
+        string apiBaseUrl = "https://api.au.netdocuments.com")
     {
         var apiClient = new NetDocumentsApiClient(
             new StubAuthService(),
@@ -1686,7 +1950,7 @@ public class NetDocumentsDirectUploadServiceTests
                 ClientSecret = "client-secret",
                 RedirectUri = "http://127.0.0.1:5000/callback"
             },
-            () => "https://api.au.netdocuments.com",
+            () => apiBaseUrl,
             handler);
 
         var store = new JobStore(dbPath);
