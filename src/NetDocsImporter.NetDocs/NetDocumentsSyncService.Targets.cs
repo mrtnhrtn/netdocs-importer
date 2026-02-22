@@ -3250,10 +3250,14 @@ public sealed partial class NetDocumentsSyncService
     private static IEnumerable<string?> BuildExtensionSearchListFlags(string extension)
     {
         var normalized = extension?.Trim();
-        if (string.Equals(normalized, "ndfld", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "ndws", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, "ndfld", StringComparison.OrdinalIgnoreCase))
         {
-            yield return "FoldersOnly,ValidateWorkspaces";
+            // Some tenants reject the FoldersOnly+ValidateWorkspaces combination for container-scoped folder searches.
+            yield return "FoldersOnly";
+        }
+        else if (string.Equals(normalized, "ndws", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return "ValidateWorkspaces";
         }
         else
         {
