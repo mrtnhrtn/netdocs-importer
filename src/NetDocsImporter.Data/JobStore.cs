@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace NetDocsImporter.Data;
 
-public sealed class JobStore
+public sealed class JobStore : IUploadQueueStore
 {
     private readonly string _connectionString;
 
@@ -169,6 +169,20 @@ public sealed class JobStore
                 PRIMARY KEY (UserKey, ServiceKey, CabinetScope, WorkspaceId)
             );
 
+            CREATE TABLE IF NOT EXISTS UploadQueueJobs (
+                QueueJobId TEXT PRIMARY KEY,
+                CreatedUtc TEXT NOT NULL,
+                ScheduledForUtc TEXT NULL,
+                State TEXT NOT NULL,
+                SourceJobId TEXT NOT NULL DEFAULT '',
+                SourceRoot TEXT NOT NULL DEFAULT '',
+                SnapshotJson TEXT NOT NULL,
+                StartedUtc TEXT NULL,
+                FinishedUtc TEXT NULL,
+                Error TEXT NULL,
+                UpdatedUtc TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Files_JobId ON Files(JobId);
             CREATE INDEX IF NOT EXISTS IX_Files_RelativePath ON Files(RelativePath);
             CREATE INDEX IF NOT EXISTS IX_Transfers_JobId ON Transfers(JobId);
@@ -182,6 +196,8 @@ public sealed class JobStore
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsLookupValues_CabinetAttr ON NetDocumentsLookupValues(CabinetId, AttributeNum);
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsRecentWorkspacesCache_Scope ON NetDocumentsRecentWorkspacesCache(UserKey, ServiceKey, CabinetScope);
             CREATE INDEX IF NOT EXISTS IX_NetDocumentsFavoriteWorkspacesCache_Scope ON NetDocumentsFavoriteWorkspacesCache(UserKey, ServiceKey, CabinetScope);
+            CREATE INDEX IF NOT EXISTS IX_UploadQueueJobs_State ON UploadQueueJobs(State);
+            CREATE INDEX IF NOT EXISTS IX_UploadQueueJobs_Order ON UploadQueueJobs(State, ScheduledForUtc, CreatedUtc);
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -196,6 +212,8 @@ public sealed class JobStore
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "WorkspaceAttributeNum", "INTEGER NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "WorkspacePluralName", "TEXT NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "AllowFileInWorkspaces", "INTEGER NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceJobId", "TEXT NOT NULL DEFAULT ''", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceRoot", "TEXT NOT NULL DEFAULT ''", cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText = """
@@ -432,6 +450,288 @@ public sealed class JobStore
                 reader.GetInt64(6),
                 reader.GetInt64(7),
                 reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+
+        return results;
+    }
+
+    public async Task<UploadQueueJobRecord> CreateUploadQueueJobAsync(
+        string sourceJobId,
+        string sourceRoot,
+        string snapshotJson,
+        DateTime createdUtc,
+        DateTime? scheduledForUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sourceJobId))
+        {
+            throw new ArgumentException("Source job id is required.", nameof(sourceJobId));
+        }
+
+        if (string.IsNullOrWhiteSpace(snapshotJson))
+        {
+            throw new ArgumentException("Snapshot json is required.", nameof(snapshotJson));
+        }
+
+        var queueJobId = Guid.NewGuid().ToString("N");
+        var normalizedCreatedUtc = createdUtc.ToUniversalTime();
+        var normalizedScheduledUtc = scheduledForUtc?.ToUniversalTime();
+        var initialState = normalizedScheduledUtc.HasValue
+            ? UploadQueueJobState.Scheduled
+            : UploadQueueJobState.Queued;
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO UploadQueueJobs
+            (QueueJobId, CreatedUtc, ScheduledForUtc, State, SourceJobId, SourceRoot, SnapshotJson, StartedUtc, FinishedUtc, Error, UpdatedUtc)
+            VALUES ($queueJobId, $createdUtc, $scheduledForUtc, $state, $sourceJobId, $sourceRoot, $snapshotJson, NULL, NULL, NULL, $updatedUtc);
+            """;
+        command.Parameters.AddWithValue("$queueJobId", queueJobId);
+        command.Parameters.AddWithValue("$createdUtc", ToUtcString(normalizedCreatedUtc));
+        command.Parameters.AddWithValue("$scheduledForUtc", normalizedScheduledUtc.HasValue
+            ? ToUtcString(normalizedScheduledUtc.Value)
+            : DBNull.Value);
+        command.Parameters.AddWithValue("$state", ToStateString(initialState));
+        command.Parameters.AddWithValue("$sourceJobId", sourceJobId);
+        command.Parameters.AddWithValue("$sourceRoot", sourceRoot ?? string.Empty);
+        command.Parameters.AddWithValue("$snapshotJson", snapshotJson);
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(normalizedCreatedUtc));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        return new UploadQueueJobRecord(
+            queueJobId,
+            normalizedCreatedUtc,
+            normalizedScheduledUtc,
+            initialState,
+            sourceJobId,
+            sourceRoot ?? string.Empty,
+            snapshotJson);
+    }
+
+    public async Task<int> PromoteDueScheduledJobsAsync(DateTime utcNow, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE UploadQueueJobs
+            SET State = $queued,
+                UpdatedUtc = $updatedUtc
+            WHERE State = $scheduled
+              AND ScheduledForUtc IS NOT NULL
+              AND ScheduledForUtc <= $utcNow;
+            """;
+        command.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+        command.Parameters.AddWithValue("$scheduled", ToStateString(UploadQueueJobState.Scheduled));
+        command.Parameters.AddWithValue("$utcNow", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<int> FailRunningJobsAsync(DateTime utcNow, string reason, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE UploadQueueJobs
+            SET State = $failed,
+                FinishedUtc = $finishedUtc,
+                Error = $error,
+                UpdatedUtc = $updatedUtc
+            WHERE State = $running;
+            """;
+        command.Parameters.AddWithValue("$failed", ToStateString(UploadQueueJobState.Failed));
+        command.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$error", reason);
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<UploadQueueJobRecord?> TryAcquireNextQueuedJobAsync(DateTime utcNow, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+
+        await using var runningCheck = connection.CreateCommand();
+        runningCheck.Transaction = transaction;
+        runningCheck.CommandText = """
+            SELECT COUNT(*)
+            FROM UploadQueueJobs
+            WHERE State = $running;
+            """;
+        runningCheck.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        var runningCount = Convert.ToInt32(await runningCheck.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        if (runningCount > 0)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        await using var select = connection.CreateCommand();
+        select.Transaction = transaction;
+        select.CommandText = """
+            SELECT QueueJobId, CreatedUtc, ScheduledForUtc, SourceJobId, SourceRoot, SnapshotJson
+            FROM UploadQueueJobs
+            WHERE State = $queued
+            ORDER BY CASE WHEN ScheduledForUtc IS NULL THEN 1 ELSE 0 END,
+                     ScheduledForUtc ASC,
+                     CreatedUtc ASC
+            LIMIT 1;
+            """;
+        select.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+
+        await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        var queueJobId = reader.GetString(0);
+        var createdUtc = ParseUtc(reader.GetString(1));
+        DateTime? scheduledForUtc = reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2));
+        var sourceJobId = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+        var sourceRoot = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+        var snapshotJson = reader.GetString(5);
+
+        await reader.DisposeAsync();
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            UPDATE UploadQueueJobs
+            SET State = $running,
+                StartedUtc = $startedUtc,
+                UpdatedUtc = $updatedUtc
+            WHERE QueueJobId = $queueJobId
+              AND State = $queued;
+            """;
+        update.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        update.Parameters.AddWithValue("$startedUtc", ToUtcString(utcNow));
+        update.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+        update.Parameters.AddWithValue("$queueJobId", queueJobId);
+        update.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+        var affected = await update.ExecuteNonQueryAsync(cancellationToken);
+        if (affected != 1)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new UploadQueueJobRecord(
+            queueJobId,
+            createdUtc,
+            scheduledForUtc,
+            UploadQueueJobState.Running,
+            sourceJobId,
+            sourceRoot,
+            snapshotJson,
+            StartedUtc: utcNow);
+    }
+
+    public async Task MarkJobCompletedAsync(string queueJobId, DateTime utcNow, CancellationToken cancellationToken = default)
+    {
+        await TransitionRunningJobAsync(
+            queueJobId,
+            UploadQueueJobState.Completed,
+            utcNow,
+            error: null,
+            cancellationToken);
+    }
+
+    public async Task MarkJobFailedAsync(string queueJobId, DateTime utcNow, string error, CancellationToken cancellationToken = default)
+    {
+        await TransitionRunningJobAsync(
+            queueJobId,
+            UploadQueueJobState.Failed,
+            utcNow,
+            string.IsNullOrWhiteSpace(error) ? "Upload failed." : error,
+            cancellationToken);
+    }
+
+    public async Task<bool> CancelQueuedJobAsync(string queueJobId, DateTime utcNow, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE UploadQueueJobs
+            SET State = $canceled,
+                FinishedUtc = $finishedUtc,
+                UpdatedUtc = $updatedUtc
+            WHERE QueueJobId = $queueJobId
+              AND State = $queued;
+            """;
+        command.Parameters.AddWithValue("$canceled", ToStateString(UploadQueueJobState.Canceled));
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$queueJobId", queueJobId);
+        command.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        return affected == 1;
+    }
+
+    public async Task<UploadQueueJobRecord?> GetRunningJobAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT QueueJobId, CreatedUtc, ScheduledForUtc, State, SourceJobId, SourceRoot, SnapshotJson, StartedUtc, FinishedUtc, Error
+            FROM UploadQueueJobs
+            WHERE State = $running
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return ReadUploadQueueJob(reader);
+    }
+
+    public async Task<IReadOnlyList<UploadQueueJobRecord>> GetQueueViewAsync(int take, CancellationToken cancellationToken = default)
+    {
+        var results = new List<UploadQueueJobRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT QueueJobId, CreatedUtc, ScheduledForUtc, State, SourceJobId, SourceRoot, SnapshotJson, StartedUtc, FinishedUtc, Error
+            FROM UploadQueueJobs
+            WHERE State = $queued OR State = $scheduled
+            ORDER BY CASE WHEN ScheduledForUtc IS NULL THEN 1 ELSE 0 END,
+                     ScheduledForUtc ASC,
+                     CreatedUtc ASC
+            LIMIT $take;
+            """;
+        command.Parameters.AddWithValue("$queued", ToStateString(UploadQueueJobState.Queued));
+        command.Parameters.AddWithValue("$scheduled", ToStateString(UploadQueueJobState.Scheduled));
+        command.Parameters.AddWithValue("$take", take);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var mapped = ReadUploadQueueJob(reader);
+            if (mapped is not null)
+            {
+                results.Add(mapped);
+            }
         }
 
         return results;
@@ -1968,6 +2268,55 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$profileMode", folder.ProfileMode);
     }
 
+    private async Task TransitionRunningJobAsync(
+        string queueJobId,
+        UploadQueueJobState targetState,
+        DateTime utcNow,
+        string? error,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE UploadQueueJobs
+            SET State = $state,
+                FinishedUtc = $finishedUtc,
+                Error = $error,
+                UpdatedUtc = $updatedUtc
+            WHERE QueueJobId = $queueJobId
+              AND State = $running;
+            """;
+        command.Parameters.AddWithValue("$state", ToStateString(targetState));
+        command.Parameters.AddWithValue("$finishedUtc", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedUtc", ToUtcString(utcNow));
+        command.Parameters.AddWithValue("$queueJobId", queueJobId);
+        command.Parameters.AddWithValue("$running", ToStateString(UploadQueueJobState.Running));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static UploadQueueJobRecord? ReadUploadQueueJob(SqliteDataReader reader)
+    {
+        var state = ParseQueueJobState(reader.GetString(3));
+        if (!state.HasValue)
+        {
+            return null;
+        }
+
+        return new UploadQueueJobRecord(
+            reader.GetString(0),
+            ParseUtc(reader.GetString(1)),
+            reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2)),
+            state.Value,
+            reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+            reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : ParseUtc(reader.GetString(7)),
+            reader.IsDBNull(8) ? null : ParseUtc(reader.GetString(8)),
+            reader.IsDBNull(9) ? null : reader.GetString(9));
+    }
+
     private static async Task EnsureColumnExistsAsync(
         SqliteConnection connection,
         string tableName,
@@ -2000,6 +2349,21 @@ public sealed class JobStore
     private static DateTime ParseUtc(string value)
     {
         return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+    }
+
+    private static string ToStateString(UploadQueueJobState state)
+    {
+        return state.ToString();
+    }
+
+    private static UploadQueueJobState? ParseQueueJobState(string raw)
+    {
+        if (Enum.TryParse<UploadQueueJobState>(raw, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
     }
 }
 
