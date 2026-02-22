@@ -6,4 +6,12 @@ public partial class RecentJobsStepView : System.Windows.Controls.UserControl
     {
         InitializeComponent();
     }
+
+    public void OnDismissQueueNotice(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ClearQueueStartupNotice();
+        }
+    }
 }

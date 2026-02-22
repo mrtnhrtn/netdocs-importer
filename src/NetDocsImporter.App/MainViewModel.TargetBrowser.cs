@@ -167,6 +167,8 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
             OnPropertyChanged(nameof(CanContinueToReviewScope));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+            OnPropertyChanged(nameof(CanScheduleDirectUpload));
             QueueSettingsSave();
         }
     }
@@ -2001,6 +2003,8 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
         OnPropertyChanged(nameof(CanContinueToReviewScope));
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+        OnPropertyChanged(nameof(CanScheduleDirectUpload));
 
         var selectedTargetKey = _selectedNetDocumentsTarget is null
             ? string.Empty

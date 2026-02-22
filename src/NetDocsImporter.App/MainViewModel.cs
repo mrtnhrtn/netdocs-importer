@@ -182,6 +182,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+                OnPropertyChanged(nameof(CanScheduleDirectUpload));
 
                 if (!string.Equals(previousJobId, value, StringComparison.OrdinalIgnoreCase))
                 {
@@ -813,6 +815,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
                 RecentJobs.Add(view);
             }
+
+            await LoadQueueJobsAsync();
         }
         finally
         {
@@ -1315,6 +1319,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsNdImportCsvMode));
         OnPropertyChanged(nameof(IsDirectApiMode));
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+        OnPropertyChanged(nameof(CanScheduleDirectUpload));
 
         _rememberNdImportPassword = _settings.RememberNdImportPassword;
         OnPropertyChanged(nameof(RememberNdImportPassword));

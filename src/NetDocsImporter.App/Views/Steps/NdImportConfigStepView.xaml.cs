@@ -51,6 +51,22 @@ public partial class NdImportConfigStepView : System.Windows.Controls.UserContro
         }
     }
 
+    public void OnAddDirectUploadToQueue(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnAddDirectUploadToQueue(sender, e);
+        }
+    }
+
+    public void OnScheduleDirectUpload(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnScheduleDirectUpload(sender, e);
+        }
+    }
+
     public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

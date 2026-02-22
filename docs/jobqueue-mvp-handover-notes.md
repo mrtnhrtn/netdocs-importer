@@ -36,3 +36,11 @@
 - 2026-02-22: Added tests:
   - `JobQueueStoreTests` (state transitions, Option B ordering, due promotion, single-runner enforcement)
   - `UploadJobMonitorTests` (execution + restart behavior)
+- 2026-02-22: Added app integration (`MainViewModel.JobQueue.cs`): queue/schedule actions, queue monitor lifecycle hooks, quick-view data, and queued upload runner.
+- 2026-02-22: UI changes:
+  - Added `Add to Queue` and `Schedule...` buttons near direct upload controls in both direct-upload surfaces.
+  - Extended Recent Jobs step with Queue tab + startup notice.
+  - Added top-level quick Jobs menu (running + next queued + open full jobs view).
+- 2026-02-22: Validation run:
+  - `dotnet test tests/NetDocsImporter.Tests/NetDocsImporter.Tests.csproj` (pass)
+  - `dotnet build src/NetDocsImporter.App/NetDocsImporter.App.csproj` (pass)

@@ -51,6 +51,8 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(IsNdImportCsvMode));
             OnPropertyChanged(nameof(IsDirectApiMode));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+            OnPropertyChanged(nameof(CanScheduleDirectUpload));
 
             if (value == ImportExecutionMode.DirectApi)
             {
@@ -73,6 +75,8 @@ public sealed partial class MainViewModel
             if (SetField(ref _isDirectUploadBusy, value))
             {
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+                OnPropertyChanged(nameof(CanScheduleDirectUpload));
                 OnPropertyChanged(nameof(CanCancelDirectUpload));
             }
         }
@@ -899,6 +903,8 @@ public sealed partial class MainViewModel
         }
 
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+        OnPropertyChanged(nameof(CanScheduleDirectUpload));
     }
 
     private void InvalidateDirectUploadPlan(string reason)
@@ -930,6 +936,8 @@ public sealed partial class MainViewModel
 
         InvalidateDirectUploadPlan(reason);
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        OnPropertyChanged(nameof(CanAddDirectUploadToQueue));
+        OnPropertyChanged(nameof(CanScheduleDirectUpload));
 
         if (!refreshPreflight ||
             !IsDirectApiMode ||

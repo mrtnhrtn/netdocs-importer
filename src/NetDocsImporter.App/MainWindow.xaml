@@ -159,6 +159,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
@@ -183,7 +184,21 @@
                     <TextBlock Text="Excluded:" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
-                <Button Grid.Column="2"
+                <Menu Grid.Column="2"
+                      Margin="12,0,0,0"
+                      VerticalAlignment="Center"
+                      Background="Transparent">
+                    <MenuItem Header="Jobs">
+                        <MenuItem Header="{Binding QuickViewRunningJobText}" IsEnabled="False" />
+                        <Separator />
+                        <MenuItem Header="{Binding QuickViewNextJob1Text}" IsEnabled="False" />
+                        <MenuItem Header="{Binding QuickViewNextJob2Text}" IsEnabled="False" />
+                        <MenuItem Header="{Binding QuickViewNextJob3Text}" IsEnabled="False" />
+                        <Separator />
+                        <MenuItem Header="Open Jobs Window" Click="OnOpenJobsQuickView" />
+                    </MenuItem>
+                </Menu>
+                <Button Grid.Column="3"
                         Width="38"
                         Height="32"
                         Margin="12,0,0,0"
