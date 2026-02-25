@@ -136,6 +136,11 @@ public sealed partial class MainViewModel
             UpdateOnUi(() =>
             {
                 _uploadQueueJobs.Clear();
+                if (running is not null)
+                {
+                    _uploadQueueJobs.Add(new UploadQueueJobView(running));
+                }
+
                 foreach (var item in queued)
                 {
                     _uploadQueueJobs.Add(new UploadQueueJobView(item));
@@ -263,11 +268,15 @@ public sealed partial class MainViewModel
         var runStartedUtc = DateTime.UtcNow;
         try
         {
-            IsDirectUploadBusy = true;
-            DirectUploadProgressPercent = 0;
-            OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
-            StatusText = $"Queue running upload job {queuedJob.QueueJobId[..8]}...";
-            DirectUploadStatus = $"Queued upload started for {snapshot.TargetDisplayName}.";
+            UpdateOnUi(() =>
+            {
+                IsDirectUploadBusy = true;
+                DirectUploadProgressPercent = 0;
+                OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
+                StatusText = $"Queue running upload job {queuedJob.QueueJobId[..8]}...";
+                DirectUploadStatus = $"Queued upload started for {snapshot.TargetDisplayName}.";
+            });
+            await LoadQueueJobsAsync();
 
             var service = RequireDirectUploadService();
             var plan = await service.BuildPlanAsync(snapshot.SourceJobId, snapshot.Target, snapshot.PlanContext, cancellationToken);
@@ -276,16 +285,35 @@ public sealed partial class MainViewModel
                 return new UploadRunnerResult(false, "Execution plan blocked or empty at runtime.");
             }
 
-            var result = await service.UploadAsync(plan, snapshot.PlanContext, null, cancellationToken);
+            var progress = new Progress<DirectUploadProgress>(p =>
+            {
+                var percent = p.PercentComplete;
+                if (percent <= 0 && p.TotalFiles > 0)
+                {
+                    percent = Math.Round((double)p.CompletedFiles / p.TotalFiles * 100d, 2);
+                }
+
+                UpdateOnUi(() =>
+                {
+                    DirectUploadProgressPercent = percent;
+                    OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
+                    DirectUploadStatus = $"Queued upload {p.CompletedFiles:N0}/{p.TotalFiles:N0} ({percent:0.##}%): {p.CurrentRelativePath}";
+                });
+            });
+
+            var result = await service.UploadAsync(plan, snapshot.PlanContext, progress, cancellationToken);
             var reportPath = await WriteDirectUploadReportAsync(plan, result, runStartedUtc);
             var runLogPath = await WriteDirectUploadRunLogAsync(plan, result, reportPath, runStartedUtc);
 
             _lastDirectUploadReportPath = reportPath;
             _lastDirectUploadLogPath = runLogPath;
-            OnPropertyChanged(nameof(CanOpenLastDirectUploadReport));
-            OnPropertyChanged(nameof(CanExportDirectUploadLog));
-            DirectUploadProgressPercent = 100;
-            OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
+            UpdateOnUi(() =>
+            {
+                OnPropertyChanged(nameof(CanOpenLastDirectUploadReport));
+                OnPropertyChanged(nameof(CanExportDirectUploadLog));
+                DirectUploadProgressPercent = 100;
+                OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
+            });
 
             var queueSucceeded = result.FailedFiles == 0;
             var runStatus = queueSucceeded ? "DirectUpload" : "DirectUpload Partial";
@@ -337,7 +365,10 @@ public sealed partial class MainViewModel
         }
         finally
         {
-            IsDirectUploadBusy = false;
+            UpdateOnUi(() =>
+            {
+                IsDirectUploadBusy = false;
+            });
         }
     }
 

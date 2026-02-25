@@ -109,6 +109,8 @@ public sealed class JobStore : IUploadQueueStore
                 RepositoryName TEXT NOT NULL,
                 CabinetName TEXT NOT NULL,
                 Description TEXT NULL,
+                RepositoryLogoUrl TEXT NULL,
+                CabinetLogoUrl TEXT NULL,
                 WorkspaceAttributeNum INTEGER NULL,
                 WorkspacePluralName TEXT NULL,
                 AllowFileInWorkspaces INTEGER NULL,
@@ -213,6 +215,8 @@ public sealed class JobStore : IUploadQueueStore
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "WorkspaceAttributeNum", "INTEGER NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "WorkspacePluralName", "TEXT NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "AllowFileInWorkspaces", "INTEGER NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "RepositoryLogoUrl", "TEXT NULL", cancellationToken);
+        await EnsureColumnExistsAsync(connection, "NetDocumentsCabinets", "CabinetLogoUrl", "TEXT NULL", cancellationToken);
         await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceJobId", "TEXT NOT NULL DEFAULT ''", cancellationToken);
         await EnsureColumnExistsAsync(connection, "UploadQueueJobs", "SourceRoot", "TEXT NOT NULL DEFAULT ''", cancellationToken);
 
@@ -1796,13 +1800,15 @@ public sealed class JobStore : IUploadQueueStore
             upsert.Transaction = (SqliteTransaction)transaction;
             upsert.CommandText = """
                 INSERT INTO NetDocumentsCabinets
-                (CabinetId, RepositoryId, RepositoryName, CabinetName, Description, WorkspaceAttributeNum, WorkspacePluralName, AllowFileInWorkspaces, Region, SyncedUtc)
-                VALUES ($cabinetId, $repositoryId, $repositoryName, $cabinetName, $description, $workspaceAttributeNum, $workspacePluralName, $allowFileInWorkspaces, $region, $syncedUtc)
+                (CabinetId, RepositoryId, RepositoryName, CabinetName, Description, RepositoryLogoUrl, CabinetLogoUrl, WorkspaceAttributeNum, WorkspacePluralName, AllowFileInWorkspaces, Region, SyncedUtc)
+                VALUES ($cabinetId, $repositoryId, $repositoryName, $cabinetName, $description, $repositoryLogoUrl, $cabinetLogoUrl, $workspaceAttributeNum, $workspacePluralName, $allowFileInWorkspaces, $region, $syncedUtc)
                 ON CONFLICT(CabinetId) DO UPDATE SET
                     RepositoryId = excluded.RepositoryId,
                     RepositoryName = excluded.RepositoryName,
                     CabinetName = excluded.CabinetName,
                     Description = excluded.Description,
+                    RepositoryLogoUrl = excluded.RepositoryLogoUrl,
+                    CabinetLogoUrl = excluded.CabinetLogoUrl,
                     WorkspaceAttributeNum = excluded.WorkspaceAttributeNum,
                     WorkspacePluralName = excluded.WorkspacePluralName,
                     AllowFileInWorkspaces = excluded.AllowFileInWorkspaces,
@@ -1814,6 +1820,8 @@ public sealed class JobStore : IUploadQueueStore
             upsert.Parameters.AddWithValue("$repositoryName", cabinet.RepositoryName);
             upsert.Parameters.AddWithValue("$cabinetName", cabinet.CabinetName);
             upsert.Parameters.AddWithValue("$description", (object?)cabinet.Description ?? DBNull.Value);
+            upsert.Parameters.AddWithValue("$repositoryLogoUrl", string.IsNullOrWhiteSpace(cabinet.RepositoryLogoUrl) ? DBNull.Value : cabinet.RepositoryLogoUrl);
+            upsert.Parameters.AddWithValue("$cabinetLogoUrl", string.IsNullOrWhiteSpace(cabinet.CabinetLogoUrl) ? DBNull.Value : cabinet.CabinetLogoUrl);
             upsert.Parameters.AddWithValue("$workspaceAttributeNum", (object?)cabinet.WorkspaceAttributeNum ?? DBNull.Value);
             upsert.Parameters.AddWithValue("$workspacePluralName", string.IsNullOrWhiteSpace(cabinet.WorkspacePluralName) ? DBNull.Value : cabinet.WorkspacePluralName);
             upsert.Parameters.AddWithValue("$allowFileInWorkspaces", cabinet.AllowFileInWorkspaces.HasValue ? (cabinet.AllowFileInWorkspaces.Value ? 1 : 0) : DBNull.Value);
@@ -1834,7 +1842,7 @@ public sealed class JobStore : IUploadQueueStore
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT CabinetId, RepositoryId, RepositoryName, CabinetName, Description, WorkspaceAttributeNum, WorkspacePluralName, AllowFileInWorkspaces, Region, SyncedUtc
+            SELECT CabinetId, RepositoryId, RepositoryName, CabinetName, Description, RepositoryLogoUrl, CabinetLogoUrl, WorkspaceAttributeNum, WorkspacePluralName, AllowFileInWorkspaces, Region, SyncedUtc
             FROM NetDocumentsCabinets
             WHERE $region IS NULL OR Region = $region
             ORDER BY RepositoryName, CabinetName;
@@ -1850,11 +1858,13 @@ public sealed class JobStore : IUploadQueueStore
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
                 reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetInt64(7) == 1,
-                reader.GetString(8),
-                ParseUtc(reader.GetString(9))));
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetInt64(9) == 1,
+                reader.GetString(10),
+                ParseUtc(reader.GetString(11))));
         }
 
         return results;

@@ -160,6 +160,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
@@ -184,7 +185,49 @@
                     <TextBlock Text="Excluded:" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
-                <Menu Grid.Column="2"
+                <StackPanel Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding JobOverviewRepositoryLogo}" Value="{x:Null}" />
+                                        <Condition Binding="{Binding JobOverviewCabinetLogo}" Value="{x:Null}" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Border Width="280" Height="40" CornerRadius="4" BorderBrush="#D0D7DE" BorderThickness="1" Background="#FFFFFF" Padding="4,2">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding JobOverviewRepositoryLogo}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Image Source="{Binding JobOverviewRepositoryLogo}" Stretch="Uniform" HorizontalAlignment="Left" />
+                    </Border>
+                    <Border Width="280" Height="40" CornerRadius="4" BorderBrush="#D0D7DE" BorderThickness="1" Background="#FFFFFF" Padding="4,2" Margin="0,4,0,0">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding JobOverviewCabinetLogo}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Image Source="{Binding JobOverviewCabinetLogo}" Stretch="Uniform" HorizontalAlignment="Left" />
+                    </Border>
+                </StackPanel>
+                <Menu Grid.Column="3"
                       Margin="12,0,0,0"
                       VerticalAlignment="Center"
                       Background="Transparent">
@@ -198,7 +241,7 @@
                         <MenuItem Header="Open Jobs Window" Click="OnOpenJobsQuickView" />
                     </MenuItem>
                 </Menu>
-                <Button Grid.Column="3"
+                <Button Grid.Column="4"
                         Width="38"
                         Height="32"
                         Margin="12,0,0,0"

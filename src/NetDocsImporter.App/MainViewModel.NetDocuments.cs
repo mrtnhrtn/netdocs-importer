@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 using NetDocsImporter.NetDocs;
@@ -37,6 +40,15 @@ public sealed partial class MainViewModel
     private readonly SemaphoreSlim _netDocumentsConnectGate = new(1, 1);
     private CancellationTokenSource? _netDocumentsConnectCts;
     private bool _isNetDocumentsConnectInProgress;
+    private ImageSource? _jobOverviewRepositoryLogo;
+    private ImageSource? _jobOverviewCabinetLogo;
+    private readonly object _jobOverviewLogoCtsLock = new();
+    private CancellationTokenSource? _jobOverviewLogoCts;
+    private readonly Dictionary<string, ImageSource?> _repositoryLogoImageCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ImageSource?> _cabinetLogoImageCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _repositoryLogoUrlMap = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _cabinetLogoUrlMap = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _logoMetadataLock = new();
 
     /// <summary>
     /// Gets the repositories available in the connected NetDocuments region.
@@ -52,6 +64,24 @@ public sealed partial class MainViewModel
     /// Gets synced cabinet profile attributes available for lookup preview and profile-aware operations.
     /// </summary>
     public ObservableCollection<NetDocumentsSyncedAttributeView> SyncedAttributes => _syncedAttributes;
+
+    /// <summary>
+    /// Gets the selected repository logo image for the job overview header.
+    /// </summary>
+    public ImageSource? JobOverviewRepositoryLogo
+    {
+        get => _jobOverviewRepositoryLogo;
+        private set => SetField(ref _jobOverviewRepositoryLogo, value);
+    }
+
+    /// <summary>
+    /// Gets the selected cabinet logo image for the job overview header.
+    /// </summary>
+    public ImageSource? JobOverviewCabinetLogo
+    {
+        get => _jobOverviewCabinetLogo;
+        private set => SetField(ref _jobOverviewCabinetLogo, value);
+    }
 
     /// <summary>
     /// Gets the currently connected NetDocuments user display string.
@@ -136,6 +166,7 @@ public sealed partial class MainViewModel
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
             _ = LoadNetDocumentsTargetContainersAsync();
+            QueueJobOverviewLogoRefresh();
         }
     }
 
@@ -180,6 +211,7 @@ public sealed partial class MainViewModel
             _ = RefreshReviewScopeNetDocumentsAsync();
             _ = LoadNetDocumentsTargetContainersAsync();
             _ = RefreshRecentTargetsAfterContextChangeAsync();
+            QueueJobOverviewLogoRefresh();
         }
     }
 
@@ -447,6 +479,21 @@ public sealed partial class MainViewModel
         NetDocumentsConnectedUser = string.Empty;
         _netDocumentsCurrentUserId = string.Empty;
         IsNetDocumentsConnected = false;
+        JobOverviewRepositoryLogo = null;
+        JobOverviewCabinetLogo = null;
+        _repositoryLogoImageCache.Clear();
+        _cabinetLogoImageCache.Clear();
+        lock (_logoMetadataLock)
+        {
+            _repositoryLogoUrlMap.Clear();
+            _cabinetLogoUrlMap.Clear();
+        }
+        lock (_jobOverviewLogoCtsLock)
+        {
+            _jobOverviewLogoCts?.Cancel();
+            _jobOverviewLogoCts?.Dispose();
+            _jobOverviewLogoCts = null;
+        }
         StatusText = "Logged out of NetDocuments.";
     }
 
@@ -677,14 +724,39 @@ public sealed partial class MainViewModel
     public async Task LoadNetDocumentsMetadataAsync()
     {
         await _jobStore.InitializeAsync();
+        _repositoryLogoImageCache.Clear();
+        _cabinetLogoImageCache.Clear();
+        lock (_logoMetadataLock)
+        {
+            _repositoryLogoUrlMap.Clear();
+            _cabinetLogoUrlMap.Clear();
+        }
         var region = SelectedNetDocumentsRegion.ToString();
         var cabinets = await _jobStore.GetNetDocumentsCabinetsAsync(region);
+        lock (_logoMetadataLock)
+        {
+            foreach (var cabinet in cabinets)
+            {
+                if (!string.IsNullOrWhiteSpace(cabinet.RepositoryId) &&
+                    !string.IsNullOrWhiteSpace(cabinet.RepositoryLogoUrl))
+                {
+                    _repositoryLogoUrlMap[cabinet.RepositoryId] = cabinet.RepositoryLogoUrl;
+                }
+
+                if (!string.IsNullOrWhiteSpace(cabinet.CabinetId) &&
+                    !string.IsNullOrWhiteSpace(cabinet.CabinetLogoUrl))
+                {
+                    _cabinetLogoUrlMap[cabinet.CabinetId] = cabinet.CabinetLogoUrl;
+                }
+            }
+        }
         var repositoryViews = cabinets
             .Where(c => !string.IsNullOrWhiteSpace(c.RepositoryId))
             .GroupBy(c => c.RepositoryId, StringComparer.OrdinalIgnoreCase)
             .Select(group => new NetDocumentsRepositoryView(
                 group.Key,
-                group.First().RepositoryName))
+                group.First().RepositoryName,
+                group.Select(c => c.RepositoryLogoUrl).FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty))
             .OrderBy(r => r.RepositoryName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -721,6 +793,7 @@ public sealed partial class MainViewModel
         await LoadSyncedAttributesForSelectedCabinetAsync();
         await LoadNetDocumentsTargetContainersAsync();
         await RefreshReviewScopeNetDocumentsAsync();
+        QueueJobOverviewLogoRefresh();
     }
 
     private void FilterCabinetsByRepository()
@@ -740,6 +813,8 @@ public sealed partial class MainViewModel
                     c.RepositoryId,
                     c.CabinetName,
                     c.Description,
+                    c.RepositoryLogoUrl,
+                    c.CabinetLogoUrl,
                     c.WorkspaceAttributeNum,
                     c.WorkspacePluralName,
                     c.AllowFileInWorkspaces))
@@ -790,8 +865,161 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+                QueueJobOverviewLogoRefresh();
             });
         });
+    }
+
+    private void QueueJobOverviewLogoRefresh()
+    {
+        CancellationTokenSource cts;
+        lock (_jobOverviewLogoCtsLock)
+        {
+            _jobOverviewLogoCts?.Cancel();
+            _jobOverviewLogoCts?.Dispose();
+            _jobOverviewLogoCts = new CancellationTokenSource();
+            cts = _jobOverviewLogoCts;
+        }
+
+        _ = RefreshJobOverviewLogosSafeAsync(cts.Token);
+    }
+
+    private async Task RefreshJobOverviewLogosSafeAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RefreshJobOverviewLogosAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Newer selection/update superseded this refresh.
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"ND-LOGO refresh failed: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshJobOverviewLogosAsync(CancellationToken cancellationToken)
+    {
+        var selectedRepositoryId = string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId)
+            ? null
+            : SelectedNetDocumentsRepositoryId;
+        var selectedCabinetId = string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId)
+            ? null
+            : SelectedNetDocumentsCabinetId;
+
+        string? repositoryLogoUrl;
+        string? cabinetLogoUrl;
+        lock (_logoMetadataLock)
+        {
+            repositoryLogoUrl = selectedRepositoryId is not null &&
+                                _repositoryLogoUrlMap.TryGetValue(selectedRepositoryId, out var repoUrl)
+                ? repoUrl
+                : null;
+            cabinetLogoUrl = selectedCabinetId is not null &&
+                             _cabinetLogoUrlMap.TryGetValue(selectedCabinetId, out var cabUrl)
+                ? cabUrl
+                : null;
+        }
+
+        var repositoryLogo = await LoadNetDocumentsLogoAsync(
+            selectedRepositoryId,
+            repositoryLogoUrl,
+            null,
+            _repositoryLogoImageCache,
+            cancellationToken);
+        var cabinetLogo = await LoadNetDocumentsLogoAsync(
+            selectedCabinetId,
+            cabinetLogoUrl,
+            selectedCabinetId is null
+                ? null
+                : $"/v1/Cabinet/{Uri.EscapeDataString(selectedCabinetId)}/logo",
+            _cabinetLogoImageCache,
+            cancellationToken);
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        UpdateOnUi(() =>
+        {
+            JobOverviewRepositoryLogo = repositoryLogo;
+            JobOverviewCabinetLogo = cabinetLogo;
+        });
+    }
+
+    private async Task<ImageSource?> LoadNetDocumentsLogoAsync(
+        string? cacheKey,
+        string? logoUrl,
+        string? fallbackLogoPath,
+        IDictionary<string, ImageSource?> cache,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(cacheKey))
+        {
+            return null;
+        }
+
+        if (cache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        if (!IsNetDocumentsConnected || _netDocumentsApiClient is null)
+        {
+            cache[cacheKey] = null;
+            return null;
+        }
+
+        try
+        {
+            var requestPath = string.IsNullOrWhiteSpace(logoUrl) ? fallbackLogoPath : logoUrl;
+            if (string.IsNullOrWhiteSpace(requestPath))
+            {
+                cache[cacheKey] = null;
+                Trace.WriteLine($"ND-LOGO skip key='{cacheKey}' reason='no-url'.");
+                return null;
+            }
+
+            var bytes = await _netDocumentsApiClient.GetBytesAsync(requestPath, cancellationToken);
+            if (bytes.Length == 0)
+            {
+                cache[cacheKey] = null;
+                return null;
+            }
+
+            var image = CreateImageSource(bytes);
+            cache[cacheKey] = image;
+            Trace.WriteLine($"ND-LOGO loaded key='{cacheKey}' url='{requestPath}' bytes={bytes.Length} success={(image is not null ? "Y" : "N")}.");
+            return image;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"ND-LOGO load failed key='{cacheKey}' url='{logoUrl}' fallback='{fallbackLogoPath}': {ex.Message}");
+            cache[cacheKey] = null;
+            return null;
+        }
+    }
+
+    private static ImageSource? CreateImageSource(byte[] bytes)
+    {
+        try
+        {
+            using var stream = new MemoryStream(bytes, writable: false);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void SyncNdImportCabinetFromSelectedCabinetId()
@@ -960,10 +1188,11 @@ public sealed class NetDocumentsRepositoryView
     /// </summary>
     /// <param name="repositoryId">Stable NetDocuments repository identifier.</param>
     /// <param name="repositoryName">Repository display name.</param>
-    public NetDocumentsRepositoryView(string repositoryId, string repositoryName)
+    public NetDocumentsRepositoryView(string repositoryId, string repositoryName, string repositoryLogoUrl)
     {
         RepositoryId = repositoryId;
         RepositoryName = string.IsNullOrWhiteSpace(repositoryName) ? repositoryId : repositoryName;
+        RepositoryLogoUrl = repositoryLogoUrl ?? string.Empty;
     }
 
     /// <summary>
@@ -975,6 +1204,11 @@ public sealed class NetDocumentsRepositoryView
     /// Gets the repository display name.
     /// </summary>
     public string RepositoryName { get; }
+
+    /// <summary>
+    /// Gets the repository logo URL (relative or absolute), when available.
+    /// </summary>
+    public string RepositoryLogoUrl { get; }
 }
 
 /// <summary>
@@ -997,6 +1231,8 @@ public sealed class NetDocumentsCabinetView
         string repositoryId,
         string cabinetName,
         string description,
+        string repositoryLogoUrl,
+        string cabinetLogoUrl,
         int? workspaceAttributeNum,
         string workspacePluralName,
         bool? allowFileInWorkspaces)
@@ -1005,6 +1241,8 @@ public sealed class NetDocumentsCabinetView
         RepositoryId = repositoryId;
         CabinetName = cabinetName;
         Description = description;
+        RepositoryLogoUrl = repositoryLogoUrl ?? string.Empty;
+        CabinetLogoUrl = cabinetLogoUrl ?? string.Empty;
         WorkspaceAttributeNum = workspaceAttributeNum;
         WorkspacePluralName = workspacePluralName;
         AllowFileInWorkspaces = allowFileInWorkspaces;
@@ -1029,6 +1267,16 @@ public sealed class NetDocumentsCabinetView
     /// Gets the cabinet description.
     /// </summary>
     public string Description { get; }
+
+    /// <summary>
+    /// Gets the owning repository logo URL (relative or absolute), when available.
+    /// </summary>
+    public string RepositoryLogoUrl { get; }
+
+    /// <summary>
+    /// Gets the cabinet logo URL (relative or absolute), when available.
+    /// </summary>
+    public string CabinetLogoUrl { get; }
 
     /// <summary>
     /// Gets the workspace attribute number when workspace support is enabled.

@@ -109,6 +109,39 @@ public sealed class NetDocumentsApiClient
     }
 
     /// <summary>
+    /// Executes a GET request and returns the response body as raw bytes.
+    /// </summary>
+    /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>
+    /// <param name="cancellationToken">Token used to cancel the HTTP call.</param>
+    /// <returns>Raw response payload bytes.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the request fails.</exception>
+    public async Task<byte[]> GetBytesAsync(string relativeOrAbsolutePath, CancellationToken cancellationToken = default)
+    {
+        var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await SendWithRetryAsync(() =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+            request.Headers.TryAddWithoutValidation("Accept", "image/*,application/octet-stream,application/json");
+            return request;
+        }, cancellationToken);
+        stopwatch.Stop();
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var bodyText = DecodeBytes(bytes, response.Content.Headers.ContentType?.CharSet);
+            LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, bodyText);
+            throw new InvalidOperationException(
+                $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(bodyText)}");
+        }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} bytes={bytes.Length}");
+        return bytes;
+    }
+
+    /// <summary>
     /// Executes a POST request and requires a success status code.
     /// </summary>
     /// <param name="relativeOrAbsolutePath">Relative API path or absolute URL.</param>

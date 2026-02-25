@@ -95,6 +95,19 @@ public sealed partial class NetDocumentsSyncService
             var name = ReadString(cabinetElement, "name", "cabinetName", "description");
             var repositoryId = ReadString(cabinetElement, "repositoryId", "repoId");
             var repositoryName = ReadString(cabinetElement, "repositoryName", "repoName");
+            var repositoryLogoUrl = ReadString(
+                cabinetElement,
+                "repositoryLogoUrl",
+                "repoLogoUrl",
+                "repositoryLogo",
+                "repoLogo");
+            var cabinetLogoUrl = ReadString(
+                cabinetElement,
+                "cabinetLogoUrl",
+                "cabinetLogo",
+                "logoUrl",
+                "logoUri",
+                "logo");
             var workspaceAttributeNum = ReadNullableInt(
                 cabinetElement,
                 "workspaceAttributeId",
@@ -113,6 +126,8 @@ public sealed partial class NetDocumentsSyncService
             bool? allowFileInWorkspaces = null;
 
             if (string.IsNullOrWhiteSpace(repositoryId) ||
+                string.IsNullOrWhiteSpace(repositoryLogoUrl) ||
+                string.IsNullOrWhiteSpace(cabinetLogoUrl) ||
                 !workspaceAttributeNum.HasValue ||
                 string.IsNullOrWhiteSpace(workspacePluralName))
             {
@@ -126,6 +141,25 @@ public sealed partial class NetDocumentsSyncService
                 if (string.IsNullOrWhiteSpace(repositoryName))
                 {
                     repositoryName = ReadString(infoRoot, "repositoryName", "repoName");
+                }
+                if (string.IsNullOrWhiteSpace(repositoryLogoUrl))
+                {
+                    repositoryLogoUrl = ReadString(
+                        infoRoot,
+                        "repositoryLogoUrl",
+                        "repoLogoUrl",
+                        "repositoryLogo",
+                        "repoLogo");
+                }
+                if (string.IsNullOrWhiteSpace(cabinetLogoUrl))
+                {
+                    cabinetLogoUrl = ReadString(
+                        infoRoot,
+                        "cabinetLogoUrl",
+                        "cabinetLogo",
+                        "logoUrl",
+                        "logoUri",
+                        "logo");
                 }
 
                 workspaceAttributeNum ??= ReadNullableInt(
@@ -168,6 +202,8 @@ public sealed partial class NetDocumentsSyncService
                 repositoryName,
                 name,
                 ReadString(cabinetElement, "description"),
+                repositoryLogoUrl,
+                cabinetLogoUrl,
                 workspaceAttributeNum,
                 workspacePluralName,
                 allowFileInWorkspaces,

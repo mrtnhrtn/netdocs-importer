@@ -2241,6 +2241,17 @@ public sealed partial class MainViewModel
         {
             _workspaceLookupContext.ParentKey = nameParentKey;
             _workspaceLookupContext.ChildKey = nameChildKey;
+            return;
+        }
+
+        if (selection.SourceFlow != NdTargetSourceFlow.LookupWs)
+        {
+            // Non-lookup selections (Recent/Favorites/Browse) can otherwise reuse stale keys
+            // from a previous lookup search and misreport inherited client/matter defaults.
+            _workspaceLookupContext.ParentKey = string.Empty;
+            _workspaceLookupContext.ChildKey = string.Empty;
+            Trace.WriteLine(
+                $"ND-SEARCH lookup-keys cleared for target='{selection.Id}' flow='{selection.SourceFlow}' (no extractable keys).");
         }
     }
 
