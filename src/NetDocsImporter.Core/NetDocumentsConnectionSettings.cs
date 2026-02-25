@@ -23,6 +23,14 @@ public sealed class NetDocumentsConnectionSettings
 {
     public NetDocumentsRegion Region { get; set; } = NetDocumentsRegion.AU;
 
+    public bool IsExportMode { get; set; }
+
+    public string ExportDestinationRootPath { get; set; } = string.Empty;
+
+    public bool ExportAllVersions { get; set; }
+
+    public ExportMetadataFormat ExportMetadataFormat { get; set; } = ExportMetadataFormat.Json;
+
     // Legacy fields retained for migration from older settings versions.
     public string ClientId { get; set; } = string.Empty;
 

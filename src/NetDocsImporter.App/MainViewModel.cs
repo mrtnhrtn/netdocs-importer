@@ -85,6 +85,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _schemaCabinetMatches;
     private string _schemaCabinetName = string.Empty;
     private bool _hasSchemaLoaded;
+    private bool _isExportMode;
+    private string _exportDestinationRootPath = string.Empty;
+    private bool _exportAllVersions;
+    private ExportMetadataFormat _exportMetadataFormat = ExportMetadataFormat.Json;
     private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
     private readonly Dictionary<string, NetDocumentsOAuthClientConfig> _netDocumentsOAuthClientProfiles = new(StringComparer.OrdinalIgnoreCase);
     private NetDocumentsOAuthClientConfig? _selectedNetDocumentsOAuthClientConfig;
@@ -635,6 +639,62 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         File.Exists(NdImportPath) &&
         !string.IsNullOrWhiteSpace(_lastNdImportExportPath) &&
         File.Exists(_lastNdImportExportPath);
+
+    public bool IsExportMode
+    {
+        get => _isExportMode;
+        set
+        {
+            if (SetField(ref _isExportMode, value))
+            {
+                OnPropertyChanged(nameof(ExportModeToggleText));
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public string ExportModeToggleText => IsExportMode ? "Import" : "Export mode";
+
+    public string ExportDestinationRootPath
+    {
+        get => _exportDestinationRootPath;
+        set
+        {
+            if (SetField(ref _exportDestinationRootPath, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool ExportAllVersions
+    {
+        get => _exportAllVersions;
+        set
+        {
+            if (SetField(ref _exportAllVersions, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public ExportMetadataFormat ExportMetadataFormat
+    {
+        get => _exportMetadataFormat;
+        set
+        {
+            if (SetField(ref _exportMetadataFormat, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public void ToggleExportMode()
+    {
+        IsExportMode = !IsExportMode;
+    }
 
     public MainViewModel()
         : this(new AppRuntimeOptions())
@@ -1355,9 +1415,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _selectedNetDocumentsCabinetId = netDocuments.SelectedCabinetId ?? string.Empty;
         _selectedNetDocumentsCabinetName = netDocuments.SelectedCabinetName ?? string.Empty;
         RestoreTargetSelectionFromSettings(netDocuments);
+        _isExportMode = netDocuments.IsExportMode;
+        _exportDestinationRootPath = netDocuments.ExportDestinationRootPath ?? string.Empty;
+        _exportAllVersions = netDocuments.ExportAllVersions;
+        _exportMetadataFormat = netDocuments.ExportMetadataFormat;
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+        OnPropertyChanged(nameof(IsExportMode));
+        OnPropertyChanged(nameof(ExportModeToggleText));
+        OnPropertyChanged(nameof(ExportDestinationRootPath));
+        OnPropertyChanged(nameof(ExportAllVersions));
+        OnPropertyChanged(nameof(ExportMetadataFormat));
         SyncNdImportCabinetFromSelectedCabinetId();
         OnPropertyChanged(nameof(IsDeveloperMode));
         OnPropertyChanged(nameof(NetDocumentsBootstrapRedirectUri));
@@ -1416,6 +1485,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         netDocuments.SelectedRepositoryId = SelectedNetDocumentsRepositoryId;
         netDocuments.SelectedCabinetId = SelectedNetDocumentsCabinetId;
         netDocuments.SelectedCabinetName = SelectedNetDocumentsCabinetName;
+        netDocuments.IsExportMode = IsExportMode;
+        netDocuments.ExportDestinationRootPath = ExportDestinationRootPath;
+        netDocuments.ExportAllVersions = ExportAllVersions;
+        netDocuments.ExportMetadataFormat = ExportMetadataFormat;
         SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
 

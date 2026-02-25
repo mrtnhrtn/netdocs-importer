@@ -159,6 +159,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
@@ -184,6 +185,15 @@
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
                 <Button Grid.Column="2"
+                        Margin="12,0,0,0"
+                        VerticalAlignment="Center"
+                        Click="OnToggleExportMode"
+                        Style="{StaticResource SecondaryButton}">
+                    <TextBlock Text="{Binding ExportModeToggleText}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Button>
+                <Button Grid.Column="3"
                         Width="38"
                         Height="32"
                         Margin="12,0,0,0"

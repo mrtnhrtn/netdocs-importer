@@ -70,6 +70,11 @@ public partial class MainWindow : Window
         _viewModel.ToggleSettings();
     }
 
+    public void OnToggleExportMode(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ToggleExportMode();
+    }
+
     public void OnOpenSettings(object sender, RoutedEventArgs e)
     {
         _viewModel.OpenSettings();
