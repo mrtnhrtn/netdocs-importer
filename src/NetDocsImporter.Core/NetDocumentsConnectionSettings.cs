@@ -31,6 +31,8 @@ public sealed class NetDocumentsConnectionSettings
 
     public ExportMetadataFormat ExportMetadataFormat { get; set; } = ExportMetadataFormat.Json;
 
+    public bool ExportDownloadFiltersAsFolders { get; set; } = true;
+
     // Legacy fields retained for migration from older settings versions.
     public string ClientId { get; set; } = string.Empty;
 

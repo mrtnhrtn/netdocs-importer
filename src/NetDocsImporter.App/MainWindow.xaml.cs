@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using System.Windows.Forms;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -302,6 +303,42 @@ public partial class MainWindow : Window
     public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
     {
         _viewModel.CancelDirectUpload();
+    }
+
+    public async void OnRefreshExportPreflight(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshExportPreflightAsync();
+    }
+
+    public async void OnRunExport(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RunExportAsync();
+    }
+
+    public void OnCancelExport(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CancelExport();
+    }
+
+    public void OnOpenLastExportManifest(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenLastExportManifest();
+    }
+
+    public void OnBrowseExportDestination(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Select an export destination folder",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true
+        };
+
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK &&
+            !string.IsNullOrWhiteSpace(dialog.SelectedPath))
+        {
+            _viewModel.ExportDestinationRootPath = dialog.SelectedPath;
+        }
     }
 
     public void OnBrowseNdImportExecutable(object sender, RoutedEventArgs e)

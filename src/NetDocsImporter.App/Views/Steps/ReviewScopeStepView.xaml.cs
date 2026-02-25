@@ -60,6 +60,46 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnBrowseExportDestination(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnBrowseExportDestination(sender, e);
+        }
+    }
+
+    public void OnRefreshExportPreflight(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnRefreshExportPreflight(sender, e);
+        }
+    }
+
+    public void OnRunExport(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnRunExport(sender, e);
+        }
+    }
+
+    public void OnCancelExport(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnCancelExport(sender, e);
+        }
+    }
+
+    public void OnOpenLastExportManifest(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnOpenLastExportManifest(sender, e);
+        }
+    }
+
     public void OnFolderTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (Window.GetWindow(this) is MainWindow main)

@@ -88,6 +88,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _isExportMode;
     private string _exportDestinationRootPath = string.Empty;
     private bool _exportAllVersions;
+    private bool _exportDownloadFiltersAsFolders = true;
     private ExportMetadataFormat _exportMetadataFormat = ExportMetadataFormat.Json;
     private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
     private readonly Dictionary<string, NetDocumentsOAuthClientConfig> _netDocumentsOAuthClientProfiles = new(StringComparer.OrdinalIgnoreCase);
@@ -140,10 +141,21 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public bool HasFolderRoots
     {
         get => _hasFolderRoots;
-        private set => SetField(ref _hasFolderRoots, value);
+        private set
+        {
+            if (SetField(ref _hasFolderRoots, value))
+            {
+                OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+                OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
+            }
+        }
     }
 
     public bool ShowLegacyScopeExplorer => _showLegacyScopeExplorer;
+
+    public bool ShowLegacyImportScopeExplorer => ShowImportContext && ShowLegacyScopeExplorer;
+
+    public bool ShowReviewTargetProfileContext => ShowExportContext || HasFolderRoots;
 
     public bool IsPreExportWarningsBusy
     {
@@ -191,6 +203,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 {
                     HandleDirectUploadContextChanged(
                         "Source job changed. Refresh direct upload preflight.",
+                        refreshPreflight: false);
+                    HandleExportContextChanged(
+                        "Source job changed. Refresh export preflight.",
                         refreshPreflight: false);
                 }
             }
@@ -647,11 +662,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _isExportMode, value))
             {
+                OnPropertyChanged(nameof(IsImportMode));
+                OnPropertyChanged(nameof(ShowImportContext));
+                OnPropertyChanged(nameof(ShowExportContext));
+                OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+                OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
                 OnPropertyChanged(nameof(ExportModeToggleText));
+                OnPropertyChanged(nameof(CanRefreshExportPreflight));
+                OnPropertyChanged(nameof(CanRunExport));
+                OnPropertyChanged(nameof(CanCancelExport));
+                HandleExportContextChanged("Mode changed.", refreshPreflight: true);
                 QueueSettingsSave();
             }
         }
     }
+
+    public bool IsImportMode => !IsExportMode;
+
+    public bool ShowImportContext => IsImportMode;
+
+    public bool ShowExportContext => IsExportMode;
 
     public string ExportModeToggleText => IsExportMode ? "Import" : "Export mode";
 
@@ -673,6 +703,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         set
         {
             if (SetField(ref _exportAllVersions, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool ExportDownloadFiltersAsFolders
+    {
+        get => _exportDownloadFiltersAsFolders;
+        set
+        {
+            if (SetField(ref _exportDownloadFiltersAsFolders, value))
             {
                 QueueSettingsSave();
             }
@@ -1419,14 +1461,21 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _exportDestinationRootPath = netDocuments.ExportDestinationRootPath ?? string.Empty;
         _exportAllVersions = netDocuments.ExportAllVersions;
         _exportMetadataFormat = netDocuments.ExportMetadataFormat;
+        _exportDownloadFiltersAsFolders = netDocuments.ExportDownloadFiltersAsFolders;
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
         OnPropertyChanged(nameof(IsExportMode));
+        OnPropertyChanged(nameof(IsImportMode));
+        OnPropertyChanged(nameof(ShowImportContext));
+        OnPropertyChanged(nameof(ShowExportContext));
+        OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+        OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
         OnPropertyChanged(nameof(ExportModeToggleText));
         OnPropertyChanged(nameof(ExportDestinationRootPath));
         OnPropertyChanged(nameof(ExportAllVersions));
         OnPropertyChanged(nameof(ExportMetadataFormat));
+        OnPropertyChanged(nameof(ExportDownloadFiltersAsFolders));
         SyncNdImportCabinetFromSelectedCabinetId();
         OnPropertyChanged(nameof(IsDeveloperMode));
         OnPropertyChanged(nameof(NetDocumentsBootstrapRedirectUri));
@@ -1489,6 +1538,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         netDocuments.ExportDestinationRootPath = ExportDestinationRootPath;
         netDocuments.ExportAllVersions = ExportAllVersions;
         netDocuments.ExportMetadataFormat = ExportMetadataFormat;
+        netDocuments.ExportDownloadFiltersAsFolders = ExportDownloadFiltersAsFolders;
         SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
 

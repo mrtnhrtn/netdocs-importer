@@ -90,6 +90,9 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                OnPropertyChanged(nameof(CanRefreshExportPreflight));
+                OnPropertyChanged(nameof(CanRunExport));
+                OnPropertyChanged(nameof(CanCancelExport));
             }
         }
     }
@@ -130,8 +133,13 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            OnPropertyChanged(nameof(CanRefreshExportPreflight));
+            OnPropertyChanged(nameof(CanRunExport));
             HandleDirectUploadContextChanged(
                 "NetDocuments repository changed. Refresh direct upload preflight.",
+                refreshPreflight: false);
+            HandleExportContextChanged(
+                "NetDocuments repository changed. Refresh export preflight.",
                 refreshPreflight: false);
             QueueSettingsSave();
             _ = RefreshReviewScopeNetDocumentsAsync();
@@ -172,8 +180,13 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            OnPropertyChanged(nameof(CanRefreshExportPreflight));
+            OnPropertyChanged(nameof(CanRunExport));
             HandleDirectUploadContextChanged(
                 "NetDocuments cabinet changed. Refresh direct upload preflight.",
+                refreshPreflight: false);
+            HandleExportContextChanged(
+                "NetDocuments cabinet changed. Refresh export preflight.",
                 refreshPreflight: false);
             QueueSettingsSave();
             _ = LoadSyncedAttributesForSelectedCabinetAsync();
