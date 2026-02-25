@@ -2,12 +2,15 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using NetDocsImporter.Core;
+using NetDocsImporter.Data;
 using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
 public sealed partial class MainViewModel
 {
+    private static readonly string[] ExportBaselineProfileAttributeIds = { "1001", "1002", "1003", "1004", "1005" };
+
     private readonly ObservableCollection<ExportPreflightIssueView> _exportPreflightIssues = new();
     private ExportPlan? _exportPlan;
     private string _exportPlanTargetKey = string.Empty;
@@ -138,13 +141,8 @@ public sealed partial class MainViewModel
                 }
             }
 
-            var customAttributeIds = (await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId))
-                .Select(attribute => !string.IsNullOrWhiteSpace(attribute.AttributeId)
-                    ? attribute.AttributeId
-                    : attribute.AttributeNum.ToString(CultureInfo.InvariantCulture))
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var syncedAttributes = await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId);
+            var customAttributeIds = ResolveExportCustomAttributeIds(syncedAttributes, ExportIncludeCustomAttributes);
 
             var exportItems = new List<ExportItem>();
             var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -328,13 +326,59 @@ public sealed partial class MainViewModel
             IsExportBusy = true;
             ExportProgressPercent = 0;
             OnPropertyChanged(nameof(ExportProgressPercentDisplay));
-            ExportStatus = "Writing export manifest and metadata...";
+            ExportStatus = "Writing export manifest and enriching metadata...";
 
             Directory.CreateDirectory(ExportDestinationRootPath);
+            var sync = RequireSyncService();
             var writer = new ExportOutputWriter();
             var manifestPath = await writer.WriteManifestAsync(
                 ExportDestinationRootPath,
                 _exportPlan.Items);
+
+            var metadataItems = new List<MetadataDumpItem>(_exportPlan.Items.Count);
+            var runPhaseEnrichedCount = 0;
+            for (var index = 0; index < _exportPlan.Items.Count; index++)
+            {
+                var item = _exportPlan.Items[index];
+                var metadataFields = item.MetadataFields
+                    .Select(field => new ExportMetadataField
+                    {
+                        Name = field.Name,
+                        Value = field.Value
+                    })
+                    .ToList();
+
+                try
+                {
+                    var runPhaseStandardAttributes = await sync.GetDocumentStandardAttributesForExportRunAsync(
+                        item.DocumentId,
+                        item.VersionId);
+                    if (runPhaseStandardAttributes.Count > 0)
+                    {
+                        metadataFields = MergeRunPhaseStandardMetadata(metadataFields, runPhaseStandardAttributes);
+                        runPhaseEnrichedCount++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort metadata enrichment. Keep preflight metadata when run-phase retrieval fails.
+                }
+
+                metadataItems.Add(new MetadataDumpItem
+                {
+                    DocumentId = item.DocumentId,
+                    VersionId = item.VersionId,
+                    SourcePath = item.SourcePath,
+                    LocalPath = item.LocalPath,
+                    Status = "Planned",
+                    Error = string.Empty,
+                    MetadataFields = metadataFields
+                });
+
+                ExportProgressPercent = Math.Min(95, ((index + 1) * 95d) / Math.Max(1, _exportPlan.Items.Count));
+                OnPropertyChanged(nameof(ExportProgressPercentDisplay));
+            }
+
             var metadataPath = await writer.WriteMetadataAsync(
                 ExportDestinationRootPath,
                 new MetadataDump
@@ -342,16 +386,7 @@ public sealed partial class MainViewModel
                     SourceCabinetId = _exportPlan.Config.SourceCabinetId,
                     SourceTargetId = _exportPlan.Config.SourceTargetId,
                     GeneratedUtc = DateTime.UtcNow,
-                    Items = _exportPlan.Items.Select(item => new MetadataDumpItem
-                    {
-                        DocumentId = item.DocumentId,
-                        VersionId = item.VersionId,
-                        SourcePath = item.SourcePath,
-                        LocalPath = item.LocalPath,
-                        Status = "Planned",
-                        Error = string.Empty,
-                        MetadataFields = item.MetadataFields
-                    }).ToList()
+                    Items = metadataItems
                 },
                 ExportMetadataFormat);
 
@@ -361,6 +396,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(ExportProgressPercentDisplay));
             ExportStatus =
                 $"Export artifacts written. Manifest: {Path.GetFileName(manifestPath)}, metadata: {Path.GetFileName(metadataPath)}. " +
+                $"Run-phase standard attribute enrichment applied to {runPhaseEnrichedCount:N0} of {_exportPlan.Items.Count:N0} planned item(s). " +
                 "Document binary download execution will be wired in the next phase.";
         }
         catch (Exception ex)
@@ -496,6 +532,89 @@ public sealed partial class MainViewModel
                 .Select(group => group.Last())
                 .ToList()
         };
+    }
+
+    private static List<ExportMetadataField> MergeRunPhaseStandardMetadata(
+        IReadOnlyList<ExportMetadataField> existing,
+        IReadOnlyList<NdExportAttributeValue> runPhaseStandardAttributes)
+    {
+        var merged = existing
+            .Where(field => !field.Name.StartsWith("standard.", StringComparison.OrdinalIgnoreCase))
+            .Select(field => new ExportMetadataField
+            {
+                Name = field.Name,
+                Value = field.Value
+            })
+            .ToList();
+
+        foreach (var attribute in runPhaseStandardAttributes)
+        {
+            if (string.IsNullOrWhiteSpace(attribute.Name) || string.IsNullOrWhiteSpace(attribute.Value))
+            {
+                continue;
+            }
+
+            merged.Add(new ExportMetadataField
+            {
+                Name = attribute.Name,
+                Value = attribute.Value
+            });
+        }
+
+        return merged
+            .GroupBy(field => field.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToList();
+    }
+
+    private static List<string> ResolveExportCustomAttributeIds(
+        IReadOnlyList<NetDocumentsAttributeRecord> syncedAttributes,
+        bool includeAllSyncedAttributes)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var baselineId in ExportBaselineProfileAttributeIds)
+        {
+            ids.Add(baselineId);
+        }
+
+        if (syncedAttributes is null || syncedAttributes.Count == 0)
+        {
+            return ids.ToList();
+        }
+
+        foreach (var attribute in syncedAttributes)
+        {
+            var numericId = attribute.AttributeNum > 0
+                ? attribute.AttributeNum.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+
+            if (ExportBaselineProfileAttributeIds.Contains(numericId, StringComparer.OrdinalIgnoreCase))
+            {
+                ids.Add(numericId);
+                if (!string.IsNullOrWhiteSpace(attribute.AttributeId))
+                {
+                    ids.Add(attribute.AttributeId);
+                }
+            }
+
+            if (!includeAllSyncedAttributes)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(attribute.AttributeId))
+            {
+                ids.Add(attribute.AttributeId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(numericId))
+            {
+                ids.Add(numericId);
+            }
+        }
+
+        return ids.ToList();
     }
 }
 

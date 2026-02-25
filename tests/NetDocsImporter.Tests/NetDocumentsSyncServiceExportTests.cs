@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 using NetDocsImporter.NetDocs;
@@ -199,6 +200,209 @@ public sealed class NetDocumentsSyncServiceExportTests
     }
 
     [Fact]
+    public async Task EnumerateContainerDocumentsAsync_ReadsSelectedCustomAttributeFieldsFromTopLevelProperties()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-doc-custom-select-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("container=ROOT", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("skip=0", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "docId": "DOC-100",
+                                "description": "Matter Summary.pdf",
+                                "sizeBytes": 12345
+                              },
+                              "1001": "CLIENT-01",
+                              "1002": "MATTER-99"
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("container=ROOT", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("skip=200", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var scope = new NdExportScope
+            {
+                ContainerId = "ROOT",
+                Name = "Workspace Root",
+                TargetType = NdTargetType.Workspace,
+                Kind = NdExportScopeKind.Workspace
+            };
+
+            var documents = await service.EnumerateContainerDocumentsAsync("NG-CAB", scope, customAttributeIds: new[] { "1001", "1002" });
+
+            var document = Assert.Single(documents);
+            Assert.Contains(document.CustomAttributes, attribute => attribute.Name == "custom.1001" && attribute.Value == "CLIENT-01");
+            Assert.Contains(document.CustomAttributes, attribute => attribute.Name == "custom.1002" && attribute.Value == "MATTER-99");
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateContainerDocumentsAsync_UsesLeanPreflightQueryWithoutValidateWorkspaces()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-doc-query-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            string? firstQuery = null;
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase))
+                {
+                    firstQuery ??= Uri.UnescapeDataString(request.RequestUri.Query);
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var scope = new NdExportScope
+            {
+                ContainerId = "ROOT",
+                Name = "Workspace Root",
+                TargetType = NdTargetType.Workspace,
+                Kind = NdExportScopeKind.Workspace
+            };
+
+            var documents = await service.EnumerateContainerDocumentsAsync("NG-CAB", scope);
+
+            Assert.Empty(documents);
+            Assert.NotNull(firstQuery);
+            Assert.Contains("select=StandardAttributes,VersionsLite,ByteSize", firstQuery, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("listflags=Documents,ByteSize", firstQuery, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ValidateWorkspaces", firstQuery, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Descriptions", firstQuery, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("DispNames", firstQuery, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateContainerDocumentsAsync_StopsWhenPaginationStallsWithRepeatedRows()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-doc-stall-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var requestCount = 0;
+            var repeatedPagePayload = JsonSerializer.Serialize(new
+            {
+                standardList = Enumerable.Range(1, 200)
+                    .Select(index => new
+                    {
+                        standardAttributes = new
+                        {
+                            docId = $"DOC-{index}",
+                            description = $"Document {index}.docx",
+                            sizeBytes = 1000 + index
+                        }
+                    })
+                    .ToArray()
+            });
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("container=ROOT", StringComparison.OrdinalIgnoreCase))
+                {
+                    requestCount++;
+                    return JsonResponse(HttpStatusCode.OK, repeatedPagePayload);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var scope = new NdExportScope
+            {
+                ContainerId = "ROOT",
+                Name = "Workspace Root",
+                TargetType = NdTargetType.Workspace,
+                Kind = NdExportScopeKind.Workspace
+            };
+
+            var documents = await service.EnumerateContainerDocumentsAsync("NG-CAB", scope);
+
+            Assert.Equal(200, documents.Count);
+            Assert.Equal(3, requestCount);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task EnumerateDocumentVersionsAsync_ParsesVersionRows()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-version-tests-{Guid.NewGuid():N}");
@@ -246,6 +450,266 @@ public sealed class NetDocumentsSyncServiceExportTests
             Assert.Equal(2, versions.Count);
             Assert.Contains(versions, version => version.VersionId == "2" && version.IsOfficial);
             Assert.Contains(versions, version => version.VersionId == "1" && version.SizeBytes == 1000);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateDocumentVersionsAsync_PrefersV1DocumentEndpoints()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-version-v1-pref-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var requestPaths = new List<string>();
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                requestPaths.Add(request.RequestUri.PathAndQuery);
+                if (string.Equals(request.RequestUri.PathAndQuery, "/v1/Document/DOC-1/version", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": [
+                            {
+                              "versionId": "3",
+                              "description": "Project Plan v3.docx",
+                              "sizeBytes": 1500,
+                              "official": true
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var versions = await service.EnumerateDocumentVersionsAsync("DOC-1");
+
+            Assert.Single(versions);
+            Assert.Equal("3", versions[0].VersionId);
+            Assert.Equal("/v1/Document/DOC-1/version", requestPaths[0]);
+            Assert.DoesNotContain(requestPaths, path => path.Contains("/v2/document/", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateDocumentVersionsAsync_DisablesVersionEndpointProbeAfterRepeatedClientErrors()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-version-disable-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var requestCount = 0;
+            var handler = new StubHttpHandler(request =>
+            {
+                requestCount++;
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"malformed"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            await service.EnumerateDocumentVersionsAsync("DOC-1");
+            await service.EnumerateDocumentVersionsAsync("DOC-2");
+            await service.EnumerateDocumentVersionsAsync("DOC-3");
+
+            var requestsAfterDisable = requestCount;
+            await service.EnumerateDocumentVersionsAsync("DOC-4");
+
+            Assert.Equal(requestsAfterDisable, requestCount);
+            Assert.Equal(15, requestCount);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateDocumentVersionsAsync_OnlyTripsBreakerAfterConsecutiveClientErrorDocuments()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-version-consecutive-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var requestCount = 0;
+            var handler = new StubHttpHandler(request =>
+            {
+                requestCount++;
+                if (request.RequestUri is not null &&
+                    string.Equals(request.RequestUri.PathAndQuery, "/v1/Document/DOC-3/version", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": [
+                            {
+                              "versionId": "1",
+                              "description": "DOC-3 v1.docx",
+                              "sizeBytes": 1000,
+                              "official": true
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.BadRequest, """{"error":"malformed"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            await service.EnumerateDocumentVersionsAsync("DOC-1");
+            await service.EnumerateDocumentVersionsAsync("DOC-2");
+            await service.EnumerateDocumentVersionsAsync("DOC-3");
+            await service.EnumerateDocumentVersionsAsync("DOC-4");
+            await service.EnumerateDocumentVersionsAsync("DOC-5");
+            Assert.Equal(21, requestCount);
+
+            await service.EnumerateDocumentVersionsAsync("DOC-6");
+            Assert.Equal(26, requestCount);
+
+            await service.EnumerateDocumentVersionsAsync("DOC-7");
+            Assert.Equal(26, requestCount);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetDocumentStandardAttributesForExportRunAsync_ReadsV1DocumentAttributes()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-run-meta-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                var path = request.RequestUri.PathAndQuery;
+                if (string.Equals(path, "/v1/Document/DOC-1/2", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardAttributes": {
+                            "docId": "DOC-1",
+                            "description": "Project Plan v2.docx",
+                            "extension": "docx"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var attributes = await service.GetDocumentStandardAttributesForExportRunAsync("DOC-1", "2");
+
+            Assert.Contains(attributes, attribute => attribute.Name == "standard.docId" && attribute.Value == "DOC-1");
+            Assert.Contains(attributes, attribute => attribute.Name == "standard.description" && attribute.Value == "Project Plan v2.docx");
+            Assert.Contains(attributes, attribute => attribute.Name == "standard.extension" && attribute.Value == "docx");
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetDocumentStandardAttributesForExportRunAsync_FallsBackToStandardAttributesQueryVariant()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-run-meta-fallback-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var requestPaths = new List<string>();
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                requestPaths.Add(request.RequestUri.PathAndQuery);
+                if (string.Equals(request.RequestUri.PathAndQuery, "/v1/Document/DOC-2?standardattributes=true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardAttributes": {
+                            "docId": "DOC-2",
+                            "description": "Cover Letter.pdf"
+                          }
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var attributes = await service.GetDocumentStandardAttributesForExportRunAsync("DOC-2");
+
+            Assert.Contains("/v1/Document/DOC-2", requestPaths, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("/v1/Document/DOC-2?standardattributes=true", requestPaths, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(attributes, attribute => attribute.Name == "standard.docId" && attribute.Value == "DOC-2");
+            Assert.Contains(attributes, attribute => attribute.Name == "standard.description" && attribute.Value == "Cover Letter.pdf");
         }
         finally
         {

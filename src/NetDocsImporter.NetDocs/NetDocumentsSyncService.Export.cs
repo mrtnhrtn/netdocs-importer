@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text.Json;
 using NetDocsImporter.Core;
 
@@ -6,6 +7,10 @@ namespace NetDocsImporter.NetDocs;
 
 public sealed partial class NetDocumentsSyncService
 {
+    private const int VersionEndpointFailureDisableThreshold = 3;
+    private int _documentVersionEndpointFailureCount;
+    private volatile bool _documentVersionEndpointUnavailable;
+
     public async Task<IReadOnlyList<NdExportScope>> EnumerateExportScopesAsync(
         string cabinetId,
         NdTargetSelection root,
@@ -116,6 +121,7 @@ public sealed partial class NetDocumentsSyncService
         var documents = new Dictionary<string, NdExportDocument>(StringComparer.OrdinalIgnoreCase);
         const int pageSize = 200;
         var skip = 0;
+        var repeatedNoProgressPages = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -125,12 +131,29 @@ public sealed partial class NetDocumentsSyncService
                 break;
             }
 
+            var addedThisPage = 0;
             foreach (var row in page)
             {
                 if (!documents.ContainsKey(row.DocumentId))
                 {
                     documents[row.DocumentId] = row;
+                    addedThisPage++;
                 }
+            }
+
+            if (addedThisPage == 0)
+            {
+                repeatedNoProgressPages++;
+                if (repeatedNoProgressPages >= 2)
+                {
+                    Trace.WriteLine(
+                        $"ND-EXPORT pagination stalled for container='{scope.ContainerId}' skip={skip} pageSize={page.Count}. Ending enumeration to avoid repeated requests.");
+                    break;
+                }
+            }
+            else
+            {
+                repeatedNoProgressPages = 0;
             }
 
             if (page.Count < pageSize)
@@ -153,15 +176,23 @@ public sealed partial class NetDocumentsSyncService
             return Array.Empty<NdExportDocumentVersion>();
         }
 
+        if (_documentVersionEndpointUnavailable)
+        {
+            return Array.Empty<NdExportDocumentVersion>();
+        }
+
         var encodedDocumentId = Uri.EscapeDataString(documentId);
         var select = Uri.EscapeDataString("StandardAttributes,Descriptions,DispNames,CustomAttributes,StatusAttributes,UseLongName,ByteSize");
         var candidates = new[]
         {
+            $"/v1/Document/{encodedDocumentId}/version",
+            $"/v1/Document/{encodedDocumentId}/versions",
             $"/v2/document/{encodedDocumentId}/version?select={select}",
             $"/v2/document/{encodedDocumentId}/versions?select={select}",
-            $"/v1/Document/{encodedDocumentId}/version"
+            $"/v1/Document/{encodedDocumentId}/version?select={select}"
         };
 
+        var expectedFailureCount = 0;
         foreach (var path in candidates)
         {
             try
@@ -170,8 +201,15 @@ public sealed partial class NetDocumentsSyncService
                 var versions = ParseDocumentVersions(document.RootElement);
                 if (versions.Count > 0)
                 {
+                    // Keep breaker semantics truly consecutive: any successful fetch clears prior failure streak.
+                    Interlocked.Exchange(ref _documentVersionEndpointFailureCount, 0);
                     return versions;
                 }
+            }
+            catch (InvalidOperationException ex) when (IsExpectedVersionEndpointFailure(ex))
+            {
+                expectedFailureCount++;
+                // Try next endpoint variant.
             }
             catch
             {
@@ -179,7 +217,80 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
+        if (expectedFailureCount == candidates.Length)
+        {
+            var failureCount = Interlocked.Increment(ref _documentVersionEndpointFailureCount);
+            if (failureCount >= VersionEndpointFailureDisableThreshold)
+            {
+                _documentVersionEndpointUnavailable = true;
+                Trace.WriteLine(
+                    $"ND-EXPORT version endpoint probe disabled after {failureCount} consecutive 400/405 failures. Falling back to official versions from container rows.");
+            }
+        }
+        else
+        {
+            // Any non-all-expected outcome breaks the consecutive failure streak.
+            Interlocked.Exchange(ref _documentVersionEndpointFailureCount, 0);
+        }
+
         return Array.Empty<NdExportDocumentVersion>();
+    }
+
+    private static bool IsExpectedVersionEndpointFailure(InvalidOperationException ex)
+    {
+        if (ex is null)
+        {
+            return false;
+        }
+
+        var message = ex.Message;
+        return message.Contains("(400", StringComparison.Ordinal) ||
+               message.Contains("(405", StringComparison.Ordinal);
+    }
+
+    public async Task<IReadOnlyList<NdExportAttributeValue>> GetDocumentStandardAttributesForExportRunAsync(
+        string documentId,
+        string? versionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            return Array.Empty<NdExportAttributeValue>();
+        }
+
+        // TODO(export-run): use this in the binary download pipeline to enrich run-phase metadata from v1/Document.
+        var encodedDocumentId = Uri.EscapeDataString(documentId);
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(versionId))
+        {
+            var encodedVersionId = Uri.EscapeDataString(versionId);
+            candidates.Add($"/v1/Document/{encodedDocumentId}/{encodedVersionId}");
+            candidates.Add($"/v1/Document/{encodedDocumentId}/{encodedVersionId}?standardattributes=true");
+        }
+        else
+        {
+            candidates.Add($"/v1/Document/{encodedDocumentId}");
+            candidates.Add($"/v1/Document/{encodedDocumentId}?standardattributes=true");
+        }
+
+        foreach (var path in candidates)
+        {
+            try
+            {
+                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                var attributes = ReadStandardAttributes(document.RootElement);
+                if (attributes.Count > 0)
+                {
+                    return attributes;
+                }
+            }
+            catch
+            {
+                // Try the next endpoint variant.
+            }
+        }
+
+        return Array.Empty<NdExportAttributeValue>();
     }
 
     private async Task<IReadOnlyList<NdExportDocument>> QueryContainerDocumentPageAsync(
@@ -192,7 +303,7 @@ public sealed partial class NetDocumentsSyncService
     {
         var escapedCabinet = Uri.EscapeDataString(cabinetId);
         var select = BuildContainerDocumentSelect(customAttributeIds);
-        var listFlags = Uri.EscapeDataString("Documents,ByteSize,ValidateWorkspaces");
+        var listFlags = Uri.EscapeDataString("Documents,ByteSize");
         var normalizedContainerCandidates = BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId))
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -219,7 +330,7 @@ public sealed partial class NetDocumentsSyncService
                 try
                 {
                     using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                    var parsed = ParseContainerDocumentRows(document.RootElement, candidateContainerId);
+                    var parsed = ParseContainerDocumentRows(document.RootElement, candidateContainerId, customAttributeIds);
                     if (parsed.Count > 0)
                     {
                         return parsed;
@@ -245,11 +356,7 @@ public sealed partial class NetDocumentsSyncService
         var tokens = new List<string>
         {
             "StandardAttributes",
-            "Descriptions",
-            "DispNames",
             "VersionsLite",
-            "StatusAttributes",
-            "UseLongName",
             "ByteSize"
         };
 
@@ -272,7 +379,10 @@ public sealed partial class NetDocumentsSyncService
         return Uri.EscapeDataString(string.Join(",", tokens));
     }
 
-    private static IReadOnlyList<NdExportDocument> ParseContainerDocumentRows(JsonElement root, string containerId)
+    private static IReadOnlyList<NdExportDocument> ParseContainerDocumentRows(
+        JsonElement root,
+        string containerId,
+        IReadOnlyList<string>? selectedCustomAttributeIds)
     {
         var rows = new List<NdExportDocument>();
         foreach (var item in EnumerateSearchItems(root))
@@ -289,7 +399,7 @@ public sealed partial class NetDocumentsSyncService
                 continue;
             }
 
-            var parsed = ParseContainerDocumentRow(item, source);
+            var parsed = ParseContainerDocumentRow(item, source, selectedCustomAttributeIds);
             if (parsed is null)
             {
                 continue;
@@ -301,7 +411,10 @@ public sealed partial class NetDocumentsSyncService
         return rows;
     }
 
-    private static NdExportDocument? ParseContainerDocumentRow(JsonElement item, JsonElement source)
+    private static NdExportDocument? ParseContainerDocumentRow(
+        JsonElement item,
+        JsonElement source,
+        IReadOnlyList<string>? selectedCustomAttributeIds)
     {
         var documentId = ReadString(source, "docId", "documentId", "id", "envId");
         if (string.IsNullOrWhiteSpace(documentId))
@@ -338,10 +451,50 @@ public sealed partial class NetDocumentsSyncService
         row.StandardAttributes.AddRange(ReadStandardAttributes(item));
         row.CustomAttributes.AddRange(ReadCustomAttributes(source));
         row.CustomAttributes.AddRange(ReadCustomAttributes(item));
+        row.CustomAttributes.AddRange(ReadSelectedCustomAttributes(source, selectedCustomAttributeIds));
+        row.CustomAttributes.AddRange(ReadSelectedCustomAttributes(item, selectedCustomAttributeIds));
 
         DeduplicateAttributeValues(row.StandardAttributes);
         DeduplicateAttributeValues(row.CustomAttributes);
         return row;
+    }
+
+    private static IReadOnlyList<NdExportAttributeValue> ReadSelectedCustomAttributes(
+        JsonElement node,
+        IReadOnlyList<string>? selectedCustomAttributeIds)
+    {
+        var attributes = new List<NdExportAttributeValue>();
+        if (selectedCustomAttributeIds is null || selectedCustomAttributeIds.Count == 0)
+        {
+            return attributes;
+        }
+
+        foreach (var attributeId in selectedCustomAttributeIds)
+        {
+            if (string.IsNullOrWhiteSpace(attributeId))
+            {
+                continue;
+            }
+
+            if (!TryGetPropertyIgnoreCase(node, attributeId, out var valueNode))
+            {
+                continue;
+            }
+
+            var value = ReadValueAsString(valueNode);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            attributes.Add(new NdExportAttributeValue
+            {
+                Name = $"custom.{attributeId}",
+                Value = value
+            });
+        }
+
+        return attributes;
     }
 
     private static IReadOnlyList<NdExportDocumentVersion> ParseDocumentVersions(JsonElement root)
