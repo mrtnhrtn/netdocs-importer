@@ -50,13 +50,74 @@
 - Persisted export mode state under `NetDocumentsConnectionSettings` to keep mode and ND target context together.
 
 ## Next Steps (for next agent)
-1. Implement full document/version enumeration in NetDocuments layer (not just container topology).
-2. Add binary download runner with cancellation + shared throttle + 429 global backoff.
-3. Write export run log format (parallel to direct upload run logs) and include REST trace correlation.
-4. Implement resume/restart semantics for interrupted export runs.
-5. Add tests for export preflight topology traversal and path mapping determinism.
+1. Slim preflight to MVP:
+   - keep scope traversal, but reduce document-list payload.
+   - remove `ValidateWorkspaces` from export document-list queries.
+   - reduce `select` fields to planning essentials.
+2. Stop preflight overfetch:
+   - do not append all synced custom attribute ids during planning by default.
+   - defer custom attributes to optional enrichment (`IncludeCustomAttributes`) or post-MVP.
+3. Shift rich metadata retrieval to run phase:
+   - retrieve content + standard attributes with `v1/Document` during download execution.
+4. Implement binary streaming download runner (temp file + atomic rename) with worker concurrency and cancellation.
+5. Add shared 429 backoff state across workers (`Retry-After` first, otherwise exponential + jitter).
+6. Add export run logs parallel to direct-upload logs with per-request trace correlation fields.
+7. Add `.active` run marker + startup recovery path + resumability skip logic for completed items.
+8. Add tests for:
+   - pagination no-progress guard behavior
+   - lean preflight parameter shape
+   - shared backoff behavior
+   - cancellation cleanup
+   - resume marker recovery and skip-on-rerun semantics
 
 ## Risks / Notes
 - `LoadSettingsAsync` still forces `ImportExecutionMode.DirectApi` in current codebase; export toggle currently only controls new mode flag and UI text.
 - Existing target-browser flows are unchanged; this is intentional per "do not break importer code."
 - `Run Export` currently emits plan artifacts (`manifest.json` + metadata) and does not yet download document binaries.
+
+## Design Notes Added This Iteration
+- `docs/exportmode.md` now includes:
+  - full enumeration contract (containers + root files + versions)
+  - shared worker throttle/backoff contract for 429 handling
+  - export run log and resumability marker format
+- `docs/handover/export-mode-implementation-plan.md` now includes an implementation sequence with acceptance criteria.
+- Handover updated to prioritize MVP-first preflight slimming and ND API param minimization before full metadata enrichment.
+
+## 2026-02-25 - Follow-up fix after version probe circuit-breaker
+- Fixed a correctness gap in export preflight version probe breaker semantics:
+  - failure streak now resets on any successful version fetch.
+  - failure streak now resets on any non-all-expected-failure outcome.
+  - breaker only trips after 3 consecutive documents where all endpoint probes fail with expected 400/405.
+- Added regression test coverage for true consecutiveness:
+  - `EnumerateDocumentVersionsAsync_OnlyTripsBreakerAfterConsecutiveClientErrorDocuments`
+- Files updated:
+  - `src/NetDocsImporter.NetDocs/NetDocumentsSyncService.Export.cs`
+  - `tests/NetDocsImporter.Tests/NetDocumentsSyncServiceExportTests.cs`
+- Validation:
+  - `dotnet test tests/NetDocsImporter.Tests/NetDocsImporter.Tests.csproj --filter NetDocumentsSyncServiceExportTests --nologo`
+  - Passed: 10
+  - Failed: 0
+- Notes for next agent:
+  - verify in-app UX still advances quickly when breaker trips on large `ExportAllVersions=true` scopes.
+  - if needed, add explicit UI status text when version probing is disabled (currently trace-only).
+
+## 2026-02-25 - Phase validation run (artifacts-only export)
+- Runtime status observed:
+  - `Export artifacts written. Manifest: manifest.json, metadata: metadata.json.`
+  - `Run-phase standard attribute enrichment applied to 0 of 601 planned item(s).`
+  - `Document binary download execution will be wired in the next phase.`
+- Artifact verification:
+  - output folder contained only `manifest.json` and `metadata.json` (no downloaded document binaries yet).
+  - `manifest.json` size: 127,098 bytes.
+  - `metadata.json` size: 700,739 bytes.
+- Planning counters verified from emitted metadata:
+  - planned items: 601.
+  - summed `custom.Size`: 410,313,768 bytes (`391.31 MiB`, `410.31 MB` decimal).
+  - interpretation: the reported ~391 MB is planned payload size for eventual binary download, not proof of bytes transferred to local disk in this phase.
+- Performance observation:
+  - user reported slow feedback in this run; this is consistent with planning/enumeration-heavy REST traversal and best-effort per-item run-phase attribute fetches.
+  - no binary transfer occurred in this phase.
+- Readiness decision:
+  - phase objective for artifacts-only export is met.
+  - project is ready to proceed to next phase (binary streaming download runner + cancel + shared 429 backoff + run logs/resume markers).
+  - recommended immediate acceptance gate for next phase kickoff: first end-to-end run must produce actual files on disk and per-item success/failure in run logs.
