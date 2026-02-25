@@ -49,6 +49,8 @@ public sealed class ExportItem
     public string LocalPath { get; set; } = string.Empty;
 
     public long? SizeBytes { get; set; }
+
+    public List<ExportMetadataField> MetadataFields { get; set; } = new();
 }
 
 public sealed class ExportResult
@@ -92,4 +94,13 @@ public sealed class MetadataDumpItem
     public string Status { get; set; } = string.Empty;
 
     public string Error { get; set; } = string.Empty;
+
+    public List<ExportMetadataField> MetadataFields { get; set; } = new();
+}
+
+public sealed class ExportMetadataField
+{
+    public string Name { get; set; } = string.Empty;
+
+    public string Value { get; set; } = string.Empty;
 }

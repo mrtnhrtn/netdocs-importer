@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using NetDocsImporter.Core;
+using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
@@ -107,141 +108,165 @@ public sealed partial class MainViewModel
             var sync = RequireSyncService();
             var resolver = new ExportPathResolver();
 
-            var queue = new Queue<NdTargetSelection>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var issues = new List<ExportPreflightIssueView>();
-            var containerItems = new List<ExportItem>();
             var folderCount = 0;
             var filterCount = 0;
             var savedSearchCount = 0;
             var collabspaceCount = 0;
-            var containerTraversalFailures = 0;
-            var discovered = 0;
+            var rootSelection = CloneSelection(_selectedNetDocumentsTarget);
+            var scopes = await sync.EnumerateExportScopesAsync(
+                SelectedNetDocumentsCabinetId,
+                rootSelection,
+                includeWorkspaceFilters: ExportDownloadFiltersAsFolders);
 
-            queue.Enqueue(CloneSelection(_selectedNetDocumentsTarget));
-
-            while (queue.Count > 0)
+            foreach (var scope in scopes)
             {
-                var current = queue.Dequeue();
-                var key = NdTargetBrowserLogic.BuildTargetKey(current);
-                if (!visited.Add(key))
+                switch (scope.Kind)
                 {
-                    continue;
-                }
-
-                discovered++;
-
-                var currentIsSavedSearch = NdTargetBrowserLogic.IsSavedSearchTarget(current.Id, current.Extension);
-                if (current.Type == NdTargetType.WorkspaceFilter)
-                {
-                    if (currentIsSavedSearch)
-                    {
-                        savedSearchCount++;
-                    }
-                    else
-                    {
+                    case NdExportScopeKind.WorkspaceFilter:
                         filterCount++;
-                    }
-                }
-                else if (current.Type == NdTargetType.Folder)
-                {
-                    if (NdTargetBrowserLogic.IsCollabspaceIdentifier(current.Id))
-                    {
+                        break;
+                    case NdExportScopeKind.SavedSearch:
+                        savedSearchCount++;
+                        break;
+                    case NdExportScopeKind.Collabspace:
                         collabspaceCount++;
-                    }
-                    else
-                    {
+                        break;
+                    case NdExportScopeKind.Folder:
                         folderCount++;
-                    }
+                        break;
                 }
+            }
 
-                var sourceSegments = new List<string>();
-                if (!string.IsNullOrWhiteSpace(SelectedNetDocumentsTargetName))
-                {
-                    sourceSegments.Add(SelectedNetDocumentsTargetName);
-                }
-                if (!string.IsNullOrWhiteSpace(current.Name) &&
-                    !string.Equals(current.Name, SelectedNetDocumentsTargetName, StringComparison.OrdinalIgnoreCase))
-                {
-                    sourceSegments.Add(current.Name);
-                }
+            var customAttributeIds = (await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId))
+                .Select(attribute => !string.IsNullOrWhiteSpace(attribute.AttributeId)
+                    ? attribute.AttributeId
+                    : attribute.AttributeNum.ToString(CultureInfo.InvariantCulture))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-                var extensionHint = currentIsSavedSearch ? ".saved-search" : ".container";
-                var localRelativePath = resolver.ResolveRelativePath(
-                    sourceSegments,
-                    current.Name + extensionHint,
-                    current.Id);
-                containerItems.Add(new ExportItem
-                {
-                    DocumentId = current.Id,
-                    VersionId = null,
-                    SourcePath = current.Id,
-                    LocalPath = localRelativePath,
-                    SizeBytes = null
-                });
+            var exportItems = new List<ExportItem>();
+            var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var uniqueDocumentIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                if (current.Type == NdTargetType.WorkspaceFilter)
-                {
-                    if (!ExportDownloadFiltersAsFolders && !currentIsSavedSearch)
-                    {
-                        issues.Add(new ExportPreflightIssueView(
-                            "Warning",
-                            "FILTER_NOT_DOWNLOADED",
-                            "Workspace filter is excluded because 'Download filters as folders' is disabled.",
-                            current.Name));
-                    }
-
-                    continue;
-                }
-
+            foreach (var scope in scopes)
+            {
+                IReadOnlyList<NdExportDocument> documents;
                 try
                 {
-                    var children = await sync.GetContainerChildrenAsync(
+                    documents = await sync.EnumerateContainerDocumentsAsync(
                         SelectedNetDocumentsCabinetId,
-                        parentContainerId: current.Id,
-                        preferredType: current.Type);
-
-                    foreach (var child in children)
-                    {
-                        if (child.SupportedType is null)
-                        {
-                            continue;
-                        }
-
-                        queue.Enqueue(new NdTargetSelection
-                        {
-                            Type = child.SupportedType.Value,
-                            Id = child.Id,
-                            Name = string.IsNullOrWhiteSpace(child.Name) ? child.Id : child.Name,
-                            ParentWorkspaceId = child.ParentWorkspaceId,
-                            Extension = child.Extension,
-                            SourceFlow = NdTargetSourceFlow.Browse
-                        });
-                    }
+                        scope,
+                        customAttributeIds);
                 }
                 catch (Exception ex)
                 {
-                    containerTraversalFailures++;
                     issues.Add(new ExportPreflightIssueView(
                         "Warning",
-                        "CHILD_ENUMERATION_FAILED",
+                        "DOCUMENT_ENUMERATION_FAILED",
                         ex.Message,
-                        current.Name));
+                        scope.Name));
+                    continue;
+                }
+
+                foreach (var document in documents)
+                {
+                    uniqueDocumentIds.Add(document.DocumentId);
+
+                    var baseMetadata = new List<ExportMetadataField>();
+                    baseMetadata.AddRange(document.StandardAttributes.Select(a => new ExportMetadataField
+                    {
+                        Name = a.Name,
+                        Value = a.Value
+                    }));
+                    baseMetadata.AddRange(document.CustomAttributes.Select(a => new ExportMetadataField
+                    {
+                        Name = a.Name,
+                        Value = a.Value
+                    }));
+                    var dedupedBaseMetadata = baseMetadata
+                        .GroupBy(field => field.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(group => group.Last())
+                        .ToList();
+
+                    if (ExportAllVersions)
+                    {
+                        IReadOnlyList<NdExportDocumentVersion> versions;
+                        try
+                        {
+                            versions = await sync.EnumerateDocumentVersionsAsync(document.DocumentId);
+                        }
+                        catch (Exception ex)
+                        {
+                            issues.Add(new ExportPreflightIssueView(
+                                "Warning",
+                                "VERSION_ENUMERATION_FAILED",
+                                ex.Message,
+                                document.DocumentId));
+                            versions = Array.Empty<NdExportDocumentVersion>();
+                        }
+
+                        if (versions.Count == 0)
+                        {
+                            var fallback = BuildExportItem(
+                                resolver,
+                                scope,
+                                document,
+                                version: null,
+                                dedupedBaseMetadata,
+                                usedRelativePaths);
+                            exportItems.Add(fallback);
+                            continue;
+                        }
+
+                        foreach (var version in versions)
+                        {
+                            var item = BuildExportItem(
+                                resolver,
+                                scope,
+                                document,
+                                version,
+                                dedupedBaseMetadata,
+                                usedRelativePaths);
+                            exportItems.Add(item);
+                        }
+
+                        continue;
+                    }
+
+                    var officialVersion = string.IsNullOrWhiteSpace(document.OfficialVersionId)
+                        ? null
+                        : new NdExportDocumentVersion
+                        {
+                            VersionId = document.OfficialVersionId,
+                            FileName = document.FileName,
+                            SizeBytes = document.SizeBytes
+                        };
+
+                    exportItems.Add(BuildExportItem(
+                        resolver,
+                        scope,
+                        document,
+                        officialVersion,
+                        dedupedBaseMetadata,
+                        usedRelativePaths));
                 }
             }
 
             var warnings = new List<string>();
-            if (containerTraversalFailures > 0)
-            {
-                warnings.Add($"Failed to enumerate children for {containerTraversalFailures.ToString("N0", CultureInfo.CurrentCulture)} container(s).");
-            }
 
             if (string.IsNullOrWhiteSpace(ExportDestinationRootPath))
             {
                 warnings.Add("Destination folder is not selected.");
             }
 
-            warnings.Add("Document binary download execution is not wired yet; this preflight validates container scope and topology.");
+            if (!ExportDownloadFiltersAsFolders)
+            {
+                warnings.Add("Workspace filters are excluded because 'Download filters as folders' is disabled.");
+            }
+
+            warnings.Add("Document binary download execution is not wired yet; this preflight validates enumeration and plan counts.");
 
             var plan = new ExportPlan
             {
@@ -255,10 +280,10 @@ public sealed partial class MainViewModel
                     MetadataFormat = ExportMetadataFormat,
                     Concurrency = Math.Clamp(MaxConcurrency, 1, 8)
                 },
-                Items = containerItems,
-                DocumentCount = 0,
-                VersionCount = 0,
-                EstimatedBytes = 0,
+                Items = exportItems,
+                DocumentCount = uniqueDocumentIds.Count,
+                VersionCount = exportItems.Count,
+                EstimatedBytes = exportItems.Sum(item => item.SizeBytes ?? 0),
                 Warnings = warnings
             };
 
@@ -273,7 +298,8 @@ public sealed partial class MainViewModel
             });
 
             ExportSummary =
-                $"Scope discovered: folders={folderCount:N0}, filters={filterCount:N0}, saved searches={savedSearchCount:N0}, collabspaces={collabspaceCount:N0}, containers={discovered:N0}.";
+                $"Scope discovered: folders={folderCount:N0}, filters={filterCount:N0}, saved searches={savedSearchCount:N0}, collabspaces={collabspaceCount:N0}, containers={scopes.Count:N0}. " +
+                $"Documents={plan.DocumentCount:N0}, versions={plan.VersionCount:N0}, estimated={FormatBytes(plan.EstimatedBytes)}.";
             ExportStatus = $"Export preflight ready. {plan.Warnings.Count} warning(s).";
             ExportProgressPercent = 100;
             OnPropertyChanged(nameof(ExportProgressPercentDisplay));
@@ -323,7 +349,8 @@ public sealed partial class MainViewModel
                         SourcePath = item.SourcePath,
                         LocalPath = item.LocalPath,
                         Status = "Planned",
-                        Error = string.Empty
+                        Error = string.Empty,
+                        MetadataFields = item.MetadataFields
                     }).ToList()
                 },
                 ExportMetadataFormat);
@@ -407,6 +434,68 @@ public sealed partial class MainViewModel
         }
 
         _ = RefreshExportPreflightAsync();
+    }
+
+    private static ExportItem BuildExportItem(
+        ExportPathResolver resolver,
+        NdExportScope scope,
+        NdExportDocument document,
+        NdExportDocumentVersion? version,
+        IReadOnlyList<ExportMetadataField> baseMetadata,
+        IDictionary<string, string> usedRelativePaths)
+    {
+        var versionId = version?.VersionId;
+        var fileName = version?.FileName;
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = document.FileName;
+        }
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = document.DocumentId;
+        }
+
+        var stableId = $"{scope.ContainerId}:{document.DocumentId}:{versionId ?? "official"}";
+        var relativePath = resolver.ResolveRelativePath(scope.PathSegments, fileName, stableId);
+        if (usedRelativePaths.TryGetValue(relativePath, out var existingStableId) &&
+            !string.Equals(existingStableId, stableId, StringComparison.OrdinalIgnoreCase))
+        {
+            relativePath = resolver.ResolveCollision(relativePath, stableId);
+        }
+        usedRelativePaths[relativePath] = stableId;
+
+        var sourcePath = string.IsNullOrWhiteSpace(versionId)
+            ? $"{scope.ContainerId}/{document.DocumentId}"
+            : $"{scope.ContainerId}/{document.DocumentId}/{versionId}";
+
+        var metadata = baseMetadata
+            .Select(field => new ExportMetadataField
+            {
+                Name = field.Name,
+                Value = field.Value
+            })
+            .ToList();
+        if (version is not null)
+        {
+            metadata.AddRange(version.Attributes.Select(attribute => new ExportMetadataField
+            {
+                Name = $"version.{attribute.Name}",
+                Value = attribute.Value
+            }));
+        }
+
+        return new ExportItem
+        {
+            DocumentId = document.DocumentId,
+            VersionId = versionId,
+            SourcePath = sourcePath,
+            LocalPath = relativePath,
+            SizeBytes = version?.SizeBytes ?? document.SizeBytes,
+            MetadataFields = metadata
+                .GroupBy(field => field.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .ToList()
+        };
     }
 }
 
