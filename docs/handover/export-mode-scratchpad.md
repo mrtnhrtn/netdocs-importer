@@ -10,6 +10,10 @@
 - Added UI toggle next to settings gear:
   - Shows `Export mode` when import mode is active.
   - Shows `Import` when export mode is active.
+- Phase 2 core helpers complete:
+  - deterministic export path resolver (`ExportPathResolver`)
+  - manifest + metadata writers (`ExportOutputWriter`)
+  - unit tests for resolver/output writer
 
 ## Files Updated
 - `src/NetDocsImporter.Core/ExportModels.cs` (new)
@@ -17,6 +21,10 @@
 - `src/NetDocsImporter.App/MainViewModel.cs`
 - `src/NetDocsImporter.App/MainWindow.xaml`
 - `src/NetDocsImporter.App/MainWindow.xaml.cs`
+- `src/NetDocsImporter.Core/ExportPathResolver.cs` (new)
+- `src/NetDocsImporter.Core/ExportOutputWriter.cs` (new)
+- `tests/NetDocsImporter.Tests/ExportPathResolverTests.cs` (new)
+- `tests/NetDocsImporter.Tests/ExportOutputWriterTests.cs` (new)
 
 ## Design Decisions
 - Kept all changes additive to avoid importer regressions.
@@ -28,10 +36,9 @@
    - Traverse ND subtree from selected target.
    - Build `ExportPlan` with counts/size estimates/warnings.
 2. Add NetDocuments API client methods for export traversal and document stream download.
-3. Add deterministic Windows-safe path resolver + collision strategy.
-4. Implement export runner with shared 429 throttle handling.
-5. Write `manifest.json` and metadata dump (`json`/`xml`) at completion.
-6. Add UI in step 2 for export destination, metadata format, and all-versions option.
+3. Implement export runner with shared 429 throttle handling.
+4. Wire planner + writers into export run completion path.
+5. Add UI in step 2 for export destination, metadata format, and all-versions option.
 
 ## Risks / Notes
 - `LoadSettingsAsync` still forces `ImportExecutionMode.DirectApi` in current codebase; export toggle currently only controls new mode flag and UI text.
