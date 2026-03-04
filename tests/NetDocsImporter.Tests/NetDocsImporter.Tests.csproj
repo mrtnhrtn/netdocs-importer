@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\NetDocsImporter.Core\NetDocsImporter.Core.csproj" />
     <ProjectReference Include="..\..\src\NetDocsImporter.Data\NetDocsImporter.Data.csproj" />
+    <ProjectReference Include="..\..\src\NetDocsImporter.NetDocs\NetDocsImporter.NetDocs.csproj" />
   </ItemGroup>
 
 </Project>

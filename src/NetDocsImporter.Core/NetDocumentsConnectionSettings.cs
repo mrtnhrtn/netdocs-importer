@@ -62,5 +62,17 @@ public sealed class NetDocumentsConnectionSettings
 
     public string LastWorkspaceQuery { get; set; } = string.Empty;
 
+    public bool IsBrowseFilterPanelVisible { get; set; }
+
+    public bool BrowseFilterShowCabFolders { get; set; } = true;
+
+    public bool BrowseFilterShowFolders { get; set; } = true;
+
+    public bool BrowseFilterShowFilters { get; set; } = true;
+
+    public bool BrowseFilterShowCollabspaces { get; set; } = true;
+
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
+
+    public int? DirectUploadV1DocumentIndexPriority { get; set; } = 250;
 }

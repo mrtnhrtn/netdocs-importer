@@ -33,7 +33,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _currentJobSourceRoot = string.Empty;
     private string _currentJobState = "Ready";
     private JobSummaryView? _selectedRecentJob;
-    private int _maxConcurrency = 4;
+    private int _maxConcurrency = 8;
     private int _delayBetweenStarts = 250;
     private bool _isImportRunning;
     private bool _isImportPaused;
@@ -98,9 +98,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly object _settingsSaveLock = new();
     private bool _settingsSavePending;
     private StepItem? _currentStep;
+    private bool _isSettingsOpen;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
+    private readonly CompletedJobLogStore _completedJobLogStore;
     private readonly SecretStore _secretStore;
     private readonly INetDocumentsOAuthClientConfigProvider _netDocumentsOAuthClientConfigProvider;
     private readonly AppRuntimeOptions _runtimeOptions;
@@ -115,6 +117,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private FolderNodeViewModel? _selectedFolderNode;
     private readonly object _profileSaveLock = new();
     private bool _profileSavePending;
+    private int _recentJobsRefreshInFlight;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -171,12 +174,21 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _currentJobId;
         private set
         {
+            var previousJobId = _currentJobId;
             if (SetField(ref _currentJobId, value))
             {
                 OnPropertyChanged(nameof(CanStartImport));
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
+                OnPropertyChanged(nameof(CanRunDirectUpload));
+
+                if (!string.Equals(previousJobId, value, StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleDirectUploadContextChanged(
+                        "Source job changed. Refresh direct upload preflight.",
+                        refreshPreflight: false);
+                }
             }
         }
     }
@@ -372,6 +384,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         set => SetField(ref _currentStep, value);
     }
 
+    public bool IsSettingsOpen
+    {
+        get => _isSettingsOpen;
+        set => SetField(ref _isSettingsOpen, value);
+    }
+
+    public bool IsAuthenticationRequired => !IsNetDocumentsConnected;
+
+    public bool CanAccessMainFlow => IsNetDocumentsConnected;
+
     public string SchemaPath
     {
         get => _schemaPath;
@@ -409,6 +431,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _netDocumentsRegion, value))
             {
+                InvalidateTargetBrowserContext("region-changed");
                 _refreshedCabinetSchemaThisSession.Clear();
                 var settings = GetOrCreateNetDocumentsSettings();
                 NetDocumentsRegionDefaults.EnsureDefaults(settings);
@@ -622,6 +645,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _runtimeOptions = runtimeOptions ?? new AppRuntimeOptions();
         _paths = new AppPaths();
+        _completedJobLogStore = new CompletedJobLogStore(_paths.CompletedJobsDirectory, TimeSpan.FromDays(30));
+        _completedJobLogStore.PruneExpired(DateTime.UtcNow);
         _secretStore = new SecretStore(_paths.SecretsDirectory);
         var userProfileProvider = new DpapiNetDocumentsOAuthClientConfigProvider(_secretStore, AppSettings.DefaultNetDocumentsOAuthClientProfilesRef);
         var machineProfilePath = Path.Combine(
@@ -640,12 +665,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
         _showLegacyScopeExplorer = false;
 
-        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Login & choose your NetDocuments location to pre-fill profiling attributes", this));
-        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Review & scope", "Select folder and review for issues", this));
-        Steps.Add(new StepItem(3, StepKey.Profiling, "Profiling", "Set profile fields and overrides", this));
-        Steps.Add(new StepItem(4, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
-        Steps.Add(new StepItem(5, StepKey.RunImport, "Run import", "Start/pause/resume/cancel + sessions", this));
-        Steps.Add(new StepItem(6, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments", "Choose your NetDocuments upload destination", this));
+        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and review upload readiness", this));
+        Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Review and select prior jobs", this));
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();
@@ -746,6 +768,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             }
             await RefreshReviewScopeNetDocumentsAsync();
             await RefreshPreExportWarningsAsync();
+            if (IsDirectApiMode)
+            {
+                _ = RefreshDirectUploadPreflightAsync();
+            }
         }
     }
 
@@ -764,13 +790,33 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public async Task LoadRecentJobsAsync()
     {
-        await _jobStore.InitializeAsync();
-        var jobs = await _jobStore.GetRecentJobsAsync(10);
-
-        RecentJobs.Clear();
-        foreach (var job in jobs)
+        if (Interlocked.Exchange(ref _recentJobsRefreshInFlight, 1) == 1)
         {
-            RecentJobs.Add(new JobSummaryView(job));
+            return;
+        }
+
+        try
+        {
+            await _jobStore.InitializeAsync();
+            _completedJobLogStore.PruneExpired(DateTime.UtcNow);
+            var jobs = await _jobStore.GetRecentJobsAsync(10);
+            var latestRunByJob = await _completedJobLogStore.GetLatestRunsByJobAsync(50);
+
+            RecentJobs.Clear();
+            foreach (var job in jobs)
+            {
+                var view = new JobSummaryView(job);
+                if (latestRunByJob.TryGetValue(job.JobId, out var latestRun))
+                {
+                    view.ApplyLatestRun(latestRun);
+                }
+
+                RecentJobs.Add(view);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _recentJobsRefreshInFlight, 0);
         }
     }
 
@@ -1031,6 +1077,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             await LoadSchemaAsync(SchemaPath);
         }
+
+        if (!IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = true;
+            SetCurrentStep(StepKey.SelectFolder);
+            StatusText = CanConnectToNetDocuments
+                ? "Sign in to NetDocuments from Settings before continuing."
+                : "OAuth profile for this region is not installed. Contact administrator.";
+        }
     }
 
     public async Task ExportNdImportListAsync()
@@ -1187,7 +1242,42 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public Task ConnectToNetDocumentsAsync()
     {
-        return ConnectAndSyncNetDocumentsAsync();
+        return ConnectToNetDocumentsCoreAsync();
+    }
+
+    public void OpenSettings()
+    {
+        IsSettingsOpen = true;
+    }
+
+    public void CloseSettings()
+    {
+        if (IsAuthenticationRequired)
+        {
+            return;
+        }
+
+        IsSettingsOpen = false;
+    }
+
+    public void ToggleSettings()
+    {
+        if (IsSettingsOpen)
+        {
+            CloseSettings();
+            return;
+        }
+
+        OpenSettings();
+    }
+
+    private async Task ConnectToNetDocumentsCoreAsync()
+    {
+        await ConnectAndSyncNetDocumentsAsync();
+        if (IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = false;
+        }
     }
 
     private async Task LoadSettingsAsync()
@@ -1220,6 +1310,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         _ndImportDateFormat = NormalizeNdImportDateFormat(_settings.NdImportDateFormat);
         OnPropertyChanged(nameof(NdImportDateFormat));
+        _selectedImportExecutionMode = ImportExecutionMode.DirectApi;
+        OnPropertyChanged(nameof(SelectedImportExecutionMode));
+        OnPropertyChanged(nameof(IsNdImportCsvMode));
+        OnPropertyChanged(nameof(IsDirectApiMode));
+        OnPropertyChanged(nameof(CanRunDirectUpload));
 
         _rememberNdImportPassword = _settings.RememberNdImportPassword;
         OnPropertyChanged(nameof(RememberNdImportPassword));
@@ -1306,6 +1401,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _settings.NdImportCabinet = NdImportCabinet;
         _settings.NdImportUsername = NdImportUsername;
         _settings.NdImportDateFormat = NdImportDateFormat;
+        _settings.ImportExecutionMode = SelectedImportExecutionMode.ToString();
         _settings.RememberNdImportPassword = RememberNdImportPassword;
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
@@ -2469,7 +2565,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     private void UpdateOnUi(Action action)
     {
-        if (_uiContext is null)
+        if (_uiContext is null || ReferenceEquals(SynchronizationContext.Current, _uiContext))
         {
             action();
             return;
@@ -2519,6 +2615,9 @@ public sealed class JobSummaryView
         FileCountDisplay = summary.FileCount.ToString("N0", CultureInfo.CurrentCulture);
         TotalBytesDisplay = FormatBytes(summary.TotalBytes);
         LargeWarningsDisplay = summary.LargeWarnings.ToString("N0", CultureInfo.CurrentCulture);
+        LastRunDisplay = "--";
+        LastRunStatus = "--";
+        LastRunSummary = "--";
     }
 
     public string JobId { get; }
@@ -2536,6 +2635,19 @@ public sealed class JobSummaryView
     public string TotalBytesDisplay { get; }
 
     public string LargeWarningsDisplay { get; }
+
+    public string LastRunDisplay { get; private set; }
+
+    public string LastRunStatus { get; private set; }
+
+    public string LastRunSummary { get; private set; }
+
+    public void ApplyLatestRun(CompletedJobRunSummary summary)
+    {
+        LastRunDisplay = summary.StartedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+        LastRunStatus = string.IsNullOrWhiteSpace(summary.Status) ? "--" : summary.Status;
+        LastRunSummary = string.IsNullOrWhiteSpace(summary.Summary) ? "--" : summary.Summary;
+    }
 
     private static string FormatBytes(long bytes)
     {

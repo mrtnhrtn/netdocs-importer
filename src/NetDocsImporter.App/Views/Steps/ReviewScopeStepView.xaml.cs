@@ -28,6 +28,38 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnRefreshDirectUploadPlan(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnRefreshDirectUploadPlan(sender, e);
+        }
+    }
+
+    public void OnRunDirectUpload(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnRunDirectUpload(sender, e);
+        }
+    }
+
+    public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnCancelDirectUpload(sender, e);
+        }
+    }
+
+    public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnOpenLastDirectUploadReport(sender, e);
+        }
+    }
+
     public void OnFolderTreeSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (Window.GetWindow(this) is MainWindow main)

@@ -112,6 +112,8 @@ public sealed class NdContainerNode
     public List<NdContainerNode> Children { get; set; } = new();
 }
 
+public sealed record NdTargetIconDescriptor(string Glyph, string ColorHex);
+
 public sealed class NdLookupValueItem
 {
     public string Key { get; set; } = string.Empty;
@@ -248,7 +250,8 @@ public sealed class NdTargetProfileSnapshot
 
 public static class NdTargetBrowserLogic
 {
-    private const string UnsupportedMessage = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string UnsupportedMessage = "Only Workspace, Workspace Filter/Saved Search, or Folder are supported as upload destinations in this version.";
+    private const string CabinetRootTargetPrefix = "cabinet-root:";
 
     public static string BuildTargetKey(NdTargetSelection selection)
     {
@@ -271,10 +274,14 @@ public static class NdTargetBrowserLogic
         {
             "workspace" => NdTargetType.Workspace,
             "workspacefilter" => NdTargetType.WorkspaceFilter,
+            "savedsearch" => NdTargetType.WorkspaceFilter,
             "folder" => NdTargetType.Folder,
             "ndws" => NdTargetType.Workspace,
             "ndflt" => NdTargetType.WorkspaceFilter,
+            "ndsq" => NdTargetType.WorkspaceFilter,
             "ndfld" => NdTargetType.Folder,
+            "ndcs" => NdTargetType.Folder,
+            "collabspace" => NdTargetType.Folder,
             _ => null
         };
     }
@@ -282,6 +289,148 @@ public static class NdTargetBrowserLogic
     public static string GetUnsupportedReason(NdTargetType? supportedType)
     {
         return supportedType.HasValue ? string.Empty : UnsupportedMessage;
+    }
+
+    public static NdTargetSelection CreateSelectionFromContainerNode(
+        NdContainerNode node,
+        NdTargetSourceFlow sourceFlow = NdTargetSourceFlow.Browse)
+    {
+        if (node.SupportedType is null)
+        {
+            throw new InvalidOperationException("Container node does not represent a supported target type.");
+        }
+
+        return new NdTargetSelection
+        {
+            Type = node.SupportedType.Value,
+            Id = node.Id,
+            Name = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name,
+            ParentWorkspaceId = node.ParentWorkspaceId,
+            Extension = node.Extension,
+            SourceFlow = sourceFlow
+        };
+    }
+
+    public static NdContainerNode CloneContainerNode(NdContainerNode node)
+    {
+        return new NdContainerNode
+        {
+            Id = node.Id,
+            Name = node.Name,
+            TypeRaw = node.TypeRaw,
+            Extension = node.Extension,
+            ParentId = node.ParentId,
+            ParentWorkspaceId = node.ParentWorkspaceId,
+            PathDisplay = node.PathDisplay,
+            SupportedType = node.SupportedType,
+            IsSelectable = node.IsSelectable,
+            UnsupportedReason = node.UnsupportedReason,
+            HasChildren = node.HasChildren,
+            ChildrenLoadState = node.ChildrenLoadState,
+            Children = node.Children.Select(CloneContainerNode).ToList()
+        };
+    }
+
+    public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type)
+    {
+        return ResolveIconDescriptor(type, targetId: null, extension: null);
+    }
+
+    public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId)
+    {
+        return ResolveIconDescriptor(type, targetId, extension: null);
+    }
+
+    public static NdTargetIconDescriptor ResolveIconDescriptor(NdTargetType? type, string? targetId, string? extension)
+    {
+        if (!type.HasValue && IsCabinetRootIdentifier(targetId))
+        {
+            return new NdTargetIconDescriptor("\uE8B7", "#B7791F");
+        }
+
+        return type switch
+        {
+            NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => new NdTargetIconDescriptor("\uE77B", "#2B6CB0"),
+            NdTargetType.Folder => new NdTargetIconDescriptor("\uE8B7", "#D69E2E"),
+            NdTargetType.WorkspaceFilter when IsSavedSearchTarget(targetId, extension) => new NdTargetIconDescriptor("\uE721", "#C53030"),
+            NdTargetType.WorkspaceFilter => new NdTargetIconDescriptor("\uE71C", "#2B6CB0"),
+            NdTargetType.Workspace => new NdTargetIconDescriptor("\uE821", "#4A5568"),
+            _ => new NdTargetIconDescriptor("\uE9CE", "#718096")
+        };
+    }
+
+    public static string ResolveTypeDisplay(NdTargetType type, string? targetId)
+    {
+        return ResolveTypeDisplay(type, targetId, extension: null);
+    }
+
+    public static string ResolveTypeDisplay(NdTargetType type, string? targetId, string? extension)
+    {
+        return type switch
+        {
+            NdTargetType.Workspace => "Workspace",
+            NdTargetType.WorkspaceFilter when IsSavedSearchTarget(targetId, extension) => "Saved Search",
+            NdTargetType.WorkspaceFilter => "Workspace Filter",
+            NdTargetType.Folder when IsCollabspaceIdentifier(targetId) => "Collabspace",
+            NdTargetType.Folder => "Folder",
+            _ => type.ToString()
+        };
+    }
+
+    public static bool IsSavedSearchTarget(string? targetId, string? extension)
+    {
+        return IsSavedSearchExtension(extension) || IsSavedSearchIdentifier(targetId);
+    }
+
+    public static bool IsSavedSearchExtension(string? extension)
+    {
+        return string.Equals(
+            extension?.Trim(),
+            "ndsq",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsSavedSearchIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        var decoded = Uri.UnescapeDataString(targetId.Trim());
+        if (!decoded.StartsWith(":", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var segments = decoded.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length < 2)
+        {
+            return false;
+        }
+
+        return string.Equals(segments[1], "s", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsCollabspaceIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        return targetId.Contains("^C", StringComparison.OrdinalIgnoreCase) ||
+               targetId.Contains("C^", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCabinetRootIdentifier(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            return false;
+        }
+
+        return targetId.StartsWith(CabinetRootTargetPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     public static IReadOnlyList<NdTargetRecentItem> MergeRecentTargets(
@@ -367,4 +516,76 @@ public static class NdTargetBrowserLogic
             return Array.Empty<NdTargetFavoriteItem>();
         }
     }
+}
+
+public sealed class NdTargetChildrenMemoryCache
+{
+    private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(10);
+
+    private readonly TimeSpan _ttl;
+    private readonly Func<DateTime> _utcNow;
+    private readonly object _gate = new();
+    private readonly Dictionary<string, CacheEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
+
+    public NdTargetChildrenMemoryCache(TimeSpan? ttl = null, Func<DateTime>? utcNow = null)
+    {
+        _ttl = ttl.GetValueOrDefault(DefaultTtl);
+        _utcNow = utcNow ?? (() => DateTime.UtcNow);
+    }
+
+    public async Task<IReadOnlyList<NdContainerNode>> GetOrLoadAsync(
+        string serviceContext,
+        string repositoryId,
+        string cabinetId,
+        string parentContainerId,
+        Func<CancellationToken, Task<IReadOnlyList<NdContainerNode>>> loader,
+        CancellationToken cancellationToken = default)
+    {
+        if (loader is null)
+        {
+            throw new ArgumentNullException(nameof(loader));
+        }
+
+        var key = BuildCacheKey(serviceContext, repositoryId, cabinetId, parentContainerId);
+        var now = _utcNow();
+        lock (_gate)
+        {
+            if (_entries.TryGetValue(key, out var cached) &&
+                now - cached.StoredUtc <= _ttl)
+            {
+                return cached.Children.Select(NdTargetBrowserLogic.CloneContainerNode).ToList();
+            }
+        }
+
+        var loaded = await loader(cancellationToken);
+        var normalized = (loaded ?? Array.Empty<NdContainerNode>())
+            .Select(NdTargetBrowserLogic.CloneContainerNode)
+            .ToList();
+
+        lock (_gate)
+        {
+            _entries[key] = new CacheEntry(now, normalized);
+        }
+
+        return normalized.Select(NdTargetBrowserLogic.CloneContainerNode).ToList();
+    }
+
+    public void InvalidateAll()
+    {
+        lock (_gate)
+        {
+            _entries.Clear();
+        }
+    }
+
+    private static string BuildCacheKey(
+        string serviceContext,
+        string repositoryId,
+        string cabinetId,
+        string parentContainerId)
+    {
+        return $"{serviceContext?.Trim()}|{repositoryId?.Trim()}|{cabinetId?.Trim()}|{parentContainerId?.Trim()}";
+    }
+
+    private sealed record CacheEntry(DateTime StoredUtc, IReadOnlyList<NdContainerNode> Children);
 }

@@ -7,6 +7,9 @@ using Serilog;
 
 namespace NetDocsImporter.App;
 
+/// <summary>
+/// WPF application entry point responsible for startup composition, logging initialization, and global exception handling.
+/// </summary>
 public partial class App : System.Windows.Application
 {
     private string? _logFilePath;
@@ -32,6 +35,7 @@ public partial class App : System.Windows.Application
         var logsDirectory = LogPathHelper.GetLogsDirectory();
         _logFilePath = Path.Combine(logsDirectory, "app.log");
         var tracePath = Path.Combine(logsDirectory, "trace.log");
+        PruneTraceLog(tracePath, TimeSpan.FromDays(7));
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
@@ -41,6 +45,55 @@ public partial class App : System.Windows.Application
         Trace.Listeners.Clear();
         Trace.Listeners.Add(new TimestampedTextWriterTraceListener(tracePath));
         Trace.AutoFlush = true;
+        Trace.WriteLine(
+            $"ND-TRACE-ANCHOR startup process='{Environment.ProcessPath ?? string.Empty}' baseDir='{AppContext.BaseDirectory}' settings='{new AppPaths().SettingsPath}' trace='{tracePath}'.");
+    }
+
+    private static void PruneTraceLog(string tracePath, TimeSpan retention)
+    {
+        if (!File.Exists(tracePath))
+        {
+            return;
+        }
+
+        var cutoff = DateTime.Now.Subtract(retention);
+        var tempPath = $"{tracePath}.prune";
+        try
+        {
+            using var reader = new StreamReader(tracePath);
+            using var writer = new StreamWriter(tempPath, false);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (line.Length < 19 ||
+                    !DateTime.TryParseExact(
+                        line[..19],
+                        "yyyy-MM-dd HH:mm:ss",
+                        null,
+                        System.Globalization.DateTimeStyles.None,
+                        out var timestamp))
+                {
+                    writer.WriteLine(line);
+                    continue;
+                }
+
+                if (timestamp >= cutoff)
+                {
+                    writer.WriteLine(line);
+                }
+            }
+
+            writer.Flush();
+            File.Copy(tempPath, tracePath, overwrite: true);
+            File.Delete(tempPath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
     private void HookGlobalExceptionHandlers()

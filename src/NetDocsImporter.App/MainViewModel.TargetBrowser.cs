@@ -12,17 +12,20 @@ namespace NetDocsImporter.App;
 
 public sealed partial class MainViewModel
 {
-    private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter, or Folder are supported as upload destinations in this version.";
+    private const string UnsupportedTargetReason = "Only Workspace, Workspace Filter/Saved Search, or Folder are supported as upload destinations in this version.";
+    private const string CabinetRootNodeTypeRaw = "CabinetRoot";
     private const int WorkspaceSearchMaxResults = 8;
     private const int WorkspaceSearchMaxParentCandidates = 4;
     private const int WorkspaceSearchMaxChildCandidatesPerParent = 2;
     private const int WorkspaceSearchMaxResolveAttempts = 8;
     private static readonly TimeSpan WorkspaceCacheTtl = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan BrowseChildrenCacheTtl = TimeSpan.FromMinutes(10);
 
     private readonly ObservableCollection<NetDocumentsTargetContainerView> _netDocumentsTargetContainers = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _recentTargets = new();
     private readonly ObservableCollection<NetDocumentsTargetItemView> _favoriteTargets = new();
     private readonly ObservableCollection<NetDocumentsWorkspaceTargetResultView> _workspaceSearchTargets = new();
+    private List<NetDocumentsWorkspaceTargetResultView> _workspaceTreeSearchTargets = new();
     private readonly ObservableCollection<NetDocumentsBrowseNodeView> _browseRootNodes = new();
     private readonly ObservableCollection<NetDocumentsTargetProfileAttributeView> _targetProfileAttributes = new();
     private readonly ObservableCollection<NetDocumentsEffectiveDefaultView> _effectiveProfileDefaultsRows = new();
@@ -30,6 +33,8 @@ public sealed partial class MainViewModel
     private readonly HashSet<string> _locallyUnpinnedFavoriteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetDocumentsWorkspaceTargetResultView?> _workspaceLookupPairCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _workspaceLookupInvalidPairCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _browseExpansionScopeCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly NdTargetChildrenMemoryCache _browseChildrenCache = new(BrowseChildrenCacheTtl);
 
     private List<NdTargetRecentItem> _localRecentTargets = new();
     private List<NdTargetFavoriteItem> _localFavoriteTargets = new();
@@ -51,11 +56,20 @@ public sealed partial class MainViewModel
     private NdTargetBrowserTab _selectedTargetBrowserTab = NdTargetBrowserTab.Recent;
     private string _workspaceSearchText = string.Empty;
     private string _workspaceLookupStatus = string.Empty;
+    private bool _isBrowseFilterPanelVisible;
+    private bool _browseFilterShowCabFolders = true;
+    private bool _browseFilterShowFolders = true;
+    private bool _browseFilterShowFilters = true;
+    private bool _browseFilterShowCollabspaces = true;
     private EffectiveProfileDefaults _effectiveProfileDefaults = EffectiveProfileDefaults.Empty;
     private WorkspaceLookupContext? _workspaceLookupContext;
     private CancellationTokenSource? _workspaceSearchCts;
     private bool _hasLoadedRecentTargets;
     private bool _hasLoadedFavoriteTargets;
+    private bool _isAutoSelectingTarget;
+    private CancellationTokenSource? _autoTargetSelectionCts;
+    private long _targetBrowserContextVersion;
+    private bool _isWorkspaceLookupAvailable = true;
 
     public ObservableCollection<NetDocumentsTargetContainerView> NetDocumentsTargetContainers => _netDocumentsTargetContainers;
 
@@ -74,13 +88,39 @@ public sealed partial class MainViewModel
     public NetDocumentsTargetItemView? SelectedRecentTarget
     {
         get => _selectedRecentTarget;
-        set => SetField(ref _selectedRecentTarget, value);
+        set
+        {
+            if (!SetField(ref _selectedRecentTarget, value))
+            {
+                return;
+            }
+
+            if (value is null || _isAutoSelectingTarget)
+            {
+                return;
+            }
+
+            _ = AutoCommitRecentTargetSelectionAsync(value);
+        }
     }
 
     public NetDocumentsTargetItemView? SelectedFavoriteTarget
     {
         get => _selectedFavoriteTarget;
-        set => SetField(ref _selectedFavoriteTarget, value);
+        set
+        {
+            if (!SetField(ref _selectedFavoriteTarget, value))
+            {
+                return;
+            }
+
+            if (value is null || _isAutoSelectingTarget)
+            {
+                return;
+            }
+
+            _ = AutoCommitFavoriteTargetSelectionAsync(value);
+        }
     }
 
     public NetDocumentsWorkspaceTargetResultView? SelectedWorkspaceSearchTarget
@@ -91,6 +131,13 @@ public sealed partial class MainViewModel
             if (SetField(ref _selectedWorkspaceSearchTarget, value))
             {
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+
+                if (value is null || _isAutoSelectingTarget)
+                {
+                    return;
+                }
+
+                _ = AutoCommitWorkspaceTargetSelectionAsync(value);
             }
         }
     }
@@ -119,6 +166,7 @@ public sealed partial class MainViewModel
 
             OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
             OnPropertyChanged(nameof(CanContinueToReviewScope));
+            OnPropertyChanged(nameof(CanRunDirectUpload));
             QueueSettingsSave();
         }
     }
@@ -195,7 +243,33 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            OnPropertyChanged(nameof(SelectedTargetBrowserTabIndex));
             _ = EnsureTargetBrowserTabLoadedAsync(value);
+        }
+    }
+
+    public int SelectedTargetBrowserTabIndex
+    {
+        get => SelectedTargetBrowserTab switch
+        {
+            NdTargetBrowserTab.Recent => 0,
+            NdTargetBrowserTab.Favorites => 1,
+            NdTargetBrowserTab.GoToWorkspace => 2,
+            _ => 0
+        };
+        set
+        {
+            var tab = value switch
+            {
+                1 => NdTargetBrowserTab.Favorites,
+                2 => NdTargetBrowserTab.GoToWorkspace,
+                _ => NdTargetBrowserTab.Recent
+            };
+
+            if (SelectedTargetBrowserTab != tab)
+            {
+                SelectedTargetBrowserTab = tab;
+            }
         }
     }
 
@@ -209,6 +283,70 @@ public sealed partial class MainViewModel
     {
         get => _workspaceLookupStatus;
         private set => SetField(ref _workspaceLookupStatus, value);
+    }
+
+    public bool IsBrowseFilterPanelVisible
+    {
+        get => _isBrowseFilterPanelVisible;
+        set
+        {
+            if (SetField(ref _isBrowseFilterPanelVisible, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowCabFolders
+    {
+        get => _browseFilterShowCabFolders;
+        set
+        {
+            if (SetField(ref _browseFilterShowCabFolders, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowFolders
+    {
+        get => _browseFilterShowFolders;
+        set
+        {
+            if (SetField(ref _browseFilterShowFolders, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowFilters
+    {
+        get => _browseFilterShowFilters;
+        set
+        {
+            if (SetField(ref _browseFilterShowFilters, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
+    }
+
+    public bool BrowseFilterShowCollabspaces
+    {
+        get => _browseFilterShowCollabspaces;
+        set
+        {
+            if (SetField(ref _browseFilterShowCollabspaces, value))
+            {
+                QueueSettingsSave();
+                RefreshBrowseRootsForSelectedTab();
+            }
+        }
     }
 
     public EffectiveProfileDefaults EffectiveProfileDefaults
@@ -242,8 +380,12 @@ public sealed partial class MainViewModel
     public bool CanUseSelectedBrowseNode => SelectedBrowseNode is not null;
 
     public bool CanUseWorkspaceSearchSelection =>
-        CanPickNetDocumentsTarget &&
+        CanSearchWorkspaceTargets &&
         SelectedWorkspaceSearchTarget is not null;
+
+    public bool CanSearchWorkspaceTargets =>
+        CanPickNetDocumentsTarget &&
+        _isWorkspaceLookupAvailable;
 
     public bool IsSelectedTargetFavorite
     {
@@ -262,6 +404,7 @@ public sealed partial class MainViewModel
 
     public async Task LoadNetDocumentsTargetContainersAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             UpdateOnUi(() =>
@@ -272,6 +415,7 @@ public sealed partial class MainViewModel
                 _workspaceSearchTargets.Clear();
                 SelectedWorkspaceSearchTarget = null;
                 _browseRootNodes.Clear();
+                SelectedBrowseNode = null;
             });
             _hasLoadedRecentTargets = false;
             _hasLoadedFavoriteTargets = false;
@@ -282,9 +426,19 @@ public sealed partial class MainViewModel
         try
         {
             await LoadTargetBrowserAsync();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='LoadNetDocumentsTargetContainersAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             var sync = RequireSyncService();
-            var supportedTargets = await sync.GetSupportedTargetContainersAsync(SelectedNetDocumentsCabinetId);
+            var supportedTargets = await sync.GetSupportedTargetContainersAsync(snapshot.CabinetId);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='GetSupportedTargetContainersAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             var mapped = supportedTargets
                 .Select(t => new NetDocumentsTargetContainerView(t.Id, t.Name, t.Type.ToString(), t.ParentWorkspaceId))
                 .OrderBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -301,7 +455,12 @@ public sealed partial class MainViewModel
 
             if (_selectedNetDocumentsTarget is not null)
             {
-                var path = await sync.ResolveTargetPathAsync(SelectedNetDocumentsCabinetId, _selectedNetDocumentsTarget.Id);
+                var path = await sync.ResolveTargetPathAsync(snapshot.CabinetId, _selectedNetDocumentsTarget.Id);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='ResolveTargetPathAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     SelectedNetDocumentsTargetPath = path;
@@ -316,11 +475,16 @@ public sealed partial class MainViewModel
         finally
         {
             IsTargetBrowserBusy = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
     public async Task LoadTargetBrowserAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -328,7 +492,13 @@ public sealed partial class MainViewModel
 
         if (_workspaceLookupContext is null)
         {
-            _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync();
+            _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(snapshot.RepositoryId, snapshot.CabinetId);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='ResolveWorkspaceLookupContextAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
+            ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
         }
 
         await EnsureTargetBrowserTabLoadedAsync(SelectedTargetBrowserTab);
@@ -336,6 +506,7 @@ public sealed partial class MainViewModel
 
     public async Task EnsureTargetBrowserTabLoadedAsync(NdTargetBrowserTab tab)
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -355,13 +526,29 @@ public sealed partial class MainViewModel
                     await RefreshFavoriteTargetsAsync();
                 }
                 break;
+            case NdTargetBrowserTab.GoToWorkspace:
+                if (_workspaceLookupContext is null)
+                {
+                    _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(snapshot.RepositoryId, snapshot.CabinetId);
+                    if (!IsTargetBrowserContextCurrent(snapshot))
+                    {
+                        Trace.WriteLine($"ND-BROWSER stale-drop op='EnsureTargetBrowserTabLoadedAsync.GoToWorkspace' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                        return;
+                    }
+
+                    ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
+                }
+                break;
             default:
                 break;
         }
+
+        RefreshBrowseRootsForSelectedTab();
     }
 
     public async Task RefreshRecentTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -372,34 +559,47 @@ public sealed partial class MainViewModel
             return;
         }
 
+        var userKey = GetNetDocumentsUserCacheKey();
+        var serviceKey = GetNetDocumentsServiceKey();
+        var cabinetScope = snapshot.CabinetId;
         IsLoadingRecentTargets = true;
         try
         {
-            var userKey = GetNetDocumentsUserCacheKey();
-            var serviceKey = GetNetDocumentsServiceKey();
-            var cabinetScope = SelectedNetDocumentsCabinetId;
             await _jobStore.InitializeAsync();
 
             var cachedRecords = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
                 userKey,
                 serviceKey,
                 cabinetScope);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.cache' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             if (cachedRecords.Count > 0 &&
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
                 var cachedItems = cachedRecords.Select(ToRecentItem).ToList();
-                _localRecentTargets = cachedItems.ToList();
-                UpdateOnUi(() =>
+                if (cachedItems.Any(item => HasUnresolvedTargetDisplayName(item.Selection)))
                 {
-                    _recentTargets.Clear();
-                    foreach (var item in cachedItems)
+                    Trace.WriteLine("ND-CACHE recent stale-names detected; refreshing from server.");
+                }
+                else
+                {
+                    _localRecentTargets = cachedItems.ToList();
+                    UpdateOnUi(() =>
                     {
-                        _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
-                    }
-                });
-                _hasLoadedRecentTargets = true;
-                Trace.WriteLine($"ND-CACHE recent source=cache count={cachedItems.Count}");
-                return;
+                        _recentTargets.Clear();
+                        foreach (var item in cachedItems)
+                        {
+                            _recentTargets.Add(NetDocumentsTargetItemView.FromRecent(item));
+                        }
+                    });
+                    _hasLoadedRecentTargets = true;
+                    Trace.WriteLine($"ND-CACHE recent source=cache count={cachedItems.Count}");
+                    return;
+                }
+
             }
 
             var serverItems = (await RequireSyncService().GetRecentTargetsAsync(cabinetScope))
@@ -408,6 +608,11 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.LastUsedUtc)
                     .First())
                 .ToList();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.server' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             Trace.WriteLine($"ND-CACHE recent source=server count={serverItems.Count}");
             _localRecentTargets = serverItems.ToList();
 
@@ -416,6 +621,11 @@ public sealed partial class MainViewModel
                 .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.LastUsedUtc, syncedUtc))
                 .ToList();
             await _jobStore.ReplaceNetDocumentsRecentWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.persist' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             UpdateOnUi(() =>
             {
@@ -433,9 +643,14 @@ public sealed partial class MainViewModel
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsRecentWorkspaceCacheAsync(
-                    GetNetDocumentsUserCacheKey(),
-                    GetNetDocumentsServiceKey(),
-                    SelectedNetDocumentsCabinetId);
+                    userKey,
+                    serviceKey,
+                    cabinetScope);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshRecentTargetsAsync.fallback' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 var cachedItems = fallback.Select(ToRecentItem).ToList();
                 _localRecentTargets = cachedItems.ToList();
                 UpdateOnUi(() =>
@@ -464,11 +679,16 @@ public sealed partial class MainViewModel
         finally
         {
             IsLoadingRecentTargets = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
     public async Task RefreshFavoriteTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
             return;
@@ -479,34 +699,46 @@ public sealed partial class MainViewModel
             return;
         }
 
+        var userKey = GetNetDocumentsUserCacheKey();
+        var serviceKey = GetNetDocumentsServiceKey();
+        var cabinetScope = snapshot.CabinetId;
         IsLoadingFavoriteTargets = true;
         try
         {
-            var userKey = GetNetDocumentsUserCacheKey();
-            var serviceKey = GetNetDocumentsServiceKey();
-            var cabinetScope = SelectedNetDocumentsCabinetId;
             await _jobStore.InitializeAsync();
 
             var cachedRecords = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
                 userKey,
                 serviceKey,
                 cabinetScope);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.cache' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             if (cachedRecords.Count > 0 &&
                 DateTime.UtcNow - cachedRecords.Max(r => r.UpdatedUtc) <= WorkspaceCacheTtl)
             {
                 var cachedItems = cachedRecords.Select(ToFavoriteItem).ToList();
-                _localFavoriteTargets = cachedItems.ToList();
-                UpdateOnUi(() =>
+                if (cachedItems.Any(item => HasUnresolvedTargetDisplayName(item.Selection)))
                 {
-                    _favoriteTargets.Clear();
-                    foreach (var item in cachedItems)
+                    Trace.WriteLine("ND-CACHE favorites stale-names detected; refreshing from server.");
+                }
+                else
+                {
+                    _localFavoriteTargets = cachedItems.ToList();
+                    UpdateOnUi(() =>
                     {
-                        _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
-                    }
-                });
-                _hasLoadedFavoriteTargets = true;
-                Trace.WriteLine($"ND-CACHE favorites source=cache count={cachedItems.Count}");
-                return;
+                        _favoriteTargets.Clear();
+                        foreach (var item in cachedItems)
+                        {
+                            _favoriteTargets.Add(NetDocumentsTargetItemView.FromFavorite(item));
+                        }
+                    });
+                    _hasLoadedFavoriteTargets = true;
+                    Trace.WriteLine($"ND-CACHE favorites source=cache count={cachedItems.Count}");
+                    return;
+                }
             }
 
             var serverItems = (await RequireSyncService().GetFavoriteTargetsAsync(cabinetScope))
@@ -515,6 +747,11 @@ public sealed partial class MainViewModel
                     .OrderByDescending(item => item.PinnedUtc)
                     .First())
                 .ToList();
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.server' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
             Trace.WriteLine($"ND-CACHE favorites source=server count={serverItems.Count}");
             _localFavoriteTargets = serverItems.ToList();
 
@@ -523,6 +760,11 @@ public sealed partial class MainViewModel
                 .Select(item => ToWorkspaceCacheRecord(userKey, serviceKey, cabinetScope, item.Selection, item.PinnedUtc, syncedUtc))
                 .ToList();
             await _jobStore.ReplaceNetDocumentsFavoriteWorkspaceCacheAsync(userKey, serviceKey, cabinetScope, records);
+            if (!IsTargetBrowserContextCurrent(snapshot))
+            {
+                Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.persist' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                return;
+            }
 
             UpdateOnUi(() =>
             {
@@ -540,9 +782,14 @@ public sealed partial class MainViewModel
             try
             {
                 var fallback = await _jobStore.GetNetDocumentsFavoriteWorkspaceCacheAsync(
-                    GetNetDocumentsUserCacheKey(),
-                    GetNetDocumentsServiceKey(),
-                    SelectedNetDocumentsCabinetId);
+                    userKey,
+                    serviceKey,
+                    cabinetScope);
+                if (!IsTargetBrowserContextCurrent(snapshot))
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='RefreshFavoriteTargetsAsync.fallback' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                    return;
+                }
                 var cachedItems = fallback.Select(ToFavoriteItem).ToList();
                 _localFavoriteTargets = cachedItems.ToList();
                 UpdateOnUi(() =>
@@ -571,7 +818,44 @@ public sealed partial class MainViewModel
         finally
         {
             IsLoadingFavoriteTargets = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
+    }
+
+    private static bool HasUnresolvedTargetDisplayName(NdTargetSelection selection)
+    {
+        if (selection is null)
+        {
+            return true;
+        }
+
+        var name = selection.Name?.Trim() ?? string.Empty;
+        var id = selection.Id?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(id) &&
+            string.Equals(name, id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(name, "nev", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (name.IndexOf(".nev", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     public async Task SearchWorkspacesAsync()
@@ -581,8 +865,22 @@ public sealed partial class MainViewModel
 
     public async Task SearchWorkspaceTargetsAsync()
     {
+        var snapshot = CaptureTargetBrowserContextSnapshot();
         if (!CanPickNetDocumentsTarget)
         {
+            return;
+        }
+
+        if (SelectedTargetBrowserTab != NdTargetBrowserTab.GoToWorkspace)
+        {
+            SelectedTargetBrowserTab = NdTargetBrowserTab.GoToWorkspace;
+        }
+
+        if (!CanSearchWorkspaceTargets)
+        {
+            WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";
+            TargetBrowserMessage = WorkspaceLookupStatus;
+            RefreshBrowseRootsForSelectedTab();
             return;
         }
 
@@ -591,11 +889,13 @@ public sealed partial class MainViewModel
         {
             WorkspaceLookupStatus = "Enter workspace search text.";
             TargetBrowserMessage = WorkspaceLookupStatus;
+            _workspaceTreeSearchTargets = new List<NetDocumentsWorkspaceTargetResultView>();
             UpdateOnUi(() =>
             {
                 _workspaceSearchTargets.Clear();
                 SelectedWorkspaceSearchTarget = null;
             });
+            RefreshBrowseRootsForSelectedTab();
             return;
         }
 
@@ -608,11 +908,16 @@ public sealed partial class MainViewModel
         try
         {
             var resolved = await SearchWorkspaceTargetsInternalAsync(query, token);
-            if (token.IsCancellationRequested)
+            if (token.IsCancellationRequested || !IsTargetBrowserContextCurrent(snapshot))
             {
+                if (!token.IsCancellationRequested)
+                {
+                    Trace.WriteLine($"ND-BROWSER stale-drop op='SearchWorkspaceTargetsAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+                }
                 return;
             }
 
+            _workspaceTreeSearchTargets = resolved.ToList();
             UpdateOnUi(() =>
             {
                 _workspaceSearchTargets.Clear();
@@ -628,6 +933,7 @@ public sealed partial class MainViewModel
                 ? "No workspaces matched your search."
                 : $"Workspace matches: {resolved.Count}.";
             TargetBrowserMessage = WorkspaceLookupStatus;
+            Trace.WriteLine($"ND-SEARCH tree-result-count={_workspaceTreeSearchTargets.Count}");
             Trace.WriteLine($"ND-SEARCH ui-result query='{query}' count={resolved.Count}");
             QueueSettingsSave();
         }
@@ -644,6 +950,10 @@ public sealed partial class MainViewModel
         finally
         {
             IsTargetBrowserBusy = false;
+            if (IsTargetBrowserContextCurrent(snapshot))
+            {
+                RefreshBrowseRootsForSelectedTab();
+            }
         }
     }
 
@@ -669,29 +979,10 @@ public sealed partial class MainViewModel
             }
         }
 
-        await SetSelectedTargetAsync(SelectedWorkspaceSearchTarget.Selection, SelectedWorkspaceSearchTarget.PathDisplay);
-        await SyncSelectedTargetProfileSnapshotAsync();
-        await RefreshReviewScopeNetDocumentsAsync();
-        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
-
-        if (_workspaceLookupContext is not null &&
-            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey) &&
-            !string.IsNullOrWhiteSpace(_workspaceLookupContext.ChildKey))
-        {
-            try
-            {
-                await RequireSyncService().UpdateRecentLookupSelectionAsync(
-                    _workspaceLookupContext.RepositoryId,
-                    _workspaceLookupContext.ChildAttrNum,
-                    _workspaceLookupContext.ChildKey,
-                    _workspaceLookupContext.ParentAttrNum,
-                    _workspaceLookupContext.ParentKey);
-            }
-            catch
-            {
-                // Ignore optional recent-update failures.
-            }
-        }
+        await CommitSelectedTargetAsync(
+            SelectedWorkspaceSearchTarget.Selection,
+            SelectedWorkspaceSearchTarget.PathDisplay,
+            _workspaceLookupContext);
     }
 
     public async Task LoadBrowseRootsAsync()
@@ -701,26 +992,8 @@ public sealed partial class MainViewModel
             return;
         }
 
-        try
-        {
-            var roots = await RequireSyncService().GetContainerChildrenAsync(SelectedNetDocumentsCabinetId);
-            var mapped = roots.Select(node => new NetDocumentsBrowseNodeView(node)).ToList();
-            UpdateOnUi(() =>
-            {
-                _browseRootNodes.Clear();
-                foreach (var node in mapped)
-                {
-                    _browseRootNodes.Add(node);
-                }
-            });
-
-            Trace.WriteLine($"NetDocuments target browser: browse roots loaded count={mapped.Count}");
-        }
-        catch (Exception ex)
-        {
-            TargetBrowserMessage = $"Browse root load failed: {ex.Message}";
-            StatusText = TargetBrowserMessage;
-        }
+        RefreshBrowseRootsForSelectedTab();
+        await Task.CompletedTask;
     }
 
     public async Task ExpandBrowseNodeAsync(NetDocumentsBrowseNodeView? node)
@@ -738,8 +1011,45 @@ public sealed partial class MainViewModel
         node.ChildrenLoadState = NdChildrenLoadState.Loading;
         try
         {
-            var children = await RequireSyncService().GetContainerChildrenAsync(SelectedNetDocumentsCabinetId, parentContainerId: node.Id);
-            var mapped = children.Select(child => new NetDocumentsBrowseNodeView(child)).ToList();
+            var sync = RequireSyncService();
+            IReadOnlyList<NdContainerNode> children;
+            if (IsCabinetRootBrowseNode(node))
+            {
+                children = await _browseChildrenCache.GetOrLoadAsync(
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsRepositoryId,
+                    SelectedNetDocumentsCabinetId,
+                    node.Id,
+                    async cancellationToken =>
+                        await sync.GetCabinetTopLevelFoldersAsync(
+                            SelectedNetDocumentsCabinetId,
+                            cancellationToken));
+            }
+            else
+            {
+                var scopeId = await ResolveBrowseExpansionScopeIdAsync(node);
+                var cacheKey = string.IsNullOrWhiteSpace(scopeId) ? node.Id : scopeId;
+                children = await _browseChildrenCache.GetOrLoadAsync(
+                    GetNetDocumentsServiceKey(),
+                    SelectedNetDocumentsRepositoryId,
+                    SelectedNetDocumentsCabinetId,
+                    cacheKey,
+                    async cancellationToken =>
+                        await sync.GetContainerChildrenAsync(
+                            SelectedNetDocumentsCabinetId,
+                            parentContainerId: scopeId,
+                            workspaceId: node.SupportedType == NdTargetType.Workspace ? node.Id : null,
+                            preferredType: node.SupportedType,
+                            cancellationToken: cancellationToken));
+            }
+
+            var mapped = children
+                .Select(child => new NetDocumentsBrowseNodeView(
+                    child,
+                    sourceFlow: node.SourceFlow,
+                    metadata: BuildBrowseChildMetadata(child)))
+                .Where(ShouldIncludeBrowseNode)
+                .ToList();
             node.ReplaceChildren(mapped);
             node.ChildrenLoadState = NdChildrenLoadState.Loaded;
             Trace.WriteLine($"NetDocuments target browser: expanded node id={node.Id} children={mapped.Count}");
@@ -752,6 +1062,48 @@ public sealed partial class MainViewModel
         }
     }
 
+    private bool IsCabinetRootBrowseNode(NetDocumentsBrowseNodeView node)
+    {
+        return string.Equals(node.TypeRaw, CabinetRootNodeTypeRaw, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<string> ResolveBrowseExpansionScopeIdAsync(NetDocumentsBrowseNodeView node)
+    {
+        if (string.IsNullOrWhiteSpace(node.Id))
+        {
+            return string.Empty;
+        }
+
+        if (node.SupportedType is not NdTargetType.Workspace and not NdTargetType.Folder)
+        {
+            return node.Id;
+        }
+
+        var cacheKey = $"{GetNetDocumentsServiceKey()}:{SelectedNetDocumentsRepositoryId}:{SelectedNetDocumentsCabinetId}:{node.Id}";
+        if (_browseExpansionScopeCache.TryGetValue(cacheKey, out var cached) &&
+            !string.IsNullOrWhiteSpace(cached))
+        {
+            return cached;
+        }
+
+        var resolved = node.Id;
+        try
+        {
+            resolved = await RequireSyncService().ResolveContainerIdForBrowseAsync(node.Id);
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                resolved = node.Id;
+            }
+        }
+        catch
+        {
+            resolved = node.Id;
+        }
+
+        _browseExpansionScopeCache[cacheKey] = resolved;
+        return resolved;
+    }
+
     public async Task SelectTargetFromRecentAsync()
     {
         if (SelectedRecentTarget is null)
@@ -762,7 +1114,7 @@ public sealed partial class MainViewModel
 
         var selection = CloneSelection(SelectedRecentTarget.Selection);
         selection.SourceFlow = NdTargetSourceFlow.Recent;
-        await SetSelectedTargetAsync(selection, SelectedRecentTarget.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedRecentTarget.PathDisplay);
     }
 
     public async Task SelectTargetFromFavoriteAsync()
@@ -775,7 +1127,7 @@ public sealed partial class MainViewModel
 
         var selection = CloneSelection(SelectedFavoriteTarget.Selection);
         selection.SourceFlow = NdTargetSourceFlow.Favorite;
-        await SetSelectedTargetAsync(selection, SelectedFavoriteTarget.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedFavoriteTarget.PathDisplay);
     }
 
     public Task SearchWorkspaceParentsAsync() => SearchWorkspaceTargetsAsync();
@@ -788,11 +1140,19 @@ public sealed partial class MainViewModel
     private async Task<List<NetDocumentsWorkspaceTargetResultView>> SearchWorkspaceTargetsInternalAsync(string query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = CaptureTargetBrowserContextSnapshot();
+        if (!CanSearchWorkspaceTargets)
+        {
+            Trace.WriteLine($"ND-SEARCH skipped reason='workspace lookup unavailable' repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+            return new List<NetDocumentsWorkspaceTargetResultView>();
+        }
         var results = new List<NetDocumentsWorkspaceTargetResultView>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sync = RequireSyncService();
-        Trace.WriteLine($"ND-SEARCH start repo='{SelectedNetDocumentsRepositoryId}', cabinet='{SelectedNetDocumentsCabinetId}', query='{query}'.");
-        var fallbackWorkspaces = await sync.SearchWorkspacesAsync(SelectedNetDocumentsCabinetId, query, 50, cancellationToken);
+        var repositoryId = snapshot.RepositoryId;
+        var cabinetId = snapshot.CabinetId;
+        Trace.WriteLine($"ND-SEARCH start repo='{repositoryId}', cabinet='{cabinetId}', query='{query}', ctxVersion={snapshot.Version}.");
+        var fallbackWorkspaces = await sync.SearchWorkspacesAsync(cabinetId, query, 50, cancellationToken);
         Trace.WriteLine($"ND-SEARCH api-fallback-candidates={fallbackWorkspaces.Count}");
         foreach (var item in fallbackWorkspaces)
         {
@@ -820,7 +1180,13 @@ public sealed partial class MainViewModel
         }
         Trace.WriteLine($"ND-SEARCH api-objects-kept={results.Count}");
 
-        _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(cancellationToken);
+        _workspaceLookupContext = await ResolveWorkspaceLookupContextAsync(repositoryId, cabinetId, cancellationToken);
+        if (!IsTargetBrowserContextCurrent(snapshot))
+        {
+            Trace.WriteLine($"ND-BROWSER stale-drop op='SearchWorkspaceTargetsInternalAsync.ResolveWorkspaceLookupContextAsync' version={snapshot.Version} repo='{snapshot.RepositoryId}' cabinet='{snapshot.CabinetId}'.");
+            return new List<NetDocumentsWorkspaceTargetResultView>();
+        }
+        ApplyWorkspaceLookupAvailability(_workspaceLookupContext);
         if (_workspaceLookupContext is not null)
         {
             Trace.WriteLine(
@@ -1057,13 +1423,29 @@ public sealed partial class MainViewModel
         var container = await sync.GetContainerInfoAsync(envId, cancellationToken);
         if (container is null)
         {
+            Trace.WriteLine($"ND-SEARCH lookup-resolve workspace rejected envId='{envId}' reason='container-null'.");
             return null;
         }
 
         var extension = string.IsNullOrWhiteSpace(container.Extension) ? container.TypeRaw : container.Extension;
-        var resolvedType = NdTargetBrowserLogic.NormalizeSupportedType(extension, hasWorkspaceIdHint: true);
+        var workspaceHintFromEnvId = LooksLikeWorkspaceIdentifier(envId) ? NdTargetType.Workspace : (NdTargetType?)null;
+        var normalizedFromExtension = NdTargetBrowserLogic.NormalizeSupportedType(extension, hasWorkspaceIdHint: false);
+        var resolvedType = container.SupportedType ?? normalizedFromExtension ?? workspaceHintFromEnvId;
+
+        // Some workspace container responses omit extension/type and can normalize to Folder via hints.
+        // When wsurl resolves a ^W id, prefer the workspace hint.
+        if (resolvedType == NdTargetType.Folder &&
+            workspaceHintFromEnvId == NdTargetType.Workspace &&
+            string.IsNullOrWhiteSpace(container.Extension) &&
+            string.IsNullOrWhiteSpace(container.TypeRaw))
+        {
+            resolvedType = NdTargetType.Workspace;
+        }
+
         if (resolvedType != NdTargetType.Workspace)
         {
+            Trace.WriteLine(
+                $"ND-SEARCH lookup-resolve workspace rejected envId='{envId}' resolvedType='{resolvedType?.ToString() ?? "null"}' extension='{extension}' containerId='{container.Id}'.");
             return null;
         }
 
@@ -1099,8 +1481,13 @@ public sealed partial class MainViewModel
 
         if (_workspaceLookupPairCache.TryGetValue(pairKey, out var cached))
         {
-            Trace.WriteLine($"ND-SEARCH lookup-cache hit parent='{parent.Key}' child='{child.Key}' hasResult={(cached is not null)}.");
-            return cached;
+            if (cached is not null)
+            {
+                Trace.WriteLine($"ND-SEARCH lookup-cache hit parent='{parent.Key}' child='{child.Key}' hasResult=true.");
+                return cached;
+            }
+
+            _workspaceLookupPairCache.TryRemove(pairKey, out _);
         }
 
         try
@@ -1118,7 +1505,10 @@ public sealed partial class MainViewModel
                     child.Description);
             }
 
-            _workspaceLookupPairCache[pairKey] = resolved;
+            if (resolved is not null)
+            {
+                _workspaceLookupPairCache[pairKey] = resolved;
+            }
             return resolved;
         }
         catch (Exception ex)
@@ -1130,7 +1520,6 @@ public sealed partial class MainViewModel
             }
 
             Trace.WriteLine($"ND-SEARCH lookup-resolve failed parent='{parent.Key}' child='{child.Key}' error='{ex.Message}'.");
-            _workspaceLookupPairCache[pairKey] = null;
             return null;
         }
     }
@@ -1140,6 +1529,16 @@ public sealed partial class MainViewModel
         return string.IsNullOrWhiteSpace(description)
             ? key
             : $"{description} ({key})";
+    }
+
+    private static bool LooksLikeWorkspaceIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("^W", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<NdLookupValueItem> RankLookupCandidatesByTerm(
@@ -1274,6 +1673,187 @@ public sealed partial class MainViewModel
         };
     }
 
+    private void RefreshBrowseRootsForSelectedTab()
+    {
+        if (!CanPickNetDocumentsTarget)
+        {
+            UpdateOnUi(() =>
+            {
+                _browseRootNodes.Clear();
+                SelectedBrowseNode = null;
+            });
+            return;
+        }
+
+        IReadOnlyList<NetDocumentsBrowseNodeView> roots = SelectedTargetBrowserTab switch
+        {
+            NdTargetBrowserTab.Recent => BuildBrowseRootsFromRecentTargets(),
+            NdTargetBrowserTab.Favorites => BuildBrowseRootsFromFavoriteTargets(),
+            NdTargetBrowserTab.GoToWorkspace => BuildBrowseRootsFromWorkspaceSearchTargets(),
+            _ => Array.Empty<NetDocumentsBrowseNodeView>()
+        };
+        var cabinetRoot = BuildCabinetRootBrowseNode();
+        if (cabinetRoot is not null)
+        {
+            roots = new[] { cabinetRoot }
+                .Concat(roots)
+                .ToList();
+        }
+        roots = roots.Where(ShouldIncludeBrowseNode).ToList();
+        Trace.WriteLine(
+            $"ND-BROWSER roots-refresh tab={SelectedTargetBrowserTab} roots={roots.Count} " +
+            $"workspaceTree={_workspaceTreeSearchTargets.Count} recent={_recentTargets.Count} favorites={_favoriteTargets.Count}");
+
+        UpdateOnUi(() =>
+        {
+            _browseRootNodes.Clear();
+            foreach (var root in roots)
+            {
+                _browseRootNodes.Add(root);
+            }
+
+            SelectedBrowseNode = null;
+        });
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromRecentTargets()
+    {
+        return _recentTargets
+            .Select(item =>
+                new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.Recent,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.SourceDisplay} \u00B7 {item.TimestampDisplay}"))
+            .ToList();
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromFavoriteTargets()
+    {
+        return _favoriteTargets
+            .Select(item =>
+                new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.Favorite,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.SourceDisplay} \u00B7 {item.TimestampDisplay}"))
+            .ToList();
+    }
+
+    private List<NetDocumentsBrowseNodeView> BuildBrowseRootsFromWorkspaceSearchTargets()
+    {
+        return _workspaceTreeSearchTargets
+            .Select(item =>
+            {
+                var keyContext = string.IsNullOrWhiteSpace(item.ParentKey) && string.IsNullOrWhiteSpace(item.ChildKey)
+                    ? string.Empty
+                    : $" \u00B7 {item.ParentKey}/{item.ChildKey}";
+                return new NetDocumentsBrowseNodeView(
+                    CreateBrowseNodeFromSelection(item.Selection, item.PathDisplay),
+                    sourceFlow: NdTargetSourceFlow.LookupWs,
+                    metadata: $"{item.TypeDisplay} \u00B7 {item.Source}{keyContext}");
+            })
+            .ToList();
+    }
+
+    private NetDocumentsBrowseNodeView? BuildCabinetRootBrowseNode()
+    {
+        if (!CanPickNetDocumentsTarget)
+        {
+            return null;
+        }
+
+        var selectedCabinet = _netDocumentsCabinets
+            .FirstOrDefault(c => string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+        var cabinetName = string.IsNullOrWhiteSpace(selectedCabinet?.CabinetName)
+            ? SelectedNetDocumentsCabinetId
+            : selectedCabinet!.CabinetName;
+        var node = new NdContainerNode
+        {
+            Id = $"cabinet-root:{SelectedNetDocumentsCabinetId}",
+            Name = cabinetName,
+            TypeRaw = CabinetRootNodeTypeRaw,
+            Extension = string.Empty,
+            ParentId = string.Empty,
+            ParentWorkspaceId = null,
+            PathDisplay = cabinetName,
+            SupportedType = null,
+            IsSelectable = false,
+            UnsupportedReason = "Expand to browse top-level cabinet folders.",
+            HasChildren = true,
+            ChildrenLoadState = NdChildrenLoadState.NotLoaded
+        };
+
+        return new NetDocumentsBrowseNodeView(
+            node,
+            sourceFlow: NdTargetSourceFlow.Browse,
+            metadata: "Cabinet \u00B7 Top-level folders");
+    }
+
+    private static NdContainerNode CreateBrowseNodeFromSelection(NdTargetSelection selection, string pathDisplay)
+    {
+        return new NdContainerNode
+        {
+            Id = selection.Id,
+            Name = string.IsNullOrWhiteSpace(selection.Name) ? selection.Id : selection.Name,
+            TypeRaw = string.IsNullOrWhiteSpace(selection.Extension) ? selection.Type.ToString() : selection.Extension,
+            Extension = selection.Extension,
+            ParentId = string.Empty,
+            ParentWorkspaceId = selection.ParentWorkspaceId,
+            PathDisplay = string.IsNullOrWhiteSpace(pathDisplay) ? selection.Name : pathDisplay,
+            SupportedType = selection.Type,
+            IsSelectable = true,
+            UnsupportedReason = string.Empty,
+            HasChildren = selection.Type != NdTargetType.WorkspaceFilter,
+            ChildrenLoadState = NdChildrenLoadState.NotLoaded
+        };
+    }
+
+    private static string BuildBrowseChildMetadata(NdContainerNode node)
+    {
+        var typeDisplay = node.SupportedType.HasValue
+            ? NdTargetBrowserLogic.ResolveTypeDisplay(node.SupportedType.Value, node.Id, node.Extension)
+            : "Container";
+
+        if (!string.IsNullOrWhiteSpace(node.PathDisplay) &&
+            !string.Equals(node.PathDisplay, node.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{typeDisplay} \u00B7 {node.PathDisplay}";
+        }
+
+        return typeDisplay;
+    }
+
+    private bool ShouldIncludeBrowseNode(NetDocumentsBrowseNodeView node)
+    {
+        if (node.IsPlaceholder)
+        {
+            return true;
+        }
+
+        if (IsCabinetRootBrowseNode(node))
+        {
+            return BrowseFilterShowCabFolders;
+        }
+
+        if (node.SupportedType == NdTargetType.Workspace)
+        {
+            return BrowseFilterShowCollabspaces;
+        }
+
+        if (node.SupportedType == NdTargetType.WorkspaceFilter)
+        {
+            return BrowseFilterShowFilters;
+        }
+
+        if (node.SupportedType == NdTargetType.Folder)
+        {
+            return NdTargetBrowserLogic.IsCollabspaceIdentifier(node.Id)
+                ? BrowseFilterShowCollabspaces
+                : BrowseFilterShowFolders;
+        }
+
+        return true;
+    }
+
     private static NdTargetType ParseTargetType(string raw)
     {
         return Enum.TryParse<NdTargetType>(raw, ignoreCase: true, out var parsed)
@@ -1299,17 +1879,11 @@ public sealed partial class MainViewModel
             return;
         }
 
-        var selection = new NdTargetSelection
-        {
-            Type = SelectedBrowseNode.SupportedType.Value,
-            Id = SelectedBrowseNode.Id,
-            Name = SelectedBrowseNode.Name,
-            ParentWorkspaceId = SelectedBrowseNode.ParentWorkspaceId,
-            Extension = SelectedBrowseNode.Extension,
-            SourceFlow = NdTargetSourceFlow.Browse
-        };
+        var selection = NdTargetBrowserLogic.CreateSelectionFromContainerNode(
+            SelectedBrowseNode.ToNodeModel(),
+            SelectedBrowseNode.SourceFlow);
 
-        await SetSelectedTargetAsync(selection, SelectedBrowseNode.PathDisplay);
+        await CommitSelectedTargetAsync(selection, SelectedBrowseNode.PathDisplay);
     }
 
     public async Task ToggleFavoriteForSelectedTargetAsync()
@@ -1396,18 +1970,16 @@ public sealed partial class MainViewModel
 
     private async Task SetSelectedTargetAsync(NdTargetSelection selection, string? knownPath = null)
     {
+        var previousTargetKey = _selectedNetDocumentsTarget is null
+            ? string.Empty
+            : NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+
         _selectedNetDocumentsTarget = CloneSelection(selection);
         _selectedNetDocumentsTargetSupported = true;
 
         SelectedNetDocumentsTargetId = selection.Id;
         SelectedNetDocumentsTargetName = string.IsNullOrWhiteSpace(selection.Name) ? selection.Id : selection.Name;
-        SelectedNetDocumentsTargetTypeDisplay = selection.Type switch
-        {
-            NdTargetType.Workspace => "Workspace",
-            NdTargetType.WorkspaceFilter => "Workspace Filter",
-            NdTargetType.Folder => "Folder",
-            _ => selection.Type.ToString()
-        };
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(selection.Type, selection.Id, selection.Extension);
 
         if (string.IsNullOrWhiteSpace(knownPath) && CanPickNetDocumentsTarget)
         {
@@ -1428,7 +2000,161 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(IsSelectedTargetFavorite));
         OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
         OnPropertyChanged(nameof(CanContinueToReviewScope));
+        OnPropertyChanged(nameof(CanRunDirectUpload));
+
+        var selectedTargetKey = _selectedNetDocumentsTarget is null
+            ? string.Empty
+            : NdTargetBrowserLogic.BuildTargetKey(_selectedNetDocumentsTarget);
+        if (!string.Equals(previousTargetKey, selectedTargetKey, StringComparison.OrdinalIgnoreCase))
+        {
+            HandleDirectUploadContextChanged(
+                "NetDocuments target changed. Refresh direct upload preflight.",
+                refreshPreflight: true);
+        }
+
         QueueSettingsSave();
+    }
+
+    private async Task CommitSelectedTargetAsync(
+        NdTargetSelection selection,
+        string? pathDisplay,
+        WorkspaceLookupContext? contextOverride = null)
+    {
+        await SetSelectedTargetAsync(selection, pathDisplay);
+        await SyncSelectedTargetProfileSnapshotAsync();
+        await RefreshReviewScopeNetDocumentsAsync();
+        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
+
+        var context = contextOverride ?? _workspaceLookupContext;
+        if (selection.Type != NdTargetType.Workspace ||
+            context is null ||
+            string.IsNullOrWhiteSpace(context.ParentKey) ||
+            string.IsNullOrWhiteSpace(context.ChildKey))
+        {
+            return;
+        }
+
+        try
+        {
+            await RequireSyncService().UpdateRecentLookupSelectionAsync(
+                context.RepositoryId,
+                context.ChildAttrNum,
+                context.ChildKey,
+                context.ParentAttrNum,
+                context.ParentKey);
+        }
+        catch
+        {
+            // Ignore optional recent-update failures.
+        }
+    }
+
+    private async Task AutoCommitRecentTargetSelectionAsync(NetDocumentsTargetItemView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            var selection = CloneSelection(selected.Selection);
+            selection.SourceFlow = NdTargetSourceFlow.Recent;
+            await CommitSelectedTargetAsync(selection, selected.PathDisplay);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private async Task AutoCommitFavoriteTargetSelectionAsync(NetDocumentsTargetItemView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            var selection = CloneSelection(selected.Selection);
+            selection.SourceFlow = NdTargetSourceFlow.Favorite;
+            await CommitSelectedTargetAsync(selection, selected.PathDisplay);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private async Task AutoCommitWorkspaceTargetSelectionAsync(NetDocumentsWorkspaceTargetResultView selected)
+    {
+        var cts = BeginAutoTargetSelection();
+        try
+        {
+            await Task.Delay(150, cts.Token);
+            if (cts.Token.IsCancellationRequested || !CanPickNetDocumentsTarget)
+            {
+                return;
+            }
+
+            if (_workspaceLookupContext is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(selected.ParentKey))
+                {
+                    _workspaceLookupContext.ParentKey = selected.ParentKey;
+                }
+
+                if (!string.IsNullOrWhiteSpace(selected.ChildKey))
+                {
+                    _workspaceLookupContext.ChildKey = selected.ChildKey;
+                }
+            }
+
+            await CommitSelectedTargetAsync(selected.Selection, selected.PathDisplay, _workspaceLookupContext);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer selection.
+        }
+        finally
+        {
+            EndAutoTargetSelection(cts);
+        }
+    }
+
+    private CancellationTokenSource BeginAutoTargetSelection()
+    {
+        _autoTargetSelectionCts?.Cancel();
+        _autoTargetSelectionCts?.Dispose();
+        _autoTargetSelectionCts = new CancellationTokenSource();
+        _isAutoSelectingTarget = true;
+        return _autoTargetSelectionCts;
+    }
+
+    private void EndAutoTargetSelection(CancellationTokenSource cts)
+    {
+        if (!ReferenceEquals(_autoTargetSelectionCts, cts))
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _isAutoSelectingTarget = false;
+        _autoTargetSelectionCts = null;
+        cts.Dispose();
     }
 
     private async Task SyncSelectedTargetProfileSnapshotAsync()
@@ -1444,12 +2170,17 @@ public sealed partial class MainViewModel
         var cacheKey = BuildTargetSnapshotCacheKey(_selectedNetDocumentsTarget);
         if (!_targetProfileCache.TryGetValue(cacheKey, out var snapshot))
         {
-            var lookupContext =
-                _selectedNetDocumentsTarget.Type == NdTargetType.Workspace &&
+            var hasLookupDefaults =
                 _workspaceLookupContext is not null &&
-                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey)
-                    ? _workspaceLookupContext
-                    : null;
+                !string.IsNullOrWhiteSpace(_workspaceLookupContext.ParentKey);
+            var allowLookupDefaults =
+                _selectedNetDocumentsTarget.Type == NdTargetType.Workspace ||
+                _selectedNetDocumentsTarget.Type == NdTargetType.WorkspaceFilter ||
+                (_selectedNetDocumentsTarget.Type == NdTargetType.Folder &&
+                 _selectedNetDocumentsTarget.SourceFlow == NdTargetSourceFlow.LookupWs);
+            var lookupContext = hasLookupDefaults && allowLookupDefaults
+                ? _workspaceLookupContext
+                : null;
             snapshot = await RequireSyncService().GetTargetProfileSnapshotAsync(
                 SelectedNetDocumentsCabinetId,
                 SelectedNetDocumentsRepositoryId,
@@ -1490,7 +2221,7 @@ public sealed partial class MainViewModel
     private void TryApplyWorkspaceLookupKeysFromSelection(NdTargetSelection selection, string? pathDisplay)
     {
         if (_workspaceLookupContext is null ||
-            selection.Type != NdTargetType.Workspace)
+            (selection.Type != NdTargetType.Workspace && selection.Type != NdTargetType.WorkspaceFilter))
         {
             return;
         }
@@ -1560,29 +2291,42 @@ public sealed partial class MainViewModel
             {
                 _effectiveProfileDefaultsRows.Add(row);
             }
+
+            OnPropertyChanged(nameof(HasReviewEffectiveDefaults));
         });
     }
 
     private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) || string.IsNullOrWhiteSpace(SelectedNetDocumentsCabinetId))
+        return await ResolveWorkspaceLookupContextAsync(
+            SelectedNetDocumentsRepositoryId,
+            SelectedNetDocumentsCabinetId,
+            cancellationToken);
+    }
+
+    private async Task<WorkspaceLookupContext?> ResolveWorkspaceLookupContextAsync(
+        string repositoryId,
+        string cabinetId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || string.IsNullOrWhiteSpace(cabinetId))
         {
             return null;
         }
 
         await _jobStore.InitializeAsync(cancellationToken);
-        var attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+        var attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
         if (attributes.Count == 0)
         {
             try
             {
                 Trace.WriteLine(
-                    $"ND-SEARCH lookup-context bootstrap: syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                    $"ND-SEARCH lookup-context bootstrap: syncing attributes for repo='{repositoryId}' cabinet='{cabinetId}'.");
                 await RequireSyncService().SyncCabinetAttributesAsync(
-                    SelectedNetDocumentsCabinetId,
-                    SelectedNetDocumentsRepositoryId,
+                    cabinetId,
+                    repositoryId,
                     cancellationToken);
-                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
                 Trace.WriteLine($"ND-SEARCH lookup-context bootstrap: synced attributes count={attributes.Count}.");
             }
             catch (Exception ex)
@@ -1591,7 +2335,7 @@ public sealed partial class MainViewModel
             }
         }
         var selectedCabinet = _netDocumentsCabinets
-            .FirstOrDefault(c => string.Equals(c.CabinetId, SelectedNetDocumentsCabinetId, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(c => string.Equals(c.CabinetId, cabinetId, StringComparison.OrdinalIgnoreCase));
 
         var workspaceAttrNum = selectedCabinet?.WorkspaceAttributeNum;
         var workspaceAttrName = selectedCabinet?.WorkspacePluralName ?? string.Empty;
@@ -1605,12 +2349,12 @@ public sealed partial class MainViewModel
             try
             {
                 Trace.WriteLine(
-                    $"ND-SEARCH lookup-context refresh: no lookup flags found; re-syncing attributes for repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+                    $"ND-SEARCH lookup-context refresh: no lookup flags found; re-syncing attributes for repo='{repositoryId}' cabinet='{cabinetId}'.");
                 await RequireSyncService().SyncCabinetAttributesAsync(
-                    SelectedNetDocumentsCabinetId,
-                    SelectedNetDocumentsRepositoryId,
+                    cabinetId,
+                    repositoryId,
                     cancellationToken);
-                attributes = await _jobStore.GetNetDocumentsAttributesAsync(SelectedNetDocumentsCabinetId, cancellationToken);
+                attributes = await _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
                 lookupAttributes = attributes.Where(a => a.IsLookup).ToList();
                 Trace.WriteLine($"ND-SEARCH lookup-context refresh: lookup attributes after re-sync={lookupAttributes.Count}.");
             }
@@ -1699,8 +2443,8 @@ public sealed partial class MainViewModel
 
             return new WorkspaceLookupContext
             {
-                RepositoryId = SelectedNetDocumentsRepositoryId,
-                CabinetId = SelectedNetDocumentsCabinetId,
+                RepositoryId = repositoryId,
+                CabinetId = cabinetId,
                 WorkspaceEnabled = true,
                 WorkspaceAttrNum = workspaceAttrNum.Value,
                 WorkspaceAttrName = workspaceAttrName,
@@ -1791,8 +2535,8 @@ public sealed partial class MainViewModel
 
         return new WorkspaceLookupContext
         {
-            RepositoryId = SelectedNetDocumentsRepositoryId,
-            CabinetId = SelectedNetDocumentsCabinetId,
+            RepositoryId = repositoryId,
+            CabinetId = cabinetId,
             WorkspaceEnabled = true,
             WorkspaceAttrNum = workspaceAttrNum.Value,
             WorkspaceAttrName = workspaceAttrName,
@@ -1805,6 +2549,62 @@ public sealed partial class MainViewModel
             ParentKey = _workspaceLookupContext?.ParentKey ?? string.Empty,
             ChildKey = _workspaceLookupContext?.ChildKey ?? string.Empty
         };
+    }
+
+    private (long Version, string RepositoryId, string CabinetId) CaptureTargetBrowserContextSnapshot()
+    {
+        return (
+            _targetBrowserContextVersion,
+            SelectedNetDocumentsRepositoryId ?? string.Empty,
+            SelectedNetDocumentsCabinetId ?? string.Empty);
+    }
+
+    private bool IsTargetBrowserContextCurrent((long Version, string RepositoryId, string CabinetId) snapshot)
+    {
+        return snapshot.Version == _targetBrowserContextVersion &&
+               string.Equals(snapshot.RepositoryId, SelectedNetDocumentsRepositoryId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(snapshot.CabinetId, SelectedNetDocumentsCabinetId ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void InvalidateTargetBrowserContext(string reason)
+    {
+        _targetBrowserContextVersion++;
+        _browseChildrenCache.InvalidateAll();
+        _browseExpansionScopeCache.Clear();
+        _workspaceTreeSearchTargets = new List<NetDocumentsWorkspaceTargetResultView>();
+        _workspaceSearchCts?.Cancel();
+        _workspaceSearchCts?.Dispose();
+        _workspaceSearchCts = null;
+        _workspaceLookupContext = null;
+        _isWorkspaceLookupAvailable = true;
+        UpdateOnUi(() =>
+        {
+            _browseRootNodes.Clear();
+            SelectedBrowseNode = null;
+        });
+        Trace.WriteLine($"ND-BROWSER context-reset reason='{reason}' version={_targetBrowserContextVersion} repo='{SelectedNetDocumentsRepositoryId}' cabinet='{SelectedNetDocumentsCabinetId}'.");
+        OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+        OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+    }
+
+    private void ApplyWorkspaceLookupAvailability(WorkspaceLookupContext? context)
+    {
+        _isWorkspaceLookupAvailable = context is not null;
+        OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
+        OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
+
+        if (!_isWorkspaceLookupAvailable)
+        {
+            WorkspaceLookupStatus = "This cabinet does not expose workspace lookup attributes; workspace search is disabled.";
+            if (SelectedTargetBrowserTab == NdTargetBrowserTab.GoToWorkspace)
+            {
+                TargetBrowserMessage = WorkspaceLookupStatus;
+            }
+        }
+        else if (WorkspaceLookupStatus.Contains("workspace search is disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            WorkspaceLookupStatus = string.Empty;
+        }
     }
 
     private static int NameContains(string? name, string term)
@@ -1825,6 +2625,16 @@ public sealed partial class MainViewModel
         _localRecentTargets = new List<NdTargetRecentItem>();
         _localFavoriteTargets = NdTargetBrowserLogic.DeserializeFavoriteTargets(settings.FavoriteTargetsJson).ToList();
         WorkspaceSearchText = settings.LastWorkspaceQuery ?? string.Empty;
+        _isBrowseFilterPanelVisible = settings.IsBrowseFilterPanelVisible;
+        _browseFilterShowCabFolders = settings.BrowseFilterShowCabFolders;
+        _browseFilterShowFolders = settings.BrowseFilterShowFolders;
+        _browseFilterShowFilters = settings.BrowseFilterShowFilters;
+        _browseFilterShowCollabspaces = settings.BrowseFilterShowCollabspaces;
+        OnPropertyChanged(nameof(IsBrowseFilterPanelVisible));
+        OnPropertyChanged(nameof(BrowseFilterShowCabFolders));
+        OnPropertyChanged(nameof(BrowseFilterShowFolders));
+        OnPropertyChanged(nameof(BrowseFilterShowFilters));
+        OnPropertyChanged(nameof(BrowseFilterShowCollabspaces));
         _workspaceLookupContext = WorkspaceLookupContext.FromJson(settings.WorkspaceLookupContextJson);
         WorkspaceLookupStatus = string.Empty;
 
@@ -1859,13 +2669,10 @@ public sealed partial class MainViewModel
 
         SelectedNetDocumentsTargetId = _selectedNetDocumentsTarget.Id;
         SelectedNetDocumentsTargetName = _selectedNetDocumentsTarget.Name;
-        SelectedNetDocumentsTargetTypeDisplay = _selectedNetDocumentsTarget.Type switch
-        {
-            NdTargetType.Workspace => "Workspace",
-            NdTargetType.WorkspaceFilter => "Workspace Filter",
-            NdTargetType.Folder => "Folder",
-            _ => _selectedNetDocumentsTarget.Type.ToString()
-        };
+        SelectedNetDocumentsTargetTypeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            _selectedNetDocumentsTarget.Type,
+            _selectedNetDocumentsTarget.Id,
+            _selectedNetDocumentsTarget.Extension);
         SelectedNetDocumentsTargetPath = string.IsNullOrWhiteSpace(settings.SelectedTargetPath)
             ? _selectedNetDocumentsTarget.Name
             : settings.SelectedTargetPath;
@@ -1878,6 +2685,11 @@ public sealed partial class MainViewModel
         settings.RecentTargetsJson = string.Empty;
         settings.FavoriteTargetsJson = NdTargetBrowserLogic.SerializeFavoriteTargets(_localFavoriteTargets);
         settings.LastWorkspaceQuery = WorkspaceSearchText ?? string.Empty;
+        settings.IsBrowseFilterPanelVisible = IsBrowseFilterPanelVisible;
+        settings.BrowseFilterShowCabFolders = BrowseFilterShowCabFolders;
+        settings.BrowseFilterShowFolders = BrowseFilterShowFolders;
+        settings.BrowseFilterShowFilters = BrowseFilterShowFilters;
+        settings.BrowseFilterShowCollabspaces = BrowseFilterShowCollabspaces;
         settings.WorkspaceLookupContextJson = _workspaceLookupContext?.ToJson() ?? string.Empty;
 
         if (_selectedNetDocumentsTarget is null)
@@ -1953,13 +2765,7 @@ public sealed class NetDocumentsTargetItemView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => Selection.Type switch
-    {
-        NdTargetType.Workspace => "Workspace",
-        NdTargetType.WorkspaceFilter => "Workspace Filter",
-        NdTargetType.Folder => "Folder",
-        _ => Selection.Type.ToString()
-    };
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id, Selection.Extension);
 
     public string PathDisplay => string.IsNullOrWhiteSpace(Selection.ParentWorkspaceId)
         ? Selection.Name
@@ -2000,13 +2806,7 @@ public sealed class NetDocumentsWorkspaceTargetResultView
 
     public string Name => Selection.Name;
 
-    public string TypeDisplay => Selection.Type switch
-    {
-        NdTargetType.Workspace => "Workspace",
-        NdTargetType.WorkspaceFilter => "Workspace Filter",
-        NdTargetType.Folder => "Folder",
-        _ => Selection.Type.ToString()
-    };
+    public string TypeDisplay => NdTargetBrowserLogic.ResolveTypeDisplay(Selection.Type, Selection.Id, Selection.Extension);
 
     public string PathDisplay { get; }
 
@@ -2023,7 +2823,10 @@ public sealed class NetDocumentsWorkspaceTargetResultView
 
 public sealed class NetDocumentsBrowseNodeView
 {
-    public NetDocumentsBrowseNodeView(NdContainerNode node)
+    public NetDocumentsBrowseNodeView(
+        NdContainerNode node,
+        NdTargetSourceFlow sourceFlow = NdTargetSourceFlow.Browse,
+        string metadata = "")
     {
         Id = node.Id;
         Name = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name;
@@ -2037,6 +2840,8 @@ public sealed class NetDocumentsBrowseNodeView
         UnsupportedReason = node.UnsupportedReason;
         HasChildren = node.HasChildren;
         ChildrenLoadState = node.ChildrenLoadState;
+        SourceFlow = sourceFlow;
+        Metadata = metadata ?? string.Empty;
 
         if (HasChildren)
         {
@@ -2054,6 +2859,8 @@ public sealed class NetDocumentsBrowseNodeView
         ParentId = string.Empty;
         PathDisplay = string.Empty;
         UnsupportedReason = string.Empty;
+        Metadata = string.Empty;
+        SourceFlow = NdTargetSourceFlow.Browse;
     }
 
     public string Id { get; }
@@ -2072,6 +2879,10 @@ public sealed class NetDocumentsBrowseNodeView
 
     public NdTargetType? SupportedType { get; }
 
+    public NdTargetSourceFlow SourceFlow { get; }
+
+    public string Metadata { get; }
+
     public bool IsSelectable { get; }
 
     public string UnsupportedReason { get; }
@@ -2084,19 +2895,17 @@ public sealed class NetDocumentsBrowseNodeView
 
     public NdChildrenLoadState ChildrenLoadState { get; set; }
 
+    public string IconGlyph => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id, Extension).Glyph;
+
+    public string IconColorHex => NdTargetBrowserLogic.ResolveIconDescriptor(SupportedType, Id, Extension).ColorHex;
+
     public string TypeDisplay
     {
         get
         {
             if (SupportedType.HasValue)
             {
-                return SupportedType.Value switch
-                {
-                    NdTargetType.Workspace => "Workspace",
-                    NdTargetType.WorkspaceFilter => "Workspace Filter",
-                    NdTargetType.Folder => "Folder",
-                    _ => SupportedType.Value.ToString()
-                };
+                return NdTargetBrowserLogic.ResolveTypeDisplay(SupportedType.Value, Id, Extension);
             }
 
             return string.IsNullOrWhiteSpace(TypeRaw) ? "Unknown" : TypeRaw;
@@ -2112,6 +2921,25 @@ public sealed class NetDocumentsBrowseNodeView
         {
             Children.Add(node);
         }
+    }
+
+    public NdContainerNode ToNodeModel()
+    {
+        return new NdContainerNode
+        {
+            Id = Id,
+            Name = Name,
+            TypeRaw = TypeRaw,
+            Extension = Extension,
+            ParentId = ParentId,
+            ParentWorkspaceId = ParentWorkspaceId,
+            PathDisplay = PathDisplay,
+            SupportedType = SupportedType,
+            IsSelectable = IsSelectable,
+            UnsupportedReason = UnsupportedReason,
+            HasChildren = HasChildren,
+            ChildrenLoadState = ChildrenLoadState
+        };
     }
 }
 

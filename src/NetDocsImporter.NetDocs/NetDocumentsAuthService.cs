@@ -6,6 +6,9 @@ using System.Text.Json;
 
 namespace NetDocsImporter.NetDocs;
 
+/// <summary>
+/// Implements OAuth authorization-code and refresh-token flows for NetDocuments desktop authentication.
+/// </summary>
 public sealed class NetDocumentsAuthService : INetDocumentsAuthService
 {
     private static readonly TimeSpan RefreshSkew = TimeSpan.FromMinutes(2);
@@ -15,12 +18,24 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
     private NetDocumentsTokenCache? _cache;
 
+    /// <summary>
+    /// Initializes a new authentication service backed by an encrypted token cache file.
+    /// </summary>
+    /// <param name="tokenPath">Path to the local token cache file.</param>
+    /// <param name="httpClient">Optional HTTP client override used primarily by tests.</param>
     public NetDocumentsAuthService(string tokenPath, HttpClient? httpClient = null)
     {
         _tokenStore = new NetDocumentsTokenStore(tokenPath);
         _httpClient = httpClient ?? new HttpClient();
     }
 
+    /// <summary>
+    /// Runs an interactive OAuth sign-in flow and persists the returned access and refresh tokens.
+    /// </summary>
+    /// <param name="context">OAuth client settings for the selected region.</param>
+    /// <param name="cancellationToken">Token used to cancel browser/listener operations.</param>
+    /// <returns>A task that completes when sign-in succeeds and tokens are saved.</returns>
+    /// <exception cref="InvalidOperationException">Thrown for invalid context, callback failures, or token exchange failures.</exception>
     public async Task SignInInteractiveAsync(NetDocumentsAuthContext context, CancellationToken cancellationToken = default)
     {
         ValidateContext(context);
@@ -96,6 +111,14 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
         };
     }
 
+    /// <summary>
+    /// Gets a valid access token from cache, refreshing tokens when required.
+    /// </summary>
+    /// <param name="context">OAuth client settings for the selected region.</param>
+    /// <param name="forceRefresh"><see langword="true"/> to force refresh even when current token is still valid.</param>
+    /// <param name="cancellationToken">Token used to cancel token acquisition.</param>
+    /// <returns>A non-empty access token string.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no session exists, refresh token is unavailable, or refresh fails.</exception>
     public async Task<string> GetAccessTokenAsync(
         NetDocumentsAuthContext context,
         bool forceRefresh = false,
@@ -132,6 +155,11 @@ public sealed class NetDocumentsAuthService : INetDocumentsAuthService
         }
     }
 
+    /// <summary>
+    /// Clears in-memory and persisted token state for the current user.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel sign-out persistence operations.</param>
+    /// <returns>A task that completes when local token state is removed.</returns>
     public async Task SignOutAsync(CancellationToken cancellationToken = default)
     {
         await _tokenLock.WaitAsync(cancellationToken);
