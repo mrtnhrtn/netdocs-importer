@@ -7,9 +7,6 @@ namespace NetDocsImporter.NetDocs;
 
 public sealed partial class NetDocumentsSyncService
 {
-    private const int VersionEndpointFailureDisableThreshold = 3;
-    private int _documentVersionEndpointFailureCount;
-    private volatile bool _documentVersionEndpointUnavailable;
 
     public async Task<IReadOnlyList<NdExportScope>> EnumerateExportScopesAsync(
         string cabinetId,
@@ -31,9 +28,19 @@ public sealed partial class NetDocumentsSyncService
         var queue = new Queue<NdExportScope>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var rootScope = BuildScopeFromSelection(root, parentContainerId: null, pathSegments: new[]
+        var resolvedRoot = new NdTargetSelection
         {
-            string.IsNullOrWhiteSpace(root.Name) ? root.Id : root.Name
+            Type = root.Type,
+            Id = await ResolveContainerIdForBrowseAsync(root.Id, cancellationToken),
+            Name = root.Name,
+            ParentWorkspaceId = root.ParentWorkspaceId,
+            Extension = root.Extension,
+            SourceFlow = root.SourceFlow
+        };
+
+        var rootScope = BuildScopeFromSelection(resolvedRoot, parentContainerId: null, pathSegments: new[]
+        {
+            string.IsNullOrWhiteSpace(resolvedRoot.Name) ? resolvedRoot.Id : resolvedRoot.Name
         });
         queue.Enqueue(rootScope);
 
@@ -121,11 +128,20 @@ public sealed partial class NetDocumentsSyncService
         var documents = new Dictionary<string, NdExportDocument>(StringComparer.OrdinalIgnoreCase);
         const int pageSize = 200;
         var skip = 0;
+        string? skipToken = null;
         var repeatedNoProgressPages = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var page = await QueryContainerDocumentPageAsync(cabinetId, scope.ContainerId, pageSize, skip, customAttributeIds, cancellationToken);
+            var pageResult = await QueryContainerDocumentPageAsync(
+                cabinetId,
+                scope.ContainerId,
+                pageSize,
+                skip,
+                skipToken,
+                customAttributeIds,
+                cancellationToken);
+            var page = pageResult.Items;
             if (page.Count == 0)
             {
                 break;
@@ -156,6 +172,19 @@ public sealed partial class NetDocumentsSyncService
                 repeatedNoProgressPages = 0;
             }
 
+            if (!string.IsNullOrWhiteSpace(pageResult.NextSkipToken) &&
+                !string.Equals(pageResult.NextSkipToken, skipToken, StringComparison.Ordinal))
+            {
+                skipToken = pageResult.NextSkipToken;
+                continue;
+            }
+
+            if (pageResult.NextOffset.HasValue && pageResult.NextOffset.Value > skip)
+            {
+                skip = pageResult.NextOffset.Value;
+                continue;
+            }
+
             if (page.Count < pageSize)
             {
                 break;
@@ -171,81 +200,7 @@ public sealed partial class NetDocumentsSyncService
         string documentId,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(documentId))
-        {
-            return Array.Empty<NdExportDocumentVersion>();
-        }
-
-        if (_documentVersionEndpointUnavailable)
-        {
-            return Array.Empty<NdExportDocumentVersion>();
-        }
-
-        var encodedDocumentId = Uri.EscapeDataString(documentId);
-        var select = Uri.EscapeDataString("StandardAttributes,Descriptions,DispNames,CustomAttributes,StatusAttributes,UseLongName,ByteSize");
-        var candidates = new[]
-        {
-            $"/v1/Document/{encodedDocumentId}/version",
-            $"/v1/Document/{encodedDocumentId}/versions",
-            $"/v2/document/{encodedDocumentId}/version?select={select}",
-            $"/v2/document/{encodedDocumentId}/versions?select={select}",
-            $"/v1/Document/{encodedDocumentId}/version?select={select}"
-        };
-
-        var expectedFailureCount = 0;
-        foreach (var path in candidates)
-        {
-            try
-            {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var versions = ParseDocumentVersions(document.RootElement);
-                if (versions.Count > 0)
-                {
-                    // Keep breaker semantics truly consecutive: any successful fetch clears prior failure streak.
-                    Interlocked.Exchange(ref _documentVersionEndpointFailureCount, 0);
-                    return versions;
-                }
-            }
-            catch (InvalidOperationException ex) when (IsExpectedVersionEndpointFailure(ex))
-            {
-                expectedFailureCount++;
-                // Try next endpoint variant.
-            }
-            catch
-            {
-                // Try next endpoint variant.
-            }
-        }
-
-        if (expectedFailureCount == candidates.Length)
-        {
-            var failureCount = Interlocked.Increment(ref _documentVersionEndpointFailureCount);
-            if (failureCount >= VersionEndpointFailureDisableThreshold)
-            {
-                _documentVersionEndpointUnavailable = true;
-                Trace.WriteLine(
-                    $"ND-EXPORT version endpoint probe disabled after {failureCount} consecutive 400/405 failures. Falling back to official versions from container rows.");
-            }
-        }
-        else
-        {
-            // Any non-all-expected outcome breaks the consecutive failure streak.
-            Interlocked.Exchange(ref _documentVersionEndpointFailureCount, 0);
-        }
-
         return Array.Empty<NdExportDocumentVersion>();
-    }
-
-    private static bool IsExpectedVersionEndpointFailure(InvalidOperationException ex)
-    {
-        if (ex is null)
-        {
-            return false;
-        }
-
-        var message = ex.Message;
-        return message.Contains("(400", StringComparison.Ordinal) ||
-               message.Contains("(405", StringComparison.Ordinal);
     }
 
     public async Task<IReadOnlyList<NdExportAttributeValue>> GetDocumentStandardAttributesForExportRunAsync(
@@ -380,16 +335,17 @@ public sealed partial class NetDocumentsSyncService
         };
     }
 
-    private async Task<IReadOnlyList<NdExportDocument>> QueryContainerDocumentPageAsync(
+    private async Task<NdExportPageResult> QueryContainerDocumentPageAsync(
         string cabinetId,
         string containerId,
         int top,
         int skip,
+        string? skipToken,
         IReadOnlyList<string>? customAttributeIds,
         CancellationToken cancellationToken)
     {
-        var escapedCabinet = Uri.EscapeDataString(cabinetId);
-        var select = BuildContainerDocumentSelect(customAttributeIds);
+        var selectTokens = BuildContainerDocumentSelectTokens(customAttributeIds);
+        var select = Uri.EscapeDataString(string.Join(",", selectTokens));
         var listFlags = Uri.EscapeDataString("Documents,ByteSize");
         var normalizedContainerCandidates = BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId))
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
@@ -402,14 +358,17 @@ public sealed partial class NetDocumentsSyncService
 
         foreach (var candidateContainerId in normalizedContainerCandidates)
         {
+            var escapedCabinet = Uri.EscapeDataString(cabinetId);
             var escapedContainer = Uri.EscapeDataString(candidateContainerId);
             var encodedContainer = EncodeContainerIdForPath(candidateContainerId);
+            var pagingSuffix = !string.IsNullOrWhiteSpace(skipToken)
+                ? $"&skiptoken={Uri.EscapeDataString(skipToken)}"
+                : $"&skip={skip}";
             var paths = new[]
             {
-                $"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&skip={skip}&select={select}&listflags={listFlags}",
-                $"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&skip={skip}&select={select}",
-                $"/v2/container/{encodedContainer}/search?top={top}&skip={skip}&select={select}&listflags={listFlags}",
-                $"/v2/container/{encodedContainer}?top={top}&skip={skip}&select={select}&listflags={listFlags}"
+                $"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}{pagingSuffix}&select={select}&listflags={listFlags}",
+                $"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}{pagingSuffix}&select={select}",
+                $"/v2/container/{encodedContainer}?top={top}{pagingSuffix}&select={select}&listflags={listFlags}"
             };
 
             foreach (var path in paths)
@@ -418,14 +377,16 @@ public sealed partial class NetDocumentsSyncService
                 {
                     using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
                     var parsed = ParseContainerDocumentRows(document.RootElement, candidateContainerId, customAttributeIds);
+                    var nextOffset = ReadNextOffset(document.RootElement);
+                    var nextSkipToken = ReadNextSkipToken(document.RootElement);
                     if (parsed.Count > 0)
                     {
-                        return parsed;
+                        return new NdExportPageResult(parsed, nextOffset, nextSkipToken);
                     }
 
-                    if (skip > 0)
+                    if (skip > 0 || !string.IsNullOrWhiteSpace(skipToken))
                     {
-                        return parsed;
+                        return new NdExportPageResult(parsed, nextOffset, nextSkipToken);
                     }
                 }
                 catch
@@ -435,10 +396,20 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
-        return Array.Empty<NdExportDocument>();
+        return new NdExportPageResult(Array.Empty<NdExportDocument>(), null);
     }
 
-    private static string BuildContainerDocumentSelect(IReadOnlyList<string>? customAttributeIds)
+    private static int? ReadNextOffset(JsonElement root)
+    {
+        return ReadNullableInt(root, "nextOffset", "NextOffset", "nextoffset", "offset");
+    }
+
+    private static string? ReadNextSkipToken(JsonElement root)
+    {
+        return ReadString(root, "skipToken", "SkipToken", "nextToken", "NextToken");
+    }
+
+    private static IReadOnlyList<string> BuildContainerDocumentSelectTokens(IReadOnlyList<string>? customAttributeIds)
     {
         var tokens = new List<string>
         {
@@ -463,7 +434,7 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
-        return Uri.EscapeDataString(string.Join(",", tokens));
+        return tokens;
     }
 
     private static IReadOnlyList<NdExportDocument> ParseContainerDocumentRows(
@@ -481,6 +452,11 @@ public sealed partial class NetDocumentsSyncService
                 rawType = ReadString(item, "type", "containerType", "kind", "extension", "ext");
             }
 
+            if (IsContainerLikeExportType(rawType))
+            {
+                continue;
+            }
+
             if (!HasDocumentIdentifierHint(item, source, containerId) && !IsDocumentLikeType(rawType))
             {
                 continue;
@@ -496,6 +472,17 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return rows;
+    }
+
+    private static bool IsContainerLikeExportType(string? rawType)
+    {
+        var normalized = (rawType ?? string.Empty)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Trim()
+            .ToLowerInvariant();
+
+        return normalized is "ndfld" or "fld" or "folder" or "ndflt" or "workspacefilter" or "filter" or "ndsq" or "savedsearch" or "search" or "ndws" or "workspace" or "ndcs" or "collabspace";
     }
 
     private static NdExportDocument? ParseContainerDocumentRow(
@@ -937,4 +924,9 @@ public sealed partial class NetDocumentsSyncService
             // Best-effort cleanup.
         }
     }
+
+    private sealed record NdExportPageResult(
+        IReadOnlyList<NdExportDocument> Items,
+        int? NextOffset,
+        string? NextSkipToken = null);
 }

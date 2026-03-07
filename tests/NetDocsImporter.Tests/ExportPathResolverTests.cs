@@ -44,4 +44,18 @@ public sealed class ExportPathResolverTests
         Assert.StartsWith("root/folder/report-", first, StringComparison.Ordinal);
         Assert.EndsWith(".docx", first, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void ResolveRelativePath_AppendsExtensionWhenMissing()
+    {
+        var resolver = new ExportPathResolver();
+
+        var relativePath = resolver.ResolveRelativePath(
+            sourceSegments: new[] { "Client A" },
+            fileName: "Invoice_1",
+            stableId: "doc-123",
+            fileExtension: "pdf");
+
+        Assert.Equal("Client A/Invoice_1.pdf", relativePath);
+    }
 }

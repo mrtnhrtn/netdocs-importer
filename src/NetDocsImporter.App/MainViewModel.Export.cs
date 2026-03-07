@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Globalization;
 using System.IO;
 using System.Text;
 using NetDocsImporter.Core;
@@ -144,26 +143,26 @@ public sealed partial class MainViewModel
                 }
             }
 
-            List<string>? customAttributeIds = null;
-            if (ExportIncludeCustomAttributes)
-            {
-                var syncedAttributes = await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId);
-                customAttributeIds = ResolveExportCustomAttributeIds(syncedAttributes);
-            }
-
             var exportItems = new List<ExportItem>();
+            var folderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var uniqueDocumentIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var scope in scopes)
             {
+                var relativeDirectoryPath = resolver.ResolveRelativeDirectoryPath(scope.PathSegments);
+                if (!string.IsNullOrWhiteSpace(relativeDirectoryPath))
+                {
+                    folderPaths.Add(relativeDirectoryPath);
+                }
+
                 IReadOnlyList<NdExportDocument> documents;
                 try
                 {
                     documents = await sync.EnumerateContainerDocumentsAsync(
                         SelectedNetDocumentsCabinetId,
                         scope,
-                        customAttributeIds);
+                        customAttributeIds: null);
                 }
                 catch (Exception ex)
                 {
@@ -278,6 +277,11 @@ public sealed partial class MainViewModel
                 warnings.Add("Workspace filters are excluded because 'Download filters as folders' is disabled.");
             }
 
+            if (ExportIncludeCustomAttributes)
+            {
+                warnings.Add("Custom attributes are deferred from preflight and will be added during a later export phase.");
+            }
+
             warnings.Add("Run export downloads binaries to disk and writes manifest/metadata artifacts.");
 
             var plan = new ExportPlan
@@ -293,6 +297,7 @@ public sealed partial class MainViewModel
                     Concurrency = Math.Clamp(MaxConcurrency, 1, 8)
                 },
                 Items = exportItems,
+                FolderPaths = folderPaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList(),
                 DocumentCount = uniqueDocumentIds.Count,
                 VersionCount = exportItems.Count,
                 EstimatedBytes = exportItems.Sum(item => item.SizeBytes ?? 0),
@@ -353,6 +358,22 @@ public sealed partial class MainViewModel
             Directory.CreateDirectory(ExportDestinationRootPath);
             var sync = RequireSyncService();
             var writer = new ExportOutputWriter();
+            var createdFolders = 0;
+
+            foreach (var folderPath in _exportPlan.FolderPaths)
+            {
+                if (string.IsNullOrWhiteSpace(folderPath))
+                {
+                    continue;
+                }
+
+                var absoluteFolderPath = Path.Combine(ExportDestinationRootPath, folderPath);
+                if (!Directory.Exists(absoluteFolderPath))
+                {
+                    Directory.CreateDirectory(absoluteFolderPath);
+                    createdFolders++;
+                }
+            }
 
             activeRunMarkerPath = await _completedJobLogStore.WriteActiveRunAsync(new DirectUploadActiveRunMarker
             {
@@ -363,7 +384,7 @@ public sealed partial class MainViewModel
                 TotalRequestedFiles = _exportPlan.Items.Count,
                 PlannedFiles = _exportPlan.Items.Count,
                 SkippedFiles = 0,
-                PlannedFolderCreates = 0
+                PlannedFolderCreates = _exportPlan.FolderPaths.Count
             }, _exportCancellation.Token);
 
             var manifestPath = await writer.WriteManifestAsync(
@@ -514,7 +535,7 @@ public sealed partial class MainViewModel
                 FailedFiles = failed,
                 SkippedFiles = 0,
                 ResumedFiles = 0,
-                CreatedFolders = 0,
+                CreatedFolders = createdFolders,
                 ReportFileName = Path.GetFileName(metadataPath),
                 RunLogFileName = Path.GetFileName(runLogPath)
             }, _exportCancellation.Token);
@@ -644,8 +665,9 @@ public sealed partial class MainViewModel
             fileName = document.DocumentId;
         }
 
+        var extension = ResolveExportFileExtension(version, baseMetadata);
         var stableId = $"{scope.ContainerId}:{document.DocumentId}:{versionId ?? "official"}";
-        var relativePath = resolver.ResolveRelativePath(scope.PathSegments, fileName, stableId);
+        var relativePath = resolver.ResolveRelativePath(scope.PathSegments, fileName, stableId, extension);
         if (usedRelativePaths.TryGetValue(relativePath, out var existingStableId) &&
             !string.Equals(existingStableId, stableId, StringComparison.OrdinalIgnoreCase))
         {
@@ -687,34 +709,51 @@ public sealed partial class MainViewModel
         };
     }
 
-    private static List<string> ResolveExportCustomAttributeIds(
-        IReadOnlyList<NetDocumentsAttributeRecord> syncedAttributes)
+    private static string ResolveExportFileExtension(
+        NdExportDocumentVersion? version,
+        IReadOnlyList<ExportMetadataField> baseMetadata)
     {
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        if (syncedAttributes is null || syncedAttributes.Count == 0)
+        if (version is not null)
         {
-            return ids.ToList();
-        }
-
-        foreach (var attribute in syncedAttributes)
-        {
-            var numericId = attribute.AttributeNum > 0
-                ? attribute.AttributeNum.ToString(CultureInfo.InvariantCulture)
-                : string.Empty;
-
-            if (!string.IsNullOrWhiteSpace(attribute.AttributeId))
+            foreach (var attribute in version.Attributes)
             {
-                ids.Add(attribute.AttributeId);
-            }
-
-            if (!string.IsNullOrWhiteSpace(numericId))
-            {
-                ids.Add(numericId);
+                var extension = ResolveExtensionFromField(attribute.Name, attribute.Value);
+                if (!string.IsNullOrWhiteSpace(extension))
+                {
+                    return extension;
+                }
             }
         }
 
-        return ids.ToList();
+        foreach (var field in baseMetadata)
+        {
+            var extension = ResolveExtensionFromField(field.Name, field.Value);
+            if (!string.IsNullOrWhiteSpace(extension))
+            {
+                return extension;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string ResolveExtensionFromField(string? name, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        if (!name.EndsWith(".extension", StringComparison.OrdinalIgnoreCase) &&
+            !name.EndsWith(".ext", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim().TrimStart('.');
+        return string.Equals(normalized, "ndfld", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : normalized;
     }
 
     private async Task<string> WriteExportRunLogAsync(

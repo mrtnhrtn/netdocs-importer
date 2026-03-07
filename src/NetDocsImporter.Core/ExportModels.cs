@@ -29,6 +29,8 @@ public sealed class ExportPlan
 
     public List<ExportItem> Items { get; set; } = new();
 
+    public List<string> FolderPaths { get; set; } = new();
+
     public int DocumentCount { get; set; }
 
     public int VersionCount { get; set; }

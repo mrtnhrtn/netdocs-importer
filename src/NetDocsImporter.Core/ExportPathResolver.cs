@@ -20,7 +20,7 @@ public sealed class ExportPathResolver
         _maxRelativePathLength = Math.Max(80, maxRelativePathLength);
     }
 
-    public string ResolveRelativePath(IReadOnlyList<string> sourceSegments, string fileName, string stableId)
+    public string ResolveRelativePath(IReadOnlyList<string> sourceSegments, string fileName, string stableId, string? fileExtension = null)
     {
         var safeSegments = sourceSegments
             .Where(segment => !string.IsNullOrWhiteSpace(segment))
@@ -28,7 +28,7 @@ public sealed class ExportPathResolver
             .Where(segment => segment.Length > 0)
             .ToList();
 
-        var safeFileName = SanitizeFileName(fileName);
+        var safeFileName = EnsureFileNameExtension(SanitizeFileName(fileName), fileExtension);
         if (safeFileName.Length == 0)
         {
             safeFileName = "document";
@@ -40,7 +40,7 @@ public sealed class ExportPathResolver
             return candidate;
         }
 
-        var extension = Path.GetExtension(safeFileName);
+        var existingExtension = Path.GetExtension(safeFileName);
         var stem = Path.GetFileNameWithoutExtension(safeFileName);
         var hashSuffix = "-" + ComputeStableHash(stableId);
         var maxStemLength = Math.Max(8, 60 - hashSuffix.Length);
@@ -49,7 +49,7 @@ public sealed class ExportPathResolver
             stem = stem[..maxStemLength];
         }
 
-        safeFileName = $"{stem}{hashSuffix}{extension}";
+        safeFileName = $"{stem}{hashSuffix}{existingExtension}";
 
         while (safeSegments.Count > 0)
         {
@@ -79,6 +79,19 @@ public sealed class ExportPathResolver
             : $"{directory}/{resolvedFileName}";
     }
 
+    public string ResolveRelativeDirectoryPath(IReadOnlyList<string> sourceSegments)
+    {
+        var safeSegments = sourceSegments
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
+            .Select(SanitizePathSegment)
+            .Where(segment => segment.Length > 0)
+            .ToList();
+
+        return safeSegments.Count == 0
+            ? string.Empty
+            : string.Join('/', safeSegments);
+    }
+
     private static string BuildRelativePath(IReadOnlyList<string> segments, string fileName)
     {
         if (segments.Count == 0)
@@ -92,6 +105,37 @@ public sealed class ExportPathResolver
     private static string SanitizeFileName(string value)
     {
         return SanitizePathSegment(value);
+    }
+
+    private static string EnsureFileNameExtension(string fileName, string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return fileName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(Path.GetExtension(fileName)))
+        {
+            return fileName;
+        }
+
+        var normalizedExtension = NormalizeExtension(extension);
+        return string.IsNullOrWhiteSpace(normalizedExtension)
+            ? fileName
+            : $"{fileName}.{normalizedExtension}";
+    }
+
+    private static string NormalizeExtension(string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            return string.Empty;
+        }
+
+        var normalized = extension.Trim().TrimStart('.');
+        return normalized.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            ? string.Empty
+            : normalized;
     }
 
     private static string SanitizePathSegment(string value)

@@ -3485,6 +3485,14 @@ public class NetDocumentsSyncServiceTargetsTests
                 uri => string.Equals(uri.AbsolutePath, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
                        Uri.UnescapeDataString(uri.Query).Contains("extension eq 'ndcs'", StringComparison.OrdinalIgnoreCase) &&
                        !Uri.UnescapeDataString(uri.Query).Contains("listflags=", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) &&
+                       Uri.UnescapeDataString(uri.Query).Contains("ValidateWorkspaces", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/container/WS-1", StringComparison.OrdinalIgnoreCase) &&
+                       Uri.UnescapeDataString(uri.Query).Contains("filter=extension eq '", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

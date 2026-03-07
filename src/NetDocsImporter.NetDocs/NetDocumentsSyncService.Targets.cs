@@ -3424,7 +3424,8 @@ public sealed partial class NetDocumentsSyncService
         string? query,
         CancellationToken cancellationToken,
         int top = 200,
-        string? containerId = null)
+        string? containerId = null,
+        bool exhaustiveEnumeration = false)
     {
         var escapedCabinet = Uri.EscapeDataString(cabinetId);
         var escapedQuery = Uri.EscapeDataString(query ?? string.Empty);
@@ -3453,9 +3454,6 @@ public sealed partial class NetDocumentsSyncService
                 var listFlagsQuery = string.IsNullOrWhiteSpace(listFlags)
                     ? string.Empty
                     : $"&listflags={listFlags}";
-                // Prefer container listing over search-index calls for child expansion.
-                // This returns live container contents and avoids eventual-consistency misses.
-                candidates.Add($"/v2/container/{encodedContainerPath}?top={top}&filter={filter}&filtertype=IncludeOnly{listFlagsQuery}");
                 candidates.Add($"/v2/search/{escapedCabinet}?container={escapedContainer}&top={top}&filter={filter}&filtertype=IncludeOnly{listFlagsQuery}");
             }
         }
@@ -3464,47 +3462,86 @@ public sealed partial class NetDocumentsSyncService
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in candidates)
         {
+            var addedForCandidate = false;
+            var repeatedNoProgressPages = 0;
+            var skip = 0;
             try
             {
-                using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                var items = EnumerateSearchItems(document.RootElement).ToList();
-                var beforeCount = results.Count;
-                foreach (var item in items)
+                while (true)
                 {
-                    var parsed = ParseTargetSelection(item, extension);
-                    if (parsed is null)
+                    var pagedPath = AppendSkipQuery(path, skip, top, exhaustiveEnumeration);
+                    using var document = await _apiClient.GetJsonAsync(pagedPath, cancellationToken);
+                    var items = EnumerateSearchItems(document.RootElement).ToList();
+                    var beforeCount = results.Count;
+                    foreach (var item in items)
                     {
+                        var parsed = ParseTargetSelection(item, extension);
+                        if (parsed is null)
+                        {
+                            continue;
+                        }
+
+                        if (!IsExtensionMatch(item, extension))
+                        {
+                            continue;
+                        }
+
+                        if (seen.Add(parsed.Id))
+                        {
+                            results.Add(parsed);
+                        }
+                    }
+
+                    var added = results.Count - beforeCount;
+                    Trace.WriteLine($"NetDocuments target search by extension: endpoint='{pagedPath}' extension='{extension}' added={added} total={results.Count}.");
+                    if (added == 0 && items.Count > 0)
+                    {
+                        var sample = items[0];
+                        var sampleKeys = sample.ValueKind == JsonValueKind.Object
+                            ? string.Join(",", sample.EnumerateObject().Select(p => p.Name).Take(20))
+                            : sample.ValueKind.ToString();
+                        var sampleId = ResolveContainerIdentifier(sample, SelectTargetSelectionSource(sample));
+                        var sampleType = ReadExtensionValue(sample);
+                        var sampleName = ReadPreferredContainerName(sample, SelectTargetSelectionSource(sample));
+                        Trace.WriteLine(
+                            $"NetDocuments target search by extension: endpoint='{pagedPath}' extension='{extension}' filtered-all raw={items.Count} sampleKeys='{sampleKeys}' sampleId='{sampleId}' sampleType='{sampleType}' sampleName='{sampleName}'.");
+                    }
+
+                    if (added > 0)
+                    {
+                        addedForCandidate = true;
+                        repeatedNoProgressPages = 0;
+                    }
+
+                    if (!exhaustiveEnumeration)
+                    {
+                        break;
+                    }
+
+                    if (items.Count == 0 || items.Count < top)
+                    {
+                        break;
+                    }
+
+                    var nextOffset = ReadNullableInt(document.RootElement, "nextOffset", "NextOffset", "nextoffset", "offset");
+                    if (nextOffset.HasValue && nextOffset.Value > skip)
+                    {
+                        skip = nextOffset.Value;
                         continue;
                     }
 
-                    if (!IsExtensionMatch(item, extension))
+                    if (added == 0)
                     {
-                        continue;
+                        repeatedNoProgressPages++;
+                        if (repeatedNoProgressPages >= 2)
+                        {
+                            Trace.WriteLine(
+                                $"NetDocuments target search by extension pagination stalled: endpoint='{path}' extension='{extension}' skip={skip} pageSize={items.Count}.");
+                            break;
+                        }
                     }
 
-                    if (seen.Add(parsed.Id))
-                    {
-                        results.Add(parsed);
-                    }
-                }
-                var added = results.Count - beforeCount;
-                Trace.WriteLine($"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' added={added} total={results.Count}.");
-                if (added == 0 && items.Count > 0)
-                {
-                    var sample = items[0];
-                    var sampleKeys = sample.ValueKind == JsonValueKind.Object
-                        ? string.Join(",", sample.EnumerateObject().Select(p => p.Name).Take(20))
-                        : sample.ValueKind.ToString();
-                    var sampleId = ResolveContainerIdentifier(sample, SelectTargetSelectionSource(sample));
-                    var sampleType = ReadExtensionValue(sample);
-                    var sampleName = ReadPreferredContainerName(sample, SelectTargetSelectionSource(sample));
-                    Trace.WriteLine(
-                        $"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' filtered-all raw={items.Count} sampleKeys='{sampleKeys}' sampleId='{sampleId}' sampleType='{sampleType}' sampleName='{sampleName}'.");
-                }
-
-                if (results.Count > 0)
-                {
-                    break;
+                    skip += top;
                 }
             }
             catch
@@ -3512,9 +3549,26 @@ public sealed partial class NetDocumentsSyncService
                 Trace.WriteLine($"NetDocuments target search by extension: endpoint='{path}' extension='{extension}' failed.");
                 // Try next candidate.
             }
+
+            if (addedForCandidate || (!exhaustiveEnumeration && results.Count > 0))
+            {
+                break;
+            }
         }
 
         return results;
+    }
+
+    private static string AppendSkipQuery(string path, int skip, int top, bool exhaustiveEnumeration)
+    {
+        if (!exhaustiveEnumeration || skip <= 0 || !path.Contains("top=", StringComparison.OrdinalIgnoreCase))
+        {
+            return path;
+        }
+
+        return path.Contains("skip=", StringComparison.OrdinalIgnoreCase)
+            ? path
+            : $"{path}&skip={skip}";
     }
 
     private static IEnumerable<JsonElement> EnumerateSearchItems(JsonElement root)
@@ -3637,7 +3691,6 @@ public sealed partial class NetDocumentsSyncService
     private static IEnumerable<string> BuildCabinetTopLevelFoldersEndpointCandidates(string cabinetId)
     {
         var escaped = Uri.EscapeDataString(cabinetId);
-        yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly,ValidateWorkspaces";
         yield return $"/v2/cabinet/{escaped}/folders?top=200&listflags=FoldersOnly";
         yield return $"/v1/Cabinet/{escaped}/folders";
     }
@@ -3661,11 +3714,7 @@ public sealed partial class NetDocumentsSyncService
         if (string.Equals(normalized, "ndfld", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(normalized, "ndws", StringComparison.OrdinalIgnoreCase))
         {
-            yield return "FoldersOnly,ValidateWorkspaces";
-        }
-        else
-        {
-            yield return "ValidateWorkspaces";
+            yield return "FoldersOnly";
         }
 
         // Some tenants only return ndflt/ndsq/ndcs when listflags is omitted.
