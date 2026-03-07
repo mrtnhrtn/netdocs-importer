@@ -128,85 +128,6 @@
             </Grid>
         </Border>
 
-        <StackPanel Grid.Row="1" Grid.Column="0" Visibility="{Binding ShowLegacyImportScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock Text="Folders" Style="{StaticResource SectionTitle}" />
-            <TextBox Text="{Binding TreeSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
-            <Border Background="#F8FAFC" BorderBrush="#D9E2EC" BorderThickness="1" CornerRadius="6" Padding="6">
-                <TreeView ItemsSource="{Binding FolderRoots}"
-                          SelectedItemChanged="OnFolderTreeSelectedItemChanged"
-                          VirtualizingStackPanel.IsVirtualizing="True"
-                          VirtualizingStackPanel.VirtualizationMode="Recycling"
-                          ScrollViewer.CanContentScroll="True"
-                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                          BorderThickness="0">
-                    <TreeView.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Include" Click="OnSetImportInclude" />
-                            <MenuItem Header="Exclude" Click="OnSetImportExclude" />
-                            <MenuItem Header="Clear override" Click="OnSetImportInherit" />
-                            <Separator />
-                            <MenuItem Header="Apply to children" Click="OnApplyImportToChildren" />
-                        </ContextMenu>
-                    </TreeView.ContextMenu>
-                    <TreeView.ItemContainerStyle>
-                        <Style TargetType="TreeViewItem">
-                            <Setter Property="Padding" Value="4,3" />
-                            <Setter Property="Margin" Value="0,1,0,1" />
-                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
-                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
-                            <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="BorderThickness" Value="1" />
-                            <Setter Property="BorderBrush" Value="Transparent" />
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            <EventSetter Event="PreviewMouseRightButtonDown" Handler="OnFolderTreeRightButtonDown" />
-                            <EventSetter Event="Expanded" Handler="OnFolderTreeExpanded" />
-                            <EventSetter Event="Collapsed" Handler="OnFolderTreeCollapsed" />
-                            <Style.Triggers>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="#CFE3FF" />
-                                    <Setter Property="BorderBrush" Value="#8BB4FF" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TreeView.ItemContainerStyle>
-                </TreeView>
-            </Border>
-        </StackPanel>
-
-        <GridSplitter Grid.Row="1" Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                      Visibility="{Binding ShowLegacyImportScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}"
-                      Background="#E4E7EB" ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
-
-        <StackPanel Grid.Row="1" Grid.Column="2" Margin="8,0,12,0" Visibility="{Binding ShowLegacyImportScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock Text="Files" Style="{StaticResource SectionTitle}" />
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBox Width="220" Text="{Binding FileSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0" />
-                <Button Content="All" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterAll" />
-                <Button Content="Included" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterIncluded" />
-                <Button Content="Excluded" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterExcluded" />
-                <Button Content="Overrides" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterOverrides" />
-                <Button Content="Large" Style="{StaticResource SecondaryButton}" Click="OnFilterLarge" />
-            </StackPanel>
-            <TextBlock Text="No folders found. Run a scan to populate files."
-                       Foreground="#6B7280"
-                       Margin="0,0,0,8"
-                       Visibility="{Binding HasFolderRoots, Converter={StaticResource InverseBooleanConverter}}" />
-            <DataGrid x:Name="FolderFilesGrid" ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
-                      SelectionMode="Extended" SelectionUnit="FullRow"
-                      IsReadOnly="True" GridLinesVisibility="Horizontal" BorderThickness="1" BorderBrush="#CCD0D5">
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="200" />
-                    <DataGridTextColumn Header="Relative Path" Binding="{Binding RelativePath}" Width="*" />
-                    <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="90" />
-                    <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedDisplay}" Width="140" />
-                    <DataGridTextColumn Header="Large" Binding="{Binding LargeWarning}" Width="70" />
-                    <DataGridTextColumn Header="Import" Binding="{Binding EffectiveImport}" Width="70" />
-                    <DataGridTextColumn Header="Override" Binding="{Binding OverrideMode}" Width="90" />
-                </DataGrid.Columns>
-            </DataGrid>
-        </StackPanel>
-
         <ScrollViewer Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <Border BorderBrush="#E4E7EB"
@@ -439,27 +360,6 @@
                     <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
                     <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
 
-                    <TextBlock Text="File selection" Style="{StaticResource SectionTitle}" />
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileInclude" Style="{StaticResource SecondaryButton}">
-                            <StackPanel Orientation="Horizontal">
-                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                                <TextBlock Text="Include" />
-                            </StackPanel>
-                        </Button>
-                        <Button Width="110" Margin="0,0,6,0" Click="OnSetFileExclude" Style="{StaticResource SecondaryButton}">
-                            <StackPanel Orientation="Horizontal">
-                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                                <TextBlock Text="Exclude" />
-                            </StackPanel>
-                        </Button>
-                        <Button Width="110" Click="OnClearFileOverride" Style="{StaticResource SecondaryButton}">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
-                                <TextBlock Text="Clear" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

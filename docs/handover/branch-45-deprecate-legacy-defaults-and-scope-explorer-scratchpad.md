@@ -14,6 +14,25 @@
 - 2026-03-07: Confirmed `_showLegacyScopeExplorer` is initialized to `false` and never enabled later.
 - 2026-03-07: Confirmed large `ReviewScopeStepView.xaml` sections remain behind `ShowLegacyImportScopeExplorer`, making them dead UI rather than active fallback UI.
 - 2026-03-07: Created this branch and scratchpad to track the deprecation work.
+- 2026-03-07: Removed the dead v1 target-default endpoint branch from `TryFetchTargetDefaultsAsync(...)`.
+- 2026-03-07: Removed unreachable target-default helpers and session flags used only by the dead v1 branch.
+- 2026-03-07: Removed `_showLegacyScopeExplorer`, `ShowLegacyScopeExplorer`, and `ShowLegacyImportScopeExplorer` from `MainViewModel`.
+- 2026-03-07: Removed the permanently-hidden legacy folder tree, splitter, and file grid from `ReviewScopeStepView.xaml`.
+- 2026-03-07: Removed leftover hidden file-selection controls and code-behind handlers that depended on the deleted legacy grid.
+
+## Removed In This Branch
+- `TargetDefaultsSource.V1Endpoints`
+- `_defaultsEndpointFamilyUnavailableForSession`
+- `_defaultsEndpointFamilySkipLogged`
+- `BuildDefaultEndpointCandidates(...)`
+- `IsClientError400Or404(...)`
+- `ParseEffectiveDefaults(...)`
+- `AddDefaultsFromNode(...)`
+- `ResolveAttribute(...)`
+- `_showLegacyScopeExplorer`
+- `ShowLegacyScopeExplorer`
+- `ShowLegacyImportScopeExplorer`
+- Legacy review-step folder tree/file grid UI that was permanently hidden
 
 ## Recommended Change Scope
 - Remove `BuildDefaultEndpointCandidates(...)` and the unreachable `TargetDefaultsSource.V1Endpoints` branch if no supported v1 endpoint family is intended to return.
@@ -35,7 +54,6 @@
 - Smoke-check the review step in import mode and export mode.
 
 ## Recommended Next Steps
-- Implement the deprecation cleanup in this branch.
-- Add or update tests only where behavior changes externally.
-- After cleanup, record exactly what was removed and why in this file before merging.
-
+- Build and run targeted tests to confirm the active target-default fallbacks still behave correctly.
+- Smoke-check the review step in import mode and export mode to confirm layout remains intact after legacy UI removal.
+- If the team still wants historical context, copy a brief note about the removed legacy explorer into a changelog or ADR rather than retaining dormant code.

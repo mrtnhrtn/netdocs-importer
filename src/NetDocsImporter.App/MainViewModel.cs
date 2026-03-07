@@ -63,7 +63,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _selectedFileFilter = "All";
     private ProfileFieldView? _selectedProfileField;
     private bool _hasFolderRoots;
-    private bool _showLegacyScopeExplorer;
     private bool _isPreExportWarningsBusy;
     private int _preExportLargeFileWarnings;
     private int _preExportEmptyFolderWarnings;
@@ -148,14 +147,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (SetField(ref _hasFolderRoots, value))
             {
                 OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
-                OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
             }
         }
     }
-
-    public bool ShowLegacyScopeExplorer => _showLegacyScopeExplorer;
-
-    public bool ShowLegacyImportScopeExplorer => ShowImportContext && ShowLegacyScopeExplorer;
 
     public bool ShowReviewTargetProfileContext => ShowExportContext || HasFolderRoots;
 
@@ -669,7 +663,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(ShowImportContext));
                 OnPropertyChanged(nameof(ShowExportContext));
                 OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
-                OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
                 OnPropertyChanged(nameof(ExportModeToggleText));
                 OnPropertyChanged(nameof(CanRefreshExportPreflight));
                 OnPropertyChanged(nameof(CanRunExport));
@@ -793,7 +786,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
         FolderRoots.CollectionChanged += (_, _) => HasFolderRoots = FolderRoots.Count > 0;
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
-        _showLegacyScopeExplorer = false;
 
         Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments", "Choose your NetDocuments upload destination", this));
         Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and review upload readiness", this));
@@ -1506,7 +1498,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ShowImportContext));
         OnPropertyChanged(nameof(ShowExportContext));
         OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
-        OnPropertyChanged(nameof(ShowLegacyImportScopeExplorer));
         OnPropertyChanged(nameof(ExportModeToggleText));
         OnPropertyChanged(nameof(ExportDestinationRootPath));
         OnPropertyChanged(nameof(ExportAllVersions));

@@ -20,7 +20,6 @@ public sealed partial class NetDocumentsSyncService
 
     private enum TargetDefaultsSource
     {
-        V1Endpoints,
         WorkspaceLookupContext,
         V2ContainerInfo,
         None
@@ -4446,42 +4445,6 @@ public sealed partial class NetDocumentsSyncService
         WorkspaceLookupContext? lookupContext,
         CancellationToken cancellationToken)
     {
-        if (!_defaultsEndpointFamilyUnavailableForSession)
-        {
-            var allClientErrors = true;
-            var attemptedCount = 0;
-            foreach (var path in BuildDefaultEndpointCandidates(target))
-            {
-                attemptedCount++;
-                try
-                {
-                    using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
-                    allClientErrors = false;
-                    var parsed = ParseEffectiveDefaults(document.RootElement, attributes);
-                    if (parsed.HasValues)
-                    {
-                        return new TargetDefaultsResolutionResult(parsed, TargetDefaultsSource.V1Endpoints);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    allClientErrors &= IsClientError400Or404(ex);
-                }
-            }
-
-            if (attemptedCount > 0 && allClientErrors)
-            {
-                _defaultsEndpointFamilyUnavailableForSession = true;
-                _defaultsEndpointFamilySkipLogged = true;
-                Trace.WriteLine("ND-PROFILE defaults-endpoint-family unavailable; using fallback path");
-            }
-        }
-        else if (!_defaultsEndpointFamilySkipLogged)
-        {
-            _defaultsEndpointFamilySkipLogged = true;
-            Trace.WriteLine("ND-PROFILE defaults-endpoint-family unavailable; using fallback path");
-        }
-
         var fromLookupContext = BuildDefaultsFromWorkspaceLookupContext(attributes, lookupContext);
         if (fromLookupContext.HasValues)
         {
@@ -4495,25 +4458,6 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return new TargetDefaultsResolutionResult(EffectiveProfileDefaults.Empty, TargetDefaultsSource.None);
-    }
-
-    private static IEnumerable<string> BuildDefaultEndpointCandidates(NdTargetSelection target)
-    {
-        _ = target;
-        yield break;
-    }
-
-    private static bool IsClientError400Or404(Exception ex)
-    {
-        if (ex is not InvalidOperationException invalidOperation)
-        {
-            return false;
-        }
-
-        return invalidOperation.Message.Contains("(400 ", StringComparison.OrdinalIgnoreCase) ||
-               invalidOperation.Message.Contains("(404 ", StringComparison.OrdinalIgnoreCase) ||
-               invalidOperation.Message.Contains(" 400 ", StringComparison.OrdinalIgnoreCase) ||
-               invalidOperation.Message.Contains(" 404 ", StringComparison.OrdinalIgnoreCase);
     }
 
     private static EffectiveProfileDefaults BuildDefaultsFromWorkspaceLookupContext(
@@ -4868,119 +4812,6 @@ public sealed partial class NetDocumentsSyncService
             JsonValueKind.Object => ReadString(value, "rawValue", "value", "key", "id", "name", "description"),
             _ => string.Empty
         };
-    }
-
-    private static EffectiveProfileDefaults ParseEffectiveDefaults(JsonElement root, IReadOnlyList<NdProfileAttribute> attributes)
-    {
-        var defaults = new EffectiveProfileDefaults();
-        var attrsById = attributes.ToDictionary(a => a.AttributeId, StringComparer.OrdinalIgnoreCase);
-        var attrsByName = attributes.ToDictionary(a => a.Name, StringComparer.OrdinalIgnoreCase);
-
-        if (root.ValueKind == JsonValueKind.Object)
-        {
-            if (root.TryGetProperty("values", out var valuesNode))
-            {
-                AddDefaultsFromNode(valuesNode, defaults, attrsById, attrsByName);
-            }
-            else if (root.TryGetProperty("data", out var dataNode))
-            {
-                AddDefaultsFromNode(dataNode, defaults, attrsById, attrsByName);
-            }
-            else
-            {
-                AddDefaultsFromNode(root, defaults, attrsById, attrsByName);
-            }
-        }
-        else if (root.ValueKind == JsonValueKind.Array)
-        {
-            AddDefaultsFromNode(root, defaults, attrsById, attrsByName);
-        }
-
-        return defaults;
-    }
-
-    private static void AddDefaultsFromNode(
-        JsonElement node,
-        EffectiveProfileDefaults defaults,
-        IReadOnlyDictionary<string, NdProfileAttribute> attrsById,
-        IReadOnlyDictionary<string, NdProfileAttribute> attrsByName)
-    {
-        if (node.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in node.EnumerateArray())
-            {
-                var attrId = ReadString(item, "attributeId", "attrId", "id", "fieldId");
-                var attrName = ReadString(item, "attributeName", "field", "name", "label");
-                var rawValue = ReadString(item, "value", "rawValue", "key", "id");
-                if (string.IsNullOrWhiteSpace(rawValue))
-                {
-                    continue;
-                }
-
-                var attr = ResolveAttribute(attrsById, attrsByName, attrId, attrName);
-                var resolvedId = attr?.AttributeId ?? attrId ?? attrName;
-                if (string.IsNullOrWhiteSpace(resolvedId))
-                {
-                    continue;
-                }
-
-                defaults.ValuesByAttributeId[resolvedId] = new NdProfileValue
-                {
-                    AttributeId = resolvedId,
-                    AttributeName = attr?.Name ?? attrName ?? resolvedId,
-                    RawValue = rawValue,
-                    DisplayValue = ReadString(item, "displayValue", "description", "label", "name"),
-                    PicklistItemId = ReadString(item, "picklistItemId", "picklistId")
-                };
-            }
-
-            return;
-        }
-
-        if (node.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
-
-        foreach (var property in node.EnumerateObject())
-        {
-            var attr = ResolveAttribute(attrsById, attrsByName, property.Name, property.Name);
-            var attrId = attr?.AttributeId ?? property.Name;
-            var rawValue = property.Value.ValueKind == JsonValueKind.String
-                ? property.Value.GetString() ?? string.Empty
-                : property.Value.GetRawText();
-            if (string.IsNullOrWhiteSpace(rawValue))
-            {
-                continue;
-            }
-
-            defaults.ValuesByAttributeId[attrId] = new NdProfileValue
-            {
-                AttributeId = attrId,
-                AttributeName = attr?.Name ?? property.Name,
-                RawValue = rawValue,
-                DisplayValue = string.Empty
-            };
-        }
-    }
-
-    private static NdProfileAttribute? ResolveAttribute(
-        IReadOnlyDictionary<string, NdProfileAttribute> attrsById,
-        IReadOnlyDictionary<string, NdProfileAttribute> attrsByName,
-        string? attrId,
-        string? attrName)
-    {
-        if (!string.IsNullOrWhiteSpace(attrId) && attrsById.TryGetValue(attrId, out var byId))
-        {
-            return byId;
-        }
-
-        if (!string.IsNullOrWhiteSpace(attrName) && attrsByName.TryGetValue(attrName, out var byName))
-        {
-            return byName;
-        }
-
-        return null;
     }
 
     private async Task ResolveDefaultDisplayValuesAsync(

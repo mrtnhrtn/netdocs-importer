@@ -220,42 +220,11 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
-    public void OnSetFileInclude(object sender, RoutedEventArgs e)
-    {
-        _ = SetFileImportModeAsync("include");
-    }
-
-    public void OnSetFileExclude(object sender, RoutedEventArgs e)
-    {
-        _ = SetFileImportModeAsync("exclude");
-    }
-
-    public void OnClearFileOverride(object sender, RoutedEventArgs e)
-    {
-        _ = SetFileImportModeAsync("inherit");
-    }
-
     public void OnResyncAttributes(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)
         {
             main.OnResyncAttributesForReviewScope(sender, e);
         }
-    }
-
-    private async Task SetFileImportModeAsync(string importMode)
-    {
-        if (DataContext is not MainViewModel viewModel)
-        {
-            return;
-        }
-
-        var rows = FolderFilesGrid.SelectedItems.OfType<FileRowView>().ToList();
-        if (rows.Count == 0 && FolderFilesGrid.SelectedItem is FileRowView row)
-        {
-            rows.Add(row);
-        }
-
-        await viewModel.SetFileImportModeAsync(rows, importMode);
     }
 }
