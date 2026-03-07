@@ -145,6 +145,21 @@
   - `tests/NetDocsImporter.Tests/NetDocumentsSyncServiceExportTests.cs`
   - `tests/NetDocsImporter.Tests/NetDocumentsSyncServiceTargetsTests.cs`
 
+## 2026-03-08 - Export preflight coverage surfacing and warning UX cleanup
+- Export scope traversal no longer silently hides child-enumeration failures during preflight:
+  - `EnumerateExportScopesAsync(...)` now returns surfaced traversal issues.
+  - export preflight adds those failures into the visible preflight issues list as `SCOPE_ENUMERATION_FAILED`.
+  - export plans with traversal failures are marked as having blocking coverage issues.
+  - `Run Export` is blocked when preflight is incomplete for coverage reasons.
+- Export warning visibility is now aligned with the existing UI surface:
+  - preflight warnings are shown inside the actual `Preflight Issues` grid as warning rows.
+  - the temporary separate warnings panel was removed.
+  - the transient WPF crash from the bad converter reference in that temporary panel was fixed.
+- Current practical state:
+  - the branch is in a mergeable state.
+  - workspace export confidence messaging, surfaced coverage failures, and visible preflight warnings are now internally aligned.
+  - remaining known runtime issue is still the tenant/API-side `500` for document `3459-7537-1065` during `GET /v1/Document/...`, which is outside this preflight UX fix.
+
 ## Next Branch Preparation
 - Created branch: `wand`
 - Intended next stream of work:

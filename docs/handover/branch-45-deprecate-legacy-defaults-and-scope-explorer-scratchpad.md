@@ -19,6 +19,12 @@
 - 2026-03-07: Removed `_showLegacyScopeExplorer`, `ShowLegacyScopeExplorer`, and `ShowLegacyImportScopeExplorer` from `MainViewModel`.
 - 2026-03-07: Removed the permanently-hidden legacy folder tree, splitter, and file grid from `ReviewScopeStepView.xaml`.
 - 2026-03-07: Removed leftover hidden file-selection controls and code-behind handlers that depended on the deleted legacy grid.
+- 2026-03-08: Branch scope expanded beyond the original deprecation thread to close export-mode UX and correctness gaps discovered during live review.
+- 2026-03-08: Added export workspace coverage-assurance notes and updated export design wording to reflect current retained-artifact and confidence behavior.
+- 2026-03-08: Changed export scope traversal to surface child-enumeration failures as explicit preflight issues instead of silently dropping branches.
+- 2026-03-08: Marked export preflight incomplete when traversal coverage fails and blocked `Run Export` on that incomplete state.
+- 2026-03-08: Fixed export preflight warning visibility so warning counts now appear in the actual preflight issues grid rather than in a disconnected panel.
+- 2026-03-08: Fixed the follow-up WPF crash caused by the temporary warning-panel converter reference.
 
 ## Removed In This Branch
 - `TargetDefaultsSource.V1Endpoints`
@@ -47,6 +53,7 @@
 ## Risks
 - The target-default resolution code is sensitive and should retain existing fallback behavior after dead-path removal.
 - The review screen XAML mixes active and dead UI in one file, so cleanup should be done carefully to avoid removing export or direct-upload sections.
+- This branch now mixes the original deprecation cleanup with export-mode improvements, so merge reviewers should assess it as a widened branch rather than a narrow dead-code removal.
 
 ## Verification Plan
 - `dotnet build NetDocsImporter.sln -nologo`
@@ -57,3 +64,12 @@
 - Build and run targeted tests to confirm the active target-default fallbacks still behave correctly.
 - Smoke-check the review step in import mode and export mode to confirm layout remains intact after legacy UI removal.
 - If the team still wants historical context, copy a brief note about the removed legacy explorer into a changelog or ADR rather than retaining dormant code.
+
+## Current Merge Readiness
+- Current state is acceptable for merge to `main`.
+- The branch should now be described as:
+  - deprecation of dead legacy defaults and scope-explorer paths
+  - export preflight coverage surfacing and run blocking for incomplete traversal
+  - export preflight warning visibility cleanup
+- Remaining known runtime note:
+  - a tenant/API-side `500 Internal Server Error` still occurs for document `3459-7537-1065` during `GET /v1/Document/...`; this is not caused by the preflight changes in this branch.
