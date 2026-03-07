@@ -116,16 +116,32 @@
 - Export document-list requests currently overfetch fields and include `ValidateWorkspaces` in contexts where it is not needed.
 - Binary document download execution remains pending; cancel support for execution is still pending.
 
+## 2026-03-07 Update
+- The worst preflight query noise has now been reduced:
+  - export document-list calls no longer append synced custom attribute ids by default during preflight.
+  - export document-list fallback no longer uses `/v2/container/<id>/search` for tenant paths that return `Value cannot be null. (Parameter 'source')`.
+  - child-extension backfill no longer uses filtered `/v2/container/<id>?filter=extension...` variants that return `Nothing was provided to iterate over.` for this tenant.
+- Remaining known runtime issue:
+  - document `3459-7537-1065` still returns `500 Internal Server Error` from `GET /v1/Document/...` during binary export; treat that as a per-document API/runtime failure path, not a preflight-shape issue.
+- Rebrand prep:
+  - next branch is `wand`.
+  - next non-export task is expected to rebrand the app from `NetDocsImporter` to `Wand`.
+
 ## Handover Checklist (Next Agent)
 1. Confirm preflight API query shape in `NetDocumentsSyncService.Export.cs`:
-   - `listflags`: remove `ValidateWorkspaces` for document list calls.
-   - `select`: reduce to MVP fields.
-2. Remove default preflight custom attribute expansion from `MainViewModel.Export.cs`.
-3. Add or wire `IncludeCustomAttributes` option (default off) if custom attrs are needed before run-phase enrichment is complete.
+   - verify `/v2/search/<cabinet>?container=...` remains the primary path for export document pages.
+   - avoid reintroducing `/v2/container/<id>/search` on tenants that reject it with `Parameter 'source'`.
+2. Keep `select` limited to MVP fields for preflight unless a concrete enrichment need is proven.
+3. Keep preflight custom attribute expansion disabled by default; if reintroduced, gate it explicitly and test against tenant-specific container failures.
 4. Keep/extend pagination stall guards and tests for repeated-page/no-progress responses.
-5. Update `docs/exportmode.md` to reflect new MVP split:
+5. Update `docs/exportmode.md` to reflect the current MVP split:
    - lightweight preflight
    - metadata/content retrieval in run phase (`v1/Document`).
+6. For branch `wand`, plan the rename in this order:
+   - app/window/product strings
+   - docs and user-facing copy
+   - package/installer identity
+   - icons/logo assets after a logo direction is chosen
 
 ## 2026-02-25 Phase Gate Outcome (Validation Run)
 - Observed run status:

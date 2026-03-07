@@ -121,3 +121,33 @@
   - phase objective for artifacts-only export is met.
   - project is ready to proceed to next phase (binary streaming download runner + cancel + shared 429 backoff + run logs/resume markers).
   - recommended immediate acceptance gate for next phase kickoff: first end-to-end run must produce actual files on disk and per-item success/failure in run logs.
+
+## 2026-03-07 - Export preflight query cleanup and current runtime state
+- Fixed the remaining noisy export preflight request variants that were still producing tenant-specific `400 Bad Request` responses:
+  - export document enumeration no longer appends synced custom attribute ids into preflight `select`.
+  - export document enumeration no longer falls back to `/v2/container/<id>/search` endpoints that return `Value cannot be null. (Parameter 'source')` on this tenant.
+  - export child-expansion backfill no longer uses filtered `/v2/container/<id>?filter=extension...` variants that return `Nothing was provided to iterate over.` on this tenant.
+  - extension-search backfill now prefers `/v2/search/<cabinet>?container=...`.
+- Validation:
+  - `dotnet test tests/NetDocsImporter.Tests/NetDocsImporter.Tests.csproj --filter "FullyQualifiedName~NetDocumentsSyncServiceExportTests|FullyQualifiedName~NetDocumentsSyncServiceTargetsTests" --nologo`
+  - Passed: 60
+  - Failed: 0
+- Runtime notes from the latest live export run on 2026-03-07:
+  - the recurring `Value cannot be null. (Parameter 'source')` errors were traced to `/v2/container/.../search` fallback requests and are addressed by this fix for the next app run.
+  - a separate `500 Internal Server Error` still occurs for document `3459-7537-1065` on `GET /v1/Document/3459-7537-1065`; this appears tenant/API-side and is not caused by preflight query shape.
+- Files updated in this iteration:
+  - `src/NetDocsImporter.App/MainViewModel.Export.cs`
+  - `src/NetDocsImporter.Core/ExportModels.cs`
+  - `src/NetDocsImporter.Core/ExportPathResolver.cs`
+  - `src/NetDocsImporter.NetDocs/NetDocumentsSyncService.Export.cs`
+  - `src/NetDocsImporter.NetDocs/NetDocumentsSyncService.Targets.cs`
+  - `tests/NetDocsImporter.Tests/ExportPathResolverTests.cs`
+  - `tests/NetDocsImporter.Tests/NetDocumentsSyncServiceExportTests.cs`
+  - `tests/NetDocsImporter.Tests/NetDocumentsSyncServiceTargetsTests.cs`
+
+## Next Branch Preparation
+- Created branch: `wand`
+- Intended next stream of work:
+  - rebrand `NetDocsImporter` to `Wand`
+  - update app name, window title, installer/user-facing strings, and associated docs
+  - choose a simple black-and-white wand mark for the app icon/branding direction before touching assets
