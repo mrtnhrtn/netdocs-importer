@@ -1,0 +1,24 @@
+#!/bin/sh
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+upstream="$1"
+rebase_branch="$2"
+
+if [ -z "$branch" ]; then
+  echo "Blocked: detached HEAD is not allowed for rebase workflow."
+  echo "Switch to a feature branch first (feature/<task>)."
+  exit 1
+fi
+
+if [ "$branch" = "main" ] || [ "$rebase_branch" = "main" ]; then
+  echo "Blocked: rebasing 'main' is not allowed."
+  echo "Use a feature branch (feature/<task>) and keep main protected."
+  exit 1
+fi
+
+if [ "$upstream" = "main" ] || [ "$upstream" = "refs/heads/main" ] || [ "$upstream" = "origin/main" ]; then
+  # Rebasing a feature branch onto origin/main is expected. Allow it.
+  exit 0
+fi
+
+exit 0

@@ -6,216 +6,252 @@
              xmlns:local="clr-namespace:NetDocsImporter.App"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="900">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel>
-        <TextBlock Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
-        <TextBlock Text="Login and choose your NetDocuments location to pre-fill profiling attributes."
-                   Foreground="#555555" Margin="0,0,0,8" TextWrapping="Wrap" />
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10">
-            <StackPanel>
-                <TextBlock Text="1) NetDocuments Connection" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <TextBlock Text="Region" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
-                          SelectedItem="{Binding SelectedNetDocumentsRegion}"
-                          Margin="0,2,0,6" />
-                <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" />
-                    </StackPanel>
-                </Border>
-                <Border BorderBrush="#E4E7EB"
+        <TextBlock Grid.Row="0" Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
+        <TextBlock Grid.Row="1"
+                   Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
+                   Foreground="{DynamicResource MutedForegroundBrush}"
+                   Margin="0,0,0,8"
+                   TextWrapping="Wrap" />
+
+        <Border Grid.Row="2"
+                Background="{DynamicResource SurfaceBackgroundBrush}"
+                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0">
+                    <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Repository" Foreground="{DynamicResource MutedForegroundBrush}" />
+                            <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
+                                      SelectedValuePath="RepositoryId"
+                                      DisplayMemberPath="RepositoryName"
+                                      SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,2,0,0"
+                                      MinWidth="240"
+                                      MaxWidth="520"
+                                      HorizontalAlignment="Left"
+                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Cabinet" Foreground="{DynamicResource MutedForegroundBrush}" />
+                            <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
+                                      SelectedValuePath="CabinetId"
+                                      DisplayMemberPath="CabinetName"
+                                      SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,2,0,0"
+                                      MinWidth="240"
+                                      MaxWidth="520"
+                                      HorizontalAlignment="Left"
+                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                        </StackPanel>
+                        <Button Grid.Column="4"
+                                Content="Force Refresh"
+                                Width="120"
+                                VerticalAlignment="Bottom"
+                                Click="OnLoadTargetContainers"
+                                IsEnabled="{Binding CanPickNetDocumentsTarget}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </Grid>
+                </StackPanel>
+
+                <TabControl Grid.Row="1"
+                            Margin="0,4,0,0"
+                            BorderThickness="0"
+                            Background="Transparent"
+                            SelectedIndex="{Binding SelectedTargetBrowserTabIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                    <TabControl.Template>
+                        <ControlTemplate TargetType="TabControl">
+                            <Grid KeyboardNavigation.TabNavigation="Local">
+                                <TabPanel IsItemsHost="True" Background="Transparent" />
+                            </Grid>
+                        </ControlTemplate>
+                    </TabControl.Template>
+                    <TabItem Header="Recent" />
+                    <TabItem Header="Favorites" />
+                    <TabItem Header="Go to Workspace" />
+                </TabControl>
+
+                <Border Grid.Row="2"
+                        Background="{DynamicResource ListBackgroundBrush}"
+                        BorderBrush="{DynamicResource SurfaceBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="4"
                         Padding="8"
-                        Margin="0,0,0,8"
-                        Visibility="{Binding CanShowNetDocumentsDevBootstrap, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <StackPanel>
-                        <TextBlock Text="Developer mode only: local OAuth bootstrap (not for distribution)."
-                                   Foreground="#8A5A00"
-                                   FontWeight="SemiBold"
+                        Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <TextBlock Grid.Row="1"
+                                   Text="Loading recent workspaces..."
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Margin="0,0,0,6"
+                                   Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock Grid.Row="2"
+                                   Text="Loading favorite workspaces..."
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Margin="0,0,0,6"
+                                   Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <Grid Grid.Row="3" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0"
+                                     Width="260"
+                                     Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding CanSearchWorkspaceTargets}" />
+                            <Button Grid.Column="2"
+                                    Content="Search"
+                                    Width="100"
+                                    Click="OnSearchWorkspaceTargets"
+                                    IsEnabled="{Binding CanSearchWorkspaceTargets}"
+                                    Style="{StaticResource SecondaryButton}" />
+                            <ToggleButton Grid.Column="4"
+                                          Content="Filter"
+                                          Width="80"
+                                          IsChecked="{Binding IsBrowseFilterPanelVisible, Mode=TwoWay}" />
+                            <Border Grid.Column="6"
+                                    Padding="8,4"
+                                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Visibility="{Binding IsBrowseFilterPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox Content="Cab Folders"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowCabFolders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Folders"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowFolders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Filters"
+                                              Margin="0,0,12,0"
+                                              IsChecked="{Binding BrowseFilterShowFilters, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Content="Collabspaces"
+                                              IsChecked="{Binding BrowseFilterShowCollabspaces, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                        <TextBlock Grid.Row="4"
+                                   Text="{Binding WorkspaceLookupStatus}"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
                                    Margin="0,0,0,6"
                                    TextWrapping="Wrap" />
-                        <TextBlock Text="Client Id" Foreground="#555555" />
-                        <TextBox Text="{Binding NetDocumentsBootstrapClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-                        <TextBlock Text="Client Secret" Foreground="#555555" />
-                        <PasswordBox Margin="0,2,0,6"
-                                     Loaded="OnNetDocumentsBootstrapClientSecretLoaded"
-                                     PasswordChanged="OnNetDocumentsBootstrapClientSecretPasswordChanged" />
-                        <TextBlock Text="Redirect URI" Foreground="#555555" />
-                        <TextBox Text="{Binding NetDocumentsBootstrapRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
-                        <Button Content="Save Local OAuth Profile"
-                                Width="180"
-                                Click="OnSaveNetDocumentsOAuthProfile"
-                                IsEnabled="{Binding CanSaveNetDocumentsDevBootstrap}"
-                                Style="{StaticResource SecondaryButton}" />
-                    </StackPanel>
-                </Border>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Connect"
-                            Width="110"
-                            Margin="0,0,6,0"
-                            Click="OnConnectToNetDocuments"
-                            IsEnabled="{Binding CanConnectToNetDocuments}"
-                            Style="{StaticResource PrimaryButton}" />
-                    <Button Content="Sync Cabinets"
-                            Width="120"
-                            Margin="0,0,6,0"
-                            Click="OnSyncNetDocumentsCabinets"
-                            IsEnabled="{Binding CanSyncNetDocumentsCabinets}"
-                            Style="{StaticResource SecondaryButton}" />
-                </StackPanel>
-                <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" />
-            </StackPanel>
-        </Border>
-
-        <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
-            <StackPanel>
-                <TextBlock Text="2) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <TextBlock Text="Repository" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
-                          SelectedValuePath="RepositoryId"
-                          DisplayMemberPath="RepositoryName"
-                          SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
-                          Margin="0,2,0,6"
-                          IsEnabled="{Binding IsNetDocumentsConnected}" />
-                <TextBlock Text="Cabinet" Foreground="#555555" />
-                <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
-                          SelectedValuePath="CabinetId"
-                          DisplayMemberPath="CabinetName"
-                          SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
-                          Margin="0,2,0,6"
-                          IsEnabled="{Binding IsNetDocumentsConnected}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Refresh Browser"
-                            Width="120"
-                            Margin="0,0,6,0"
-                            Click="OnLoadTargetContainers"
-                            IsEnabled="{Binding CanPickNetDocumentsTarget}"
-                            Style="{StaticResource SecondaryButton}" />
-                    <Button Content="Confirm Target"
-                            Width="120"
-                            Click="OnConfirmTargetContainer"
-                            IsEnabled="{Binding CanConfirmNetDocumentsTarget}"
-                            Style="{StaticResource PrimaryButton}" />
-                </StackPanel>
-
-                <TabControl Margin="0,4,0,8"
-                            SelectionChanged="OnTargetBrowserTabSelectionChanged">
-                    <TabItem Header="Recent">
-                        <StackPanel Margin="4">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="Use Selected" Width="110" Click="OnSelectTargetFromRecent" Style="{StaticResource SecondaryButton}" />
-                            </StackPanel>
-                            <TextBlock Text="Loading recent workspaces..."
-                                       Foreground="#555555"
-                                       Margin="0,0,0,6"
-                                       Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <ListView ItemsSource="{Binding RecentTargets}"
-                                      SelectedItem="{Binding SelectedRecentTarget}"
-                                      Height="150">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Name" Width="170" DisplayMemberBinding="{Binding Name}" />
-                                        <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding TypeDisplay}" />
-                                        <GridViewColumn Header="When" Width="130" DisplayMemberBinding="{Binding TimestampDisplay}" />
-                                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceDisplay}" />
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                        </StackPanel>
-                    </TabItem>
-
-                    <TabItem Header="Favorites">
-                        <StackPanel Margin="4">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="Use Selected" Width="110" Margin="0,0,6,0" Click="OnSelectTargetFromFavorite" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="Toggle Favorite" Width="120" Click="OnToggleFavoriteForSelectedTarget" Style="{StaticResource SecondaryButton}" />
-                            </StackPanel>
-                            <TextBlock Text="Loading favorite workspaces..."
-                                       Foreground="#555555"
-                                       Margin="0,0,0,6"
-                                       Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <ListView ItemsSource="{Binding FavoriteTargets}"
-                                      SelectedItem="{Binding SelectedFavoriteTarget}"
-                                      Height="150">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Name" Width="170" DisplayMemberBinding="{Binding Name}" />
-                                        <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding TypeDisplay}" />
-                                        <GridViewColumn Header="When" Width="130" DisplayMemberBinding="{Binding TimestampDisplay}" />
-                                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceDisplay}" />
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                        </StackPanel>
-                    </TabItem>
-
-                    <TabItem Header="Go to Workspace">
-                        <StackPanel Margin="4">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <TextBox Width="260" Margin="0,0,6,0" Text="{Binding WorkspaceSearchText, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Content="Search" Width="100" Margin="0,0,6,0" Click="OnSearchWorkspaceTargets" Style="{StaticResource SecondaryButton}" />
-                            </StackPanel>
-                            <ListView ItemsSource="{Binding WorkspaceSearchTargets}"
-                                      SelectedItem="{Binding SelectedWorkspaceSearchTarget}"
-                                      SelectionChanged="OnWorkspaceSearchSelectionChanged"
-                                      Height="235"
-                                      Margin="0,0,0,6">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Workspace" Width="170" DisplayMemberBinding="{Binding Name}" />
-                                        <GridViewColumn Header="Type" Width="90" DisplayMemberBinding="{Binding TypeDisplay}" />
-                                        <GridViewColumn Header="Parent Key" Width="90" DisplayMemberBinding="{Binding ParentKey}" />
-                                        <GridViewColumn Header="Parent Name" Width="160" DisplayMemberBinding="{Binding ParentDescription}" />
-                                        <GridViewColumn Header="Child Key" Width="90" DisplayMemberBinding="{Binding ChildKey}" />
-                                        <GridViewColumn Header="Child Name" Width="160" DisplayMemberBinding="{Binding ChildDescription}" />
-                                        <GridViewColumn Header="Path" Width="240" DisplayMemberBinding="{Binding PathDisplay}" />
-                                        <GridViewColumn Header="Source" Width="70" DisplayMemberBinding="{Binding Source}" />
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                            <TextBlock Text="{Binding WorkspaceLookupStatus}" Foreground="#555555" Margin="0,0,0,4" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </TabItem>
-
-                </TabControl>
-
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="Selected Target" FontWeight="SemiBold" Margin="0,0,0,4" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetName, StringFormat=Name: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetTypeDisplay, StringFormat=Type: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetId, StringFormat=Id: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding SelectedNetDocumentsTargetPath, StringFormat=Path: {0}}" Foreground="#555555" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding TargetBrowserMessage}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
-                    </StackPanel>
+                        <TreeView Grid.Row="5"
+                                  ItemsSource="{Binding BrowseRootNodes}"
+                                  MinHeight="340"
+                                  SelectedItemChanged="OnBrowseSelectionChanged">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem">
+                                    <EventSetter Event="Expanded" Handler="OnBrowseNodeExpanded" />
+                                    <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                   Text="{Binding IconGlyph}"
+                                                   Margin="0,0,6,0"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{Binding IconColorHex}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                            <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Metadata}" FontSize="11">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                    </Grid>
                 </Border>
 
-                <TextBlock Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
-
-                <TextBlock Text="Synced Metadata / Profile Attributes" FontWeight="SemiBold" Margin="0,0,0,6" />
-                <ListView ItemsSource="{Binding TargetProfileAttributes}" Height="140">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Name" Width="150" DisplayMemberBinding="{Binding Name}" />
-                            <GridViewColumn Header="Type" Width="85" DisplayMemberBinding="{Binding DataType}" />
-                            <GridViewColumn Header="Required" Width="70" DisplayMemberBinding="{Binding RequiredDisplay}" />
-                            <GridViewColumn Header="Inherited (display)" Width="140" DisplayMemberBinding="{Binding ValueDisplay}" />
-                            <GridViewColumn Header="Inherited (raw)" Width="120" DisplayMemberBinding="{Binding ValueRaw}" />
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-
-                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <Button Content="Continue to Review &amp; Scope"
-                            Width="200"
-                            Click="OnContinueToReviewScope"
-                            IsEnabled="{Binding CanContinueToReviewScope}"
-                            Style="{StaticResource PrimaryButton}" />
-                </StackPanel>
-            </StackPanel>
+                <TextBlock Grid.Row="3"
+                           Text="{Binding TargetBrowserMessage}"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           FontSize="12"
+                           Margin="0,0,0,6"
+                           TextWrapping="Wrap" />
+                <TextBlock Grid.Row="4"
+                           Text="{Binding TargetProfileMetadataStatus}"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,8" />
+            </Grid>
         </Border>
-    </StackPanel>
-    </ScrollViewer>
+    </Grid>
 </UserControl>

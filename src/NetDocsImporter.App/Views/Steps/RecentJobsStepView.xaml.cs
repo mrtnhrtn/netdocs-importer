@@ -1,6 +1,3 @@
-using System.Windows;
-using System.Windows.Controls;
-
 namespace NetDocsImporter.App.Views.Steps;
 
 public partial class RecentJobsStepView : System.Windows.Controls.UserControl
@@ -10,11 +7,11 @@ public partial class RecentJobsStepView : System.Windows.Controls.UserControl
         InitializeComponent();
     }
 
-    public void OnLoadRecentJobs(object sender, RoutedEventArgs e)
+    public void OnDismissQueueNotice(object sender, System.Windows.RoutedEventArgs e)
     {
-        if (Window.GetWindow(this) is MainWindow main)
+        if (DataContext is MainViewModel viewModel)
         {
-            main.OnLoadRecentJobs(sender, e);
+            viewModel.ClearQueueStartupNotice();
         }
     }
 }

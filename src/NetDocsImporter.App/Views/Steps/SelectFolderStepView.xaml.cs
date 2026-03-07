@@ -130,6 +130,22 @@ public partial class SelectFolderStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnBrowseNodeExpanded(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnBrowseNodeExpanded(sender, e);
+        }
+    }
+
+    public void OnBrowseSelectionChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnBrowseSelectionChanged(sender, e);
+        }
+    }
+
     public void OnSelectTargetFromRecent(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

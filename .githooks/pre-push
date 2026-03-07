@@ -1,0 +1,27 @@
+#!/bin/sh
+
+remote_name="$1"
+remote_url="$2"
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+
+if [ "$branch" = "main" ]; then
+  echo "Blocked: pushes from 'main' are not allowed."
+  echo "Switch or create a feature branch first (feature/<task>)."
+  exit 1
+fi
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha
+do
+  if [ -z "$local_ref" ] && [ -z "$remote_ref" ]; then
+    continue
+  fi
+
+  if [ "$local_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "Blocked: push target 'main' is not allowed."
+    echo "Remote: ${remote_name:-unknown} (${remote_url:-unknown})"
+    echo "Use a feature branch (feature/<task>) and open a pull request into main."
+    exit 1
+  fi
+done
+
+exit 0

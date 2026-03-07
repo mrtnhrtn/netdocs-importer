@@ -8,6 +8,12 @@ internal sealed class NetDocumentsAuthDelegatingHandler : DelegatingHandler
     private readonly INetDocumentsAuthService _authService;
     private readonly Func<NetDocumentsAuthContext> _contextAccessor;
 
+    /// <summary>
+    /// Initializes a delegating handler that injects bearer tokens and retries once on unauthorized responses.
+    /// </summary>
+    /// <param name="authService">Authentication service used to retrieve and refresh tokens.</param>
+    /// <param name="contextAccessor">Accessor for the active OAuth client context.</param>
+    /// <param name="innerHandler">Inner handler that performs the HTTP transport call.</param>
     public NetDocumentsAuthDelegatingHandler(
         INetDocumentsAuthService authService,
         Func<NetDocumentsAuthContext> contextAccessor,
