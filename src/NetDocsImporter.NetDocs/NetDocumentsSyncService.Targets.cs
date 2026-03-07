@@ -699,6 +699,28 @@ public sealed partial class NetDocumentsSyncService
                     AddSearchScopeCandidate(searchScopeCandidates, candidate);
                 }
 
+                if (workspaceContext)
+                {
+                    // Preferred path for target browser speed: enumerate workspace children using
+                    // v2 info + summary without per-child hydration calls.
+                    var summaryNodes = await TryGetWorkspaceChildrenFromSummaryAsync(
+                        searchScopeCandidates,
+                        parentContainerId,
+                        cancellationToken);
+                    if (summaryNodes.Count > 0)
+                    {
+                        return summaryNodes
+                            .OrderByDescending(node => node.IsSelectable)
+                            .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                    }
+
+                    // TEMP-FALLBACK (candidate for future removal):
+                    // Keep legacy browse-query expansion so we can monitor tenant-specific summary failures in logs.
+                    // Once telemetry confirms summary stability, remove this branch.
+                    Trace.WriteLine("ND-BROWSER workspace summary returned no children; falling back to legacy child enumeration.");
+                }
+
                 var acceptedPrimaryContainerRows = false;
                 var hydratedNameCache = new Dictionary<string, NdContainerNode?>(StringComparer.OrdinalIgnoreCase);
                 var workspaceFilterInfoCache = new Dictionary<string, WorkspaceFilterInfoResult?>(StringComparer.OrdinalIgnoreCase);
@@ -797,6 +819,8 @@ public sealed partial class NetDocumentsSyncService
         var fallbackWorkspaceId = !string.IsNullOrWhiteSpace(workspaceId)
             ? resolvedSearchScopeId ?? workspaceId
             : workspaceId;
+        // TEMP-FALLBACK (candidate for future removal):
+        // Final endpoint candidate list retained for resilience while summary-first rollout is observed.
         foreach (var path in BuildChildrenEndpointCandidates(cabinetId, fallbackParentId, fallbackWorkspaceId, preferredType))
         {
             try
@@ -823,6 +847,390 @@ public sealed partial class NetDocumentsSyncService
             .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    private async Task<IReadOnlyList<NdContainerNode>> TryGetWorkspaceChildrenFromSummaryAsync(
+        IReadOnlyList<string> workspaceCandidates,
+        string? parentContainerId,
+        CancellationToken cancellationToken)
+    {
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var workspaceCandidate in workspaceCandidates)
+        {
+            if (string.IsNullOrWhiteSpace(workspaceCandidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                var summaryRows = await GetWorkspaceSummaryRowsAsync(workspaceCandidate, cancellationToken);
+                if (summaryRows.Count == 0)
+                {
+                    continue;
+                }
+
+                var nodes = new List<NdContainerNode>();
+                foreach (var row in summaryRows)
+                {
+                    if (string.IsNullOrWhiteSpace(row.ContainerId) || !seenIds.Add(row.ContainerId))
+                    {
+                        continue;
+                    }
+
+                    var supportedType = ResolveSummaryRowType(row.ItemType);
+                    var extension = ResolveSummaryRowExtension(row.ItemType, row.ContainerId);
+                    var name = ResolveFriendlyContainerName(
+                        string.IsNullOrWhiteSpace(row.Name) ? row.ContainerId : row.Name,
+                        row.ContainerId,
+                        supportedType,
+                        extension);
+
+                    var node = new NdContainerNode
+                    {
+                        Id = row.ContainerId,
+                        Name = name,
+                        TypeRaw = row.ItemType,
+                        ParentId = parentContainerId ?? string.Empty,
+                        ParentWorkspaceId = workspaceCandidate,
+                        PathDisplay = string.Empty,
+                        Extension = extension,
+                        SupportedType = supportedType,
+                        IsSelectable = supportedType.HasValue,
+                        UnsupportedReason = NdTargetBrowserLogic.GetUnsupportedReason(supportedType),
+                        HasChildren = supportedType != NdTargetType.WorkspaceFilter,
+                        ChildrenLoadState = NdChildrenLoadState.NotLoaded
+                    };
+
+                    if (ShouldRejectAmbiguousFolderNode(node.Id, node.SupportedType, node.Name))
+                    {
+                        continue;
+                    }
+
+                    nodes.Add(node);
+                }
+
+                if (nodes.Count > 0)
+                {
+                    Trace.WriteLine(
+                        $"ND-BROWSER workspace summary children loaded workspace='{workspaceCandidate}' count={nodes.Count}.");
+                    return nodes;
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"ND-BROWSER workspace summary failed workspace='{workspaceCandidate}' reason='{ex.Message}'.");
+            }
+        }
+
+        return Array.Empty<NdContainerNode>();
+    }
+
+    /// <summary>
+    /// Runs a side-by-side diagnostic benchmark for workspace loading using
+    /// the current strategy and a UI-like sequence (info -> summary -> per-container list).
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier used for scoped calls.</param>
+    /// <param name="workspaceId">Workspace container identifier (env-id or numeric id).</param>
+    /// <param name="cancellationToken">Token used to cancel HTTP calls.</param>
+    /// <returns>Comparison result including timings and detailed REST call traces for each strategy.</returns>
+    public async Task<NdWorkspaceLoadComparisonResult> CompareWorkspaceLoadingStrategiesAsync(
+        string cabinetId,
+        string workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(cabinetId))
+        {
+            throw new ArgumentException("Cabinet ID is required.", nameof(cabinetId));
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            throw new ArgumentException("Workspace ID is required.", nameof(workspaceId));
+        }
+
+        var startedUtc = DateTime.UtcNow;
+        var current = await RunWorkspaceLoadComparisonStrategyAsync(
+            "Current",
+            async token =>
+            {
+                var children = await GetContainerChildrenAsync(
+                    cabinetId,
+                    parentContainerId: workspaceId,
+                    workspaceId: workspaceId,
+                    preferredType: NdTargetType.Workspace,
+                    cancellationToken: token);
+
+                return (children.Count, 0, 0);
+            },
+            cancellationToken);
+
+        var uiLikeMetadataOnly = await RunWorkspaceLoadComparisonStrategyAsync(
+            "UiLikeMetadataOnly",
+            async token =>
+            {
+                var summaryRows = await GetWorkspaceSummaryRowsAsync(workspaceId, token);
+                return (summaryRows.Count, summaryRows.Count, 0);
+            },
+            cancellationToken);
+
+        var uiLike = await RunWorkspaceLoadComparisonStrategyAsync(
+            "UiLike",
+            async token =>
+            {
+                var summaryRows = await GetWorkspaceSummaryRowsAsync(workspaceId, token);
+                var documentCount = await EnumerateUiLikeSummaryDocumentsSequentialAsync(summaryRows, token);
+
+                return (summaryRows.Count, summaryRows.Count, documentCount);
+            },
+            cancellationToken);
+
+        var uiLikeParallel = await RunWorkspaceLoadComparisonStrategyAsync(
+            "UiLikeParallel",
+            async token =>
+            {
+                var summaryRows = await GetWorkspaceSummaryRowsAsync(workspaceId, token);
+                var documentCount = await EnumerateUiLikeSummaryDocumentsParallelAsync(summaryRows, token);
+                return (summaryRows.Count, summaryRows.Count, documentCount);
+            },
+            cancellationToken);
+
+        return new NdWorkspaceLoadComparisonResult
+        {
+            CabinetId = cabinetId,
+            WorkspaceId = workspaceId,
+            StartedUtc = startedUtc,
+            CompletedUtc = DateTime.UtcNow,
+            CurrentStrategy = current,
+            UiLikeMetadataOnlyStrategy = uiLikeMetadataOnly,
+            UiLikeStrategy = uiLike,
+            UiLikeParallelStrategy = uiLikeParallel
+        };
+    }
+
+    private async Task<NdWorkspaceLoadComparisonStrategyResult> RunWorkspaceLoadComparisonStrategyAsync(
+        string name,
+        Func<CancellationToken, Task<(int ContainerCount, int SummaryRowCount, int DocumentCount)>> run,
+        CancellationToken cancellationToken)
+    {
+        var apiCalls = new List<NdApiCallTrace>();
+        var apiCallsLock = new object();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var observer = _apiClient.PushApiCallTraceObserver(trace =>
+            {
+                lock (apiCallsLock)
+                {
+                    apiCalls.Add(trace);
+                }
+            });
+            var counters = await run(cancellationToken);
+            stopwatch.Stop();
+
+            return new NdWorkspaceLoadComparisonStrategyResult
+            {
+                Name = name,
+                Succeeded = true,
+                DurationMs = stopwatch.ElapsedMilliseconds,
+                ContainerCount = counters.ContainerCount,
+                SummaryRowCount = counters.SummaryRowCount,
+                DocumentCount = counters.DocumentCount,
+                ApiCalls = SequenceApiCallTraces(apiCalls)
+            };
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            return new NdWorkspaceLoadComparisonStrategyResult
+            {
+                Name = name,
+                Succeeded = false,
+                ErrorMessage = ex.Message,
+                DurationMs = stopwatch.ElapsedMilliseconds,
+                ApiCalls = SequenceApiCallTraces(apiCalls)
+            };
+        }
+    }
+
+    private static List<NdApiCallTrace> SequenceApiCallTraces(List<NdApiCallTrace> traces)
+    {
+        var sequenced = new List<NdApiCallTrace>(traces.Count);
+        for (var index = 0; index < traces.Count; index++)
+        {
+            var trace = traces[index];
+            sequenced.Add(new NdApiCallTrace
+            {
+                Sequence = index + 1,
+                Method = trace.Method,
+                RelativePath = trace.RelativePath,
+                Url = trace.Url,
+                StatusCode = trace.StatusCode,
+                Succeeded = trace.Succeeded,
+                DurationMs = trace.DurationMs,
+                ResponseLength = trace.ResponseLength,
+                ResponsePreview = trace.ResponsePreview,
+                ErrorMessage = trace.ErrorMessage
+            });
+        }
+
+        return sequenced;
+    }
+
+    private async Task<List<WorkspaceSummaryRow>> GetWorkspaceSummaryRowsAsync(
+        string workspaceId,
+        CancellationToken cancellationToken)
+    {
+        _ = await GetContainerInfoAsync(workspaceId, cancellationToken);
+
+        var encodedWorkspace = EncodeContainerIdForPath(workspaceId);
+        using var summaryDocument = await _apiClient.GetJsonAsync(
+            $"/v2/container/{encodedWorkspace}/summary?externalUsers=false",
+            cancellationToken);
+
+        return ParseWorkspaceSummaryRows(summaryDocument.RootElement);
+    }
+
+    private async Task<int> EnumerateUiLikeSummaryDocumentsSequentialAsync(
+        IReadOnlyList<WorkspaceSummaryRow> summaryRows,
+        CancellationToken cancellationToken)
+    {
+        var documentCount = 0;
+        foreach (var row in summaryRows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            documentCount += await QueryUiLikeSummaryRowDocumentCountAsync(row, cancellationToken);
+        }
+
+        return documentCount;
+    }
+
+    private async Task<int> EnumerateUiLikeSummaryDocumentsParallelAsync(
+        IReadOnlyList<WorkspaceSummaryRow> summaryRows,
+        CancellationToken cancellationToken)
+    {
+        var tasks = summaryRows
+            .Select(row => QueryUiLikeSummaryRowDocumentCountAsync(row, cancellationToken))
+            .ToArray();
+        var counts = await Task.WhenAll(tasks);
+        return counts.Sum();
+    }
+
+    private async Task<int> QueryUiLikeSummaryRowDocumentCountAsync(
+        WorkspaceSummaryRow row,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(row.ContainerId))
+        {
+            return 0;
+        }
+
+        var select = Uri.EscapeDataString(
+            "StandardAttributes,CheckedOutBy,VersionsLite,EmailAttributes,StatusAttributes,Favorite,AllowCheckedOutState,CustomAttributes,Locations,DisplayNames,Versions,UseLongName");
+        var encodedContainer = EncodeContainerIdForPath(row.ContainerId);
+        var top = Math.Clamp(row.MaxItems > 0 ? row.MaxItems : 20, 1, 200);
+        var path = $"/v2/container/{encodedContainer}/?top={top}&select={select}&orderBy=none&filterType=1&filter=ndar,ndab";
+        using var listDocument = await _apiClient.GetJsonAsync(path, cancellationToken);
+        return EnumerateSearchItems(listDocument.RootElement).Count();
+    }
+
+    private static List<WorkspaceSummaryRow> ParseWorkspaceSummaryRows(JsonElement root)
+    {
+        var rows = new List<WorkspaceSummaryRow>();
+        foreach (var candidate in EnumerateWorkspaceSummaryRowCandidates(root))
+        {
+            var id = ReadString(candidate, "envId", "id", "containerId", "workspaceId", "folderId");
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                continue;
+            }
+
+            var maxItems = ReadNullableInt(candidate, "maxItems", "top", "max", "limit") ?? 20;
+            var name = ReadString(candidate, "name", "description", "title", "label");
+            var itemType = ReadString(candidate, "itemType", "type", "containerType", "kind", "extension", "ext");
+            rows.Add(new WorkspaceSummaryRow(id, maxItems, name, itemType));
+        }
+
+        return rows;
+    }
+
+    private static IEnumerable<JsonElement> EnumerateWorkspaceSummaryRowCandidates(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in node.EnumerateArray())
+            {
+                foreach (var nested in EnumerateWorkspaceSummaryRowCandidates(child))
+                {
+                    yield return nested;
+                }
+            }
+
+            yield break;
+        }
+
+        if (node.ValueKind != JsonValueKind.Object)
+        {
+            yield break;
+        }
+
+        if (TryGetPropertyIgnoreCase(node, "envId", out _))
+        {
+            yield return node;
+            yield break;
+        }
+
+        foreach (var property in node.EnumerateObject())
+        {
+            foreach (var nested in EnumerateWorkspaceSummaryRowCandidates(property.Value))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static NdTargetType? ResolveSummaryRowType(string? itemType)
+    {
+        var normalized = (itemType ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        if (string.Equals(normalized, "SavedSearch", StringComparison.OrdinalIgnoreCase))
+        {
+            return NdTargetType.WorkspaceFilter;
+        }
+
+        if (string.Equals(normalized, "Folder", StringComparison.OrdinalIgnoreCase))
+        {
+            return NdTargetType.Folder;
+        }
+
+        return NdTargetBrowserLogic.NormalizeSupportedType(normalized, hasWorkspaceIdHint: false);
+    }
+
+    private static string ResolveSummaryRowExtension(string? itemType, string? containerId)
+    {
+        var normalized = (itemType ?? string.Empty).Trim();
+        if (string.Equals(normalized, "SavedSearch", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ndsq";
+        }
+
+        if (string.Equals(normalized, "Folder", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ndfld";
+        }
+
+        return NdTargetBrowserLogic.IsSavedSearchIdentifier(containerId) ? "ndsq" : normalized;
+    }
+
+    private readonly record struct WorkspaceSummaryRow(
+        string ContainerId,
+        int MaxItems,
+        string Name,
+        string ItemType);
 
     private async Task AddBrowseChildSelectionNodesAsync(
         IReadOnlyList<NdTargetSelection> items,

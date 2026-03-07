@@ -58,7 +58,26 @@ public sealed class NdExportDocument
 
     public string? OfficialVersionId { get; set; }
 
+    public List<NdExportDocumentVersion> VersionHints { get; set; } = new();
+
     public List<NdExportAttributeValue> StandardAttributes { get; set; } = new();
 
     public List<NdExportAttributeValue> CustomAttributes { get; set; } = new();
+}
+
+public sealed class NdBinaryDownloadResponse
+{
+    public bool Succeeded { get; set; }
+
+    public int StatusCode { get; set; }
+
+    public string RequestPath { get; set; } = string.Empty;
+
+    public string ErrorMessage { get; set; } = string.Empty;
+
+    public long BytesWritten { get; set; }
+
+    public long? ContentLength { get; set; }
+
+    public TimeSpan? RetryAfter { get; set; }
 }

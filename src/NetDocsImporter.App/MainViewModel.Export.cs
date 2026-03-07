@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
 using NetDocsImporter.NetDocs;
@@ -9,8 +10,6 @@ namespace NetDocsImporter.App;
 
 public sealed partial class MainViewModel
 {
-    private static readonly string[] ExportBaselineProfileAttributeIds = { "1001", "1002", "1003", "1004", "1005" };
-
     private readonly ObservableCollection<ExportPreflightIssueView> _exportPreflightIssues = new();
     private ExportPlan? _exportPlan;
     private string _exportPlanTargetKey = string.Empty;
@@ -21,6 +20,7 @@ public sealed partial class MainViewModel
     private double _exportProgressPercent;
     private string _exportSummary = "No preflight has been run yet.";
     private string? _lastExportManifestPath;
+    private CancellationTokenSource? _exportCancellation;
 
     public IReadOnlyList<ExportMetadataFormat> ExportMetadataFormatOptions { get; } = Enum.GetValues<ExportMetadataFormat>();
 
@@ -74,7 +74,10 @@ public sealed partial class MainViewModel
         _exportPlan.Items.Count > 0 &&
         !string.IsNullOrWhiteSpace(ExportDestinationRootPath);
 
-    public bool CanCancelExport => false;
+    public bool CanCancelExport =>
+        IsExportBusy &&
+        _exportCancellation is not null &&
+        !_exportCancellation.IsCancellationRequested;
 
     public bool CanOpenLastExportManifest =>
         !string.IsNullOrWhiteSpace(_lastExportManifestPath) &&
@@ -141,8 +144,12 @@ public sealed partial class MainViewModel
                 }
             }
 
-            var syncedAttributes = await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId);
-            var customAttributeIds = ResolveExportCustomAttributeIds(syncedAttributes, ExportIncludeCustomAttributes);
+            List<string>? customAttributeIds = null;
+            if (ExportIncludeCustomAttributes)
+            {
+                var syncedAttributes = await sync.GetSyncedAttributesAsync(SelectedNetDocumentsCabinetId);
+                customAttributeIds = ResolveExportCustomAttributeIds(syncedAttributes);
+            }
 
             var exportItems = new List<ExportItem>();
             var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -191,18 +198,25 @@ public sealed partial class MainViewModel
                     if (ExportAllVersions)
                     {
                         IReadOnlyList<NdExportDocumentVersion> versions;
-                        try
+                        if (document.VersionHints.Count > 0)
                         {
-                            versions = await sync.EnumerateDocumentVersionsAsync(document.DocumentId);
+                            versions = document.VersionHints;
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            issues.Add(new ExportPreflightIssueView(
-                                "Warning",
-                                "VERSION_ENUMERATION_FAILED",
-                                ex.Message,
-                                document.DocumentId));
-                            versions = Array.Empty<NdExportDocumentVersion>();
+                            try
+                            {
+                                versions = await sync.EnumerateDocumentVersionsAsync(document.DocumentId);
+                            }
+                            catch (Exception ex)
+                            {
+                                issues.Add(new ExportPreflightIssueView(
+                                    "Warning",
+                                    "VERSION_ENUMERATION_FAILED",
+                                    ex.Message,
+                                    document.DocumentId));
+                                versions = Array.Empty<NdExportDocumentVersion>();
+                            }
                         }
 
                         if (versions.Count == 0)
@@ -264,7 +278,7 @@ public sealed partial class MainViewModel
                 warnings.Add("Workspace filters are excluded because 'Download filters as folders' is disabled.");
             }
 
-            warnings.Add("Document binary download execution is not wired yet; this preflight validates enumeration and plan counts.");
+            warnings.Add("Run export downloads binaries to disk and writes manifest/metadata artifacts.");
 
             var plan = new ExportPlan
             {
@@ -321,25 +335,93 @@ public sealed partial class MainViewModel
             return;
         }
 
+        var runStartedUtc = DateTime.UtcNow;
+        var runJobId = CurrentJobId ?? $"export-{runStartedUtc:yyyyMMddHHmmss}";
+        var throttle = new ExportThrottleState();
+        var maxAttemptsPerItem = 4;
+        string? activeRunMarkerPath = null;
+
         try
         {
             IsExportBusy = true;
+            _exportCancellation = new CancellationTokenSource();
+            OnPropertyChanged(nameof(CanCancelExport));
             ExportProgressPercent = 0;
             OnPropertyChanged(nameof(ExportProgressPercentDisplay));
-            ExportStatus = "Writing export manifest and enriching metadata...";
+            ExportStatus = "Downloading export content...";
 
             Directory.CreateDirectory(ExportDestinationRootPath);
             var sync = RequireSyncService();
             var writer = new ExportOutputWriter();
+
+            activeRunMarkerPath = await _completedJobLogStore.WriteActiveRunAsync(new DirectUploadActiveRunMarker
+            {
+                JobId = runJobId,
+                StartedUtc = runStartedUtc,
+                RunType = "Export",
+                TargetDisplay = SelectedNetDocumentsTargetName ?? string.Empty,
+                TotalRequestedFiles = _exportPlan.Items.Count,
+                PlannedFiles = _exportPlan.Items.Count,
+                SkippedFiles = 0,
+                PlannedFolderCreates = 0
+            }, _exportCancellation.Token);
+
             var manifestPath = await writer.WriteManifestAsync(
                 ExportDestinationRootPath,
-                _exportPlan.Items);
+                _exportPlan.Items,
+                _exportCancellation.Token);
 
-            var metadataItems = new List<MetadataDumpItem>(_exportPlan.Items.Count);
-            var runPhaseEnrichedCount = 0;
-            for (var index = 0; index < _exportPlan.Items.Count; index++)
+            var metadataItems = new MetadataDumpItem[_exportPlan.Items.Count];
+            var runLogLines = new List<string>();
+            var succeeded = 0;
+            var failed = 0;
+            var completed = 0;
+            var runLock = new object();
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Clamp(_exportPlan.Config.Concurrency, 1, 8),
+                CancellationToken = _exportCancellation.Token
+            };
+
+            await Parallel.ForEachAsync(Enumerable.Range(0, _exportPlan.Items.Count), options, async (index, cancellationToken) =>
             {
                 var item = _exportPlan.Items[index];
+                var destinationPath = Path.Combine(ExportDestinationRootPath, item.LocalPath);
+                var destinationDirectory = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrWhiteSpace(destinationDirectory))
+                {
+                    Directory.CreateDirectory(destinationDirectory);
+                }
+
+                var tempPath = destinationPath + ".part";
+                NdBinaryDownloadResponse? finalResponse = null;
+                for (var attempt = 1; attempt <= maxAttemptsPerItem; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await throttle.WaitAsync(cancellationToken);
+
+                    finalResponse = await sync.DownloadDocumentBinaryForExportRunAsync(
+                        item.DocumentId,
+                        tempPath,
+                        item.VersionId,
+                        cancellationToken);
+
+                    if (finalResponse.Succeeded)
+                    {
+                        break;
+                    }
+
+                    if (!IsRetriableStatus(finalResponse.StatusCode) || attempt == maxAttemptsPerItem)
+                    {
+                        break;
+                    }
+
+                    var delay = finalResponse.StatusCode == 429
+                        ? finalResponse.RetryAfter ?? ComputeExponentialBackoff(attempt)
+                        : ComputeExponentialBackoff(attempt);
+                    throttle.PushDelay(delay);
+                }
+
                 var metadataFields = item.MetadataFields
                     .Select(field => new ExportMetadataField
                     {
@@ -348,36 +430,63 @@ public sealed partial class MainViewModel
                     })
                     .ToList();
 
-                try
+                if (finalResponse is not null && finalResponse.Succeeded)
                 {
-                    var runPhaseStandardAttributes = await sync.GetDocumentStandardAttributesForExportRunAsync(
-                        item.DocumentId,
-                        item.VersionId);
-                    if (runPhaseStandardAttributes.Count > 0)
+                    if (File.Exists(destinationPath))
                     {
-                        metadataFields = MergeRunPhaseStandardMetadata(metadataFields, runPhaseStandardAttributes);
-                        runPhaseEnrichedCount++;
+                        File.Delete(destinationPath);
                     }
+
+                    File.Move(tempPath, destinationPath);
+                    Interlocked.Increment(ref succeeded);
+                    metadataItems[index] = new MetadataDumpItem
+                    {
+                        DocumentId = item.DocumentId,
+                        VersionId = item.VersionId,
+                        SourcePath = item.SourcePath,
+                        LocalPath = item.LocalPath,
+                        Status = "Succeeded",
+                        Error = string.Empty,
+                        MetadataFields = metadataFields
+                    };
                 }
-                catch
+                else
                 {
-                    // Best-effort metadata enrichment. Keep preflight metadata when run-phase retrieval fails.
+                    DeleteIfExists(tempPath);
+                    Interlocked.Increment(ref failed);
+                    metadataItems[index] = new MetadataDumpItem
+                    {
+                        DocumentId = item.DocumentId,
+                        VersionId = item.VersionId,
+                        SourcePath = item.SourcePath,
+                        LocalPath = item.LocalPath,
+                        Status = "Failed",
+                        Error = finalResponse?.ErrorMessage ?? "Unknown download error.",
+                        MetadataFields = metadataFields
+                    };
                 }
 
-                metadataItems.Add(new MetadataDumpItem
+                var completedNow = Interlocked.Increment(ref completed);
+                var percent = Math.Round((double)completedNow / Math.Max(1, _exportPlan.Items.Count) * 100d, 2);
+                UpdateOnUi(() =>
                 {
-                    DocumentId = item.DocumentId,
-                    VersionId = item.VersionId,
-                    SourcePath = item.SourcePath,
-                    LocalPath = item.LocalPath,
-                    Status = "Planned",
-                    Error = string.Empty,
-                    MetadataFields = metadataFields
+                    ExportProgressPercent = percent;
+                    OnPropertyChanged(nameof(ExportProgressPercentDisplay));
+                    ExportStatus =
+                        $"Export downloading {completedNow:N0}/{_exportPlan.Items.Count:N0} ({percent:0.##}%). " +
+                        $"Succeeded={Volatile.Read(ref succeeded):N0}, failed={Volatile.Read(ref failed):N0}.";
                 });
 
-                ExportProgressPercent = Math.Min(95, ((index + 1) * 95d) / Math.Max(1, _exportPlan.Items.Count));
-                OnPropertyChanged(nameof(ExportProgressPercentDisplay));
-            }
+                lock (runLock)
+                {
+                    var status = finalResponse is { Succeeded: true } ? "OK" : "FAIL";
+                    var statusCode = finalResponse?.StatusCode ?? 0;
+                    var bytes = finalResponse?.BytesWritten ?? 0;
+                    var error = finalResponse?.ErrorMessage ?? string.Empty;
+                    runLogLines.Add(
+                        $"[{status}] doc={item.DocumentId} ver={item.VersionId ?? "official"} status={statusCode} bytes={bytes} local='{item.LocalPath}' error='{error}'");
+                }
+            });
 
             var metadataPath = await writer.WriteMetadataAsync(
                 ExportDestinationRootPath,
@@ -386,18 +495,52 @@ public sealed partial class MainViewModel
                     SourceCabinetId = _exportPlan.Config.SourceCabinetId,
                     SourceTargetId = _exportPlan.Config.SourceTargetId,
                     GeneratedUtc = DateTime.UtcNow,
-                    Items = metadataItems
+                    Items = metadataItems.ToList()
                 },
-                ExportMetadataFormat);
+                ExportMetadataFormat,
+                _exportCancellation.Token);
+
+            var runLogPath = await WriteExportRunLogAsync(runJobId, runStartedUtc, runLogLines, succeeded, failed, _exportPlan.Items.Count, manifestPath, metadataPath);
+            await _completedJobLogStore.WriteSummaryAsync(new CompletedJobRunSummary
+            {
+                JobId = runJobId,
+                StartedUtc = runStartedUtc,
+                RunType = "Export",
+                Status = failed > 0 ? "Export Partial" : "Export",
+                Summary = $"Exported {succeeded:N0}/{_exportPlan.Items.Count:N0} files. Failed={failed:N0}. Metadata={Path.GetFileName(metadataPath)}",
+                RequestedFiles = _exportPlan.Items.Count,
+                PlannedFiles = _exportPlan.Items.Count,
+                UploadedFiles = succeeded,
+                FailedFiles = failed,
+                SkippedFiles = 0,
+                ResumedFiles = 0,
+                CreatedFolders = 0,
+                ReportFileName = Path.GetFileName(metadataPath),
+                RunLogFileName = Path.GetFileName(runLogPath)
+            }, _exportCancellation.Token);
+
+            if (!string.IsNullOrWhiteSpace(activeRunMarkerPath))
+            {
+                await _completedJobLogStore.DeleteActiveRunAsync(activeRunMarkerPath);
+                activeRunMarkerPath = null;
+            }
 
             _lastExportManifestPath = manifestPath;
             OnPropertyChanged(nameof(CanOpenLastExportManifest));
             ExportProgressPercent = 100;
             OnPropertyChanged(nameof(ExportProgressPercentDisplay));
             ExportStatus =
-                $"Export artifacts written. Manifest: {Path.GetFileName(manifestPath)}, metadata: {Path.GetFileName(metadataPath)}. " +
-                $"Run-phase standard attribute enrichment applied to {runPhaseEnrichedCount:N0} of {_exportPlan.Items.Count:N0} planned item(s). " +
-                "Document binary download execution will be wired in the next phase.";
+                $"Export complete. Succeeded {succeeded:N0}/{_exportPlan.Items.Count:N0}, failed {failed:N0}. " +
+                $"Manifest: {Path.GetFileName(manifestPath)}, metadata: {Path.GetFileName(metadataPath)}.";
+        }
+        catch (OperationCanceledException) when (_exportCancellation is not null && _exportCancellation.IsCancellationRequested)
+        {
+            ExportStatus = "Export canceled by user.";
+            if (!string.IsNullOrWhiteSpace(activeRunMarkerPath))
+            {
+                await _completedJobLogStore.DeleteActiveRunAsync(activeRunMarkerPath);
+                activeRunMarkerPath = null;
+            }
         }
         catch (Exception ex)
         {
@@ -405,13 +548,23 @@ public sealed partial class MainViewModel
         }
         finally
         {
+            _exportCancellation?.Dispose();
+            _exportCancellation = null;
+            OnPropertyChanged(nameof(CanCancelExport));
             IsExportBusy = false;
         }
     }
 
     public void CancelExport()
     {
-        ExportStatus = "Cancel is not available yet for export planning.";
+        if (!CanCancelExport)
+        {
+            return;
+        }
+
+        _exportCancellation?.Cancel();
+        ExportStatus = "Cancel requested. Waiting for export workers to stop...";
+        OnPropertyChanged(nameof(CanCancelExport));
     }
 
     public void OpenLastExportManifest()
@@ -534,49 +687,10 @@ public sealed partial class MainViewModel
         };
     }
 
-    private static List<ExportMetadataField> MergeRunPhaseStandardMetadata(
-        IReadOnlyList<ExportMetadataField> existing,
-        IReadOnlyList<NdExportAttributeValue> runPhaseStandardAttributes)
-    {
-        var merged = existing
-            .Where(field => !field.Name.StartsWith("standard.", StringComparison.OrdinalIgnoreCase))
-            .Select(field => new ExportMetadataField
-            {
-                Name = field.Name,
-                Value = field.Value
-            })
-            .ToList();
-
-        foreach (var attribute in runPhaseStandardAttributes)
-        {
-            if (string.IsNullOrWhiteSpace(attribute.Name) || string.IsNullOrWhiteSpace(attribute.Value))
-            {
-                continue;
-            }
-
-            merged.Add(new ExportMetadataField
-            {
-                Name = attribute.Name,
-                Value = attribute.Value
-            });
-        }
-
-        return merged
-            .GroupBy(field => field.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.Last())
-            .ToList();
-    }
-
     private static List<string> ResolveExportCustomAttributeIds(
-        IReadOnlyList<NetDocumentsAttributeRecord> syncedAttributes,
-        bool includeAllSyncedAttributes)
+        IReadOnlyList<NetDocumentsAttributeRecord> syncedAttributes)
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var baselineId in ExportBaselineProfileAttributeIds)
-        {
-            ids.Add(baselineId);
-        }
 
         if (syncedAttributes is null || syncedAttributes.Count == 0)
         {
@@ -588,20 +702,6 @@ public sealed partial class MainViewModel
             var numericId = attribute.AttributeNum > 0
                 ? attribute.AttributeNum.ToString(CultureInfo.InvariantCulture)
                 : string.Empty;
-
-            if (ExportBaselineProfileAttributeIds.Contains(numericId, StringComparer.OrdinalIgnoreCase))
-            {
-                ids.Add(numericId);
-                if (!string.IsNullOrWhiteSpace(attribute.AttributeId))
-                {
-                    ids.Add(attribute.AttributeId);
-                }
-            }
-
-            if (!includeAllSyncedAttributes)
-            {
-                continue;
-            }
 
             if (!string.IsNullOrWhiteSpace(attribute.AttributeId))
             {
@@ -615,6 +715,123 @@ public sealed partial class MainViewModel
         }
 
         return ids.ToList();
+    }
+
+    private async Task<string> WriteExportRunLogAsync(
+        string runJobId,
+        DateTime runStartedUtc,
+        IReadOnlyList<string> lines,
+        int succeeded,
+        int failed,
+        int total,
+        string manifestPath,
+        string metadataPath)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("|                  NetDocs Export Run Log                   |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine($" Started: {runStartedUtc.ToLocalTime():g}");
+        builder.AppendLine($" Job Id: {runJobId}");
+        builder.AppendLine($" Target: {SelectedNetDocumentsTargetName}");
+        builder.AppendLine($" Planned: {total:N0}");
+        builder.AppendLine($" Succeeded: {succeeded:N0}");
+        builder.AppendLine($" Failed: {failed:N0}");
+        builder.AppendLine($" Manifest: {manifestPath}");
+        builder.AppendLine($" Metadata: {metadataPath}");
+        builder.AppendLine("+------------------------------------------------------------+");
+        builder.AppendLine("| Item Outcomes                                              |");
+        builder.AppendLine("+------------------------------------------------------------+");
+        foreach (var line in lines)
+        {
+            builder.AppendLine(line);
+        }
+
+        return await _completedJobLogStore.WriteRunLogAsync(runJobId, runStartedUtc, builder.ToString());
+    }
+
+    private static bool IsRetriableStatus(int statusCode)
+    {
+        return statusCode is 408 or 429 or 500 or 502 or 503 or 504;
+    }
+
+    private static TimeSpan ComputeExponentialBackoff(int attempt)
+    {
+        var baseMs = Math.Min(1000 * (1 << Math.Clamp(attempt - 1, 0, 5)), 10000);
+        var jitterMs = Random.Shared.Next(0, 350);
+        return TimeSpan.FromMilliseconds(baseMs + jitterMs);
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup.
+        }
+    }
+}
+
+internal sealed class ExportThrottleState
+{
+    private long _delayUntilUtcTicks;
+
+    public async Task WaitAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var delayUntilTicks = Interlocked.Read(ref _delayUntilUtcTicks);
+            if (delayUntilTicks <= 0)
+            {
+                return;
+            }
+
+            var delayUntilUtc = new DateTime(delayUntilTicks, DateTimeKind.Utc);
+            var remaining = delayUntilUtc - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            var bounded = remaining > TimeSpan.FromSeconds(2) ? TimeSpan.FromSeconds(2) : remaining;
+            await Task.Delay(bounded, cancellationToken);
+        }
+    }
+
+    public void PushDelay(TimeSpan delay)
+    {
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var proposedTicks = DateTime.UtcNow.Add(delay).Ticks;
+        while (true)
+        {
+            var currentTicks = Interlocked.Read(ref _delayUntilUtcTicks);
+            if (currentTicks >= proposedTicks)
+            {
+                return;
+            }
+
+            var original = Interlocked.CompareExchange(ref _delayUntilUtcTicks, proposedTicks, currentTicks);
+            if (original == currentTicks)
+            {
+                return;
+            }
+        }
     }
 }
 

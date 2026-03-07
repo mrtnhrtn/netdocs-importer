@@ -86,9 +86,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _schemaCabinetName = string.Empty;
     private bool _hasSchemaLoaded;
     private bool _isExportMode;
+    private bool _isDarkMode;
     private string _exportDestinationRootPath = string.Empty;
     private bool _exportAllVersions;
     private bool _exportDownloadFiltersAsFolders = true;
+    private bool _exportIncludeCustomAttributes;
     private ExportMetadataFormat _exportMetadataFormat = ExportMetadataFormat.Json;
     private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
     private readonly Dictionary<string, NetDocumentsOAuthClientConfig> _netDocumentsOAuthClientProfiles = new(StringComparer.OrdinalIgnoreCase);
@@ -198,6 +200,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                RaiseDirectUploadQueueAvailabilityChanged();
 
                 if (!string.Equals(previousJobId, value, StringComparison.OrdinalIgnoreCase))
                 {
@@ -721,6 +724,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool ExportIncludeCustomAttributes
+    {
+        get => _exportIncludeCustomAttributes;
+        set
+        {
+            if (SetField(ref _exportIncludeCustomAttributes, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
     public ExportMetadataFormat ExportMetadataFormat
     {
         get => _exportMetadataFormat;
@@ -728,6 +743,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _exportMetadataFormat, value))
             {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool IsDarkMode
+    {
+        get => _isDarkMode;
+        set
+        {
+            if (SetField(ref _isDarkMode, value))
+            {
+                ThemeManager.ApplyTheme(_isDarkMode);
                 QueueSettingsSave();
             }
         }
@@ -915,6 +943,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
                 RecentJobs.Add(view);
             }
+
+            await LoadQueueJobsAsync();
         }
         finally
         {
@@ -1385,6 +1415,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private async Task LoadSettingsAsync()
     {
         _settings = await AppSettings.LoadAsync(_paths.SettingsPath);
+        _isDarkMode = IsDarkTheme(_settings.Theme);
+        ThemeManager.ApplyTheme(_isDarkMode);
+        OnPropertyChanged(nameof(IsDarkMode));
+
         if (!string.IsNullOrWhiteSpace(_settings.NdImportPath))
         {
             _ndImportPath = NormalizeNdImportPath(_settings.NdImportPath);
@@ -1417,6 +1451,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsNdImportCsvMode));
         OnPropertyChanged(nameof(IsDirectApiMode));
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        RaiseDirectUploadQueueAvailabilityChanged();
 
         _rememberNdImportPassword = _settings.RememberNdImportPassword;
         OnPropertyChanged(nameof(RememberNdImportPassword));
@@ -1462,6 +1497,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _exportAllVersions = netDocuments.ExportAllVersions;
         _exportMetadataFormat = netDocuments.ExportMetadataFormat;
         _exportDownloadFiltersAsFolders = netDocuments.ExportDownloadFiltersAsFolders;
+        _exportIncludeCustomAttributes = netDocuments.ExportIncludeCustomAttributes;
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
@@ -1476,6 +1512,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ExportAllVersions));
         OnPropertyChanged(nameof(ExportMetadataFormat));
         OnPropertyChanged(nameof(ExportDownloadFiltersAsFolders));
+        OnPropertyChanged(nameof(ExportIncludeCustomAttributes));
         SyncNdImportCabinetFromSelectedCabinetId();
         OnPropertyChanged(nameof(IsDeveloperMode));
         OnPropertyChanged(nameof(NetDocumentsBootstrapRedirectUri));
@@ -1523,6 +1560,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _settings.RememberNdImportPassword = RememberNdImportPassword;
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
+        _settings.Theme = IsDarkMode ? "Dark" : "Light";
         netDocuments.Region = SelectedNetDocumentsRegion;
         netDocuments.UseSecureOAuthClientConfig = true;
         netDocuments.OAuthClientConfigRef = string.IsNullOrWhiteSpace(netDocuments.OAuthClientConfigRef)
@@ -1539,6 +1577,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         netDocuments.ExportAllVersions = ExportAllVersions;
         netDocuments.ExportMetadataFormat = ExportMetadataFormat;
         netDocuments.ExportDownloadFiltersAsFolders = ExportDownloadFiltersAsFolders;
+        netDocuments.ExportIncludeCustomAttributes = ExportIncludeCustomAttributes;
         SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
 
@@ -1568,6 +1607,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _settings.NetDocumentsConnection ??= new NetDocumentsConnectionSettings();
         return _settings.NetDocumentsConnection;
+    }
+
+    private static bool IsDarkTheme(string? theme)
+    {
+        return string.Equals(theme, "Dark", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task LoadNetDocumentsOAuthClientProfilesAsync(CancellationToken cancellationToken = default)

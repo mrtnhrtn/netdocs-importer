@@ -39,6 +39,7 @@ public partial class MainWindow : Window
         }
 
         await _viewModel.LoadRecentJobsAsync();
+        await _viewModel.StartUploadQueueMonitorAsync();
         await _viewModel.LoadNdImportSettingsAsync();
         _recentJobsRefreshTimer.Start();
     }
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
     {
         _recentJobsRefreshTimer.Stop();
         _recentJobsRefreshTimer.Tick -= OnRecentJobsRefreshTick;
+        _viewModel.StopUploadQueueMonitor();
     }
 
     private async void OnRecentJobsRefreshTick(object? sender, EventArgs e)
@@ -59,6 +61,7 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.LoadRecentJobsAsync();
+            await _viewModel.LoadQueueJobsAsync();
         }
         catch
         {
@@ -298,6 +301,70 @@ public partial class MainWindow : Window
     public async void OnRunDirectUpload(object sender, RoutedEventArgs e)
     {
         await _viewModel.RunDirectUploadAsync();
+    }
+
+    public async void OnAddDirectUploadToQueue(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.AddCurrentDirectUploadToQueueAsync();
+    }
+
+    public async void OnScheduleDirectUpload(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.Form
+        {
+            Text = "Schedule Direct Upload",
+            Width = 320,
+            Height = 150,
+            StartPosition = System.Windows.Forms.FormStartPosition.CenterParent,
+            FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+
+        var picker = new System.Windows.Forms.DateTimePicker
+        {
+            Format = System.Windows.Forms.DateTimePickerFormat.Custom,
+            CustomFormat = "yyyy-MM-dd HH:mm",
+            Value = DateTime.Now.AddMinutes(15),
+            Width = 260,
+            Left = 20,
+            Top = 10
+        };
+
+        var ok = new System.Windows.Forms.Button
+        {
+            Text = "Schedule",
+            DialogResult = System.Windows.Forms.DialogResult.OK,
+            Left = 120,
+            Top = 45,
+            Width = 80
+        };
+        var cancel = new System.Windows.Forms.Button
+        {
+            Text = "Cancel",
+            DialogResult = System.Windows.Forms.DialogResult.Cancel,
+            Left = 205,
+            Top = 45,
+            Width = 80
+        };
+
+        dialog.Controls.Add(picker);
+        dialog.Controls.Add(ok);
+        dialog.Controls.Add(cancel);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        await _viewModel.ScheduleCurrentDirectUploadAsync(picker.Value);
+    }
+
+    public void OnOpenJobsQuickView(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenJobsStep();
     }
 
     public void OnCancelDirectUpload(object sender, RoutedEventArgs e)

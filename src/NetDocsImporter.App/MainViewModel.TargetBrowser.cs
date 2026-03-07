@@ -2,7 +2,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using NetDocsImporter.Core;
@@ -167,6 +169,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
             OnPropertyChanged(nameof(CanContinueToReviewScope));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            RaiseDirectUploadQueueAvailabilityChanged();
             QueueSettingsSave();
         }
     }
@@ -1137,6 +1140,82 @@ public sealed partial class MainViewModel
     public Task SelectWorkspaceAsTargetAsync() => UseSelectedWorkspaceSearchTargetAsync();
     public Task LoadSelectedWorkspaceAsync() => UseSelectedWorkspaceSearchTargetAsync();
 
+    public string GetWorkspaceLoadComparisonDefaultFileName()
+    {
+        var workspaceToken = ResolveWorkspaceIdForLoadComparison();
+        if (string.IsNullOrWhiteSpace(workspaceToken))
+        {
+            workspaceToken = "workspace";
+        }
+
+        workspaceToken = SanitizeFileNameToken(workspaceToken);
+        return $"workspace-load-comparison-{workspaceToken}-{DateTime.Now:yyyyMMdd_HHmmss}.json";
+    }
+
+    public async Task ExportWorkspaceLoadComparisonAsync(string destinationPath)
+    {
+        if (!CanPickNetDocumentsTarget)
+        {
+            TargetBrowserMessage = "Select repository/cabinet before running load comparison.";
+            StatusText = TargetBrowserMessage;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(destinationPath))
+        {
+            TargetBrowserMessage = "Choose an output path for the comparison JSON.";
+            StatusText = TargetBrowserMessage;
+            return;
+        }
+
+        var workspaceId = ResolveWorkspaceIdForLoadComparison();
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            TargetBrowserMessage = "Select a workspace (or workspace child) before running load comparison.";
+            StatusText = TargetBrowserMessage;
+            return;
+        }
+
+        IsTargetBrowserBusy = true;
+        try
+        {
+            var comparison = await RequireSyncService().CompareWorkspaceLoadingStrategiesAsync(
+                SelectedNetDocumentsCabinetId,
+                workspaceId);
+
+            var directory = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var payload = JsonSerializer.Serialize(
+                comparison,
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+            await File.WriteAllTextAsync(destinationPath, payload);
+
+            TargetBrowserMessage =
+                $"Workspace load comparison exported: {destinationPath}. " +
+                $"Current={comparison.CurrentStrategy.DurationMs}ms/{comparison.CurrentStrategy.ApiCalls.Count} calls, " +
+                $"UI-meta={comparison.UiLikeMetadataOnlyStrategy.DurationMs}ms/{comparison.UiLikeMetadataOnlyStrategy.ApiCalls.Count} calls, " +
+                $"UI-seq={comparison.UiLikeStrategy.DurationMs}ms/{comparison.UiLikeStrategy.ApiCalls.Count} calls, " +
+                $"UI-par={comparison.UiLikeParallelStrategy.DurationMs}ms/{comparison.UiLikeParallelStrategy.ApiCalls.Count} calls.";
+            StatusText = TargetBrowserMessage;
+        }
+        catch (Exception ex)
+        {
+            TargetBrowserMessage = $"Workspace load comparison export failed: {ex.Message}";
+            StatusText = TargetBrowserMessage;
+        }
+        finally
+        {
+            IsTargetBrowserBusy = false;
+        }
+    }
+
     private async Task<List<NetDocumentsWorkspaceTargetResultView>> SearchWorkspaceTargetsInternalAsync(string query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2001,6 +2080,7 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
         OnPropertyChanged(nameof(CanContinueToReviewScope));
         OnPropertyChanged(nameof(CanRunDirectUpload));
+        RaiseDirectUploadQueueAvailabilityChanged();
         OnPropertyChanged(nameof(CanRefreshExportPreflight));
         OnPropertyChanged(nameof(CanRunExport));
 
@@ -2569,6 +2649,62 @@ public sealed partial class MainViewModel
         return snapshot.Version == _targetBrowserContextVersion &&
                string.Equals(snapshot.RepositoryId, SelectedNetDocumentsRepositoryId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(snapshot.CabinetId, SelectedNetDocumentsCabinetId ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveWorkspaceIdForLoadComparison()
+    {
+        if (_selectedNetDocumentsTarget is not null)
+        {
+            if (_selectedNetDocumentsTarget.Type == NdTargetType.Workspace &&
+                !string.IsNullOrWhiteSpace(_selectedNetDocumentsTarget.Id))
+            {
+                return _selectedNetDocumentsTarget.Id;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_selectedNetDocumentsTarget.ParentWorkspaceId))
+            {
+                return _selectedNetDocumentsTarget.ParentWorkspaceId;
+            }
+        }
+
+        if (SelectedBrowseNode is not null)
+        {
+            if (SelectedBrowseNode.SupportedType == NdTargetType.Workspace &&
+                !string.IsNullOrWhiteSpace(SelectedBrowseNode.Id))
+            {
+                return SelectedBrowseNode.Id;
+            }
+
+            if (!string.IsNullOrWhiteSpace(SelectedBrowseNode.ParentWorkspaceId))
+            {
+                return SelectedBrowseNode.ParentWorkspaceId;
+            }
+        }
+
+        if (SelectedWorkspaceSearchTarget?.Selection is { Type: NdTargetType.Workspace } workspaceSelection &&
+            !string.IsNullOrWhiteSpace(workspaceSelection.Id))
+        {
+            return workspaceSelection.Id;
+        }
+
+        return string.Empty;
+    }
+
+    private static string SanitizeFileNameToken(string token)
+    {
+        var normalized = token.Trim();
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            normalized = normalized.Replace(invalid, '_');
+        }
+
+        normalized = normalized.Replace(' ', '_');
+        if (normalized.Length > 48)
+        {
+            normalized = normalized[..48];
+        }
+
+        return string.IsNullOrWhiteSpace(normalized) ? "workspace" : normalized;
     }
 
     private void InvalidateTargetBrowserContext(string reason)

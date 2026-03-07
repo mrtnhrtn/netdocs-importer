@@ -44,6 +44,22 @@ public partial class ReviewScopeStepView : System.Windows.Controls.UserControl
         }
     }
 
+    public void OnAddDirectUploadToQueue(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnAddDirectUploadToQueue(sender, e);
+        }
+    }
+
+    public void OnScheduleDirectUpload(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+        {
+            main.OnScheduleDirectUpload(sender, e);
+        }
+    }
+
     public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is MainWindow main)

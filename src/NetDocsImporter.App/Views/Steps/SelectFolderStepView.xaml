@@ -16,11 +16,16 @@
         <TextBlock Grid.Row="0" Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
         <TextBlock Grid.Row="1"
                    Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
-                   Foreground="#555555"
+                   Foreground="{DynamicResource MutedForegroundBrush}"
                    Margin="0,0,0,8"
                    TextWrapping="Wrap" />
 
-        <Border Grid.Row="2" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="10">
+        <Border Grid.Row="2"
+                Background="{DynamicResource SurfaceBackgroundBrush}"
+                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -41,7 +46,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
-                            <TextBlock Text="Repository" Foreground="#555555" />
+                            <TextBlock Text="Repository" Foreground="{DynamicResource MutedForegroundBrush}" />
                             <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
                                       SelectedValuePath="RepositoryId"
                                       DisplayMemberPath="RepositoryName"
@@ -53,7 +58,7 @@
                                       IsEnabled="{Binding IsNetDocumentsConnected}" />
                         </StackPanel>
                         <StackPanel Grid.Column="2">
-                            <TextBlock Text="Cabinet" Foreground="#555555" />
+                            <TextBlock Text="Cabinet" Foreground="{DynamicResource MutedForegroundBrush}" />
                             <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
                                       SelectedValuePath="CabinetId"
                                       DisplayMemberPath="CabinetName"
@@ -91,7 +96,13 @@
                     <TabItem Header="Go to Workspace" />
                 </TabControl>
 
-                <Border Grid.Row="2" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                <Border Grid.Row="2"
+                        Background="{DynamicResource ListBackgroundBrush}"
+                        BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8"
+                        Margin="0,0,0,8">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -105,12 +116,12 @@
                         <TextBlock Grid.Row="0" Text="Workspace / Folder / Filter Tree" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <TextBlock Grid.Row="1"
                                    Text="Loading recent workspaces..."
-                                   Foreground="#555555"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
                                    Margin="0,0,0,6"
                                    Visibility="{Binding IsLoadingRecentTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <TextBlock Grid.Row="2"
                                    Text="Loading favorite workspaces..."
-                                   Foreground="#555555"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
                                    Margin="0,0,0,6"
                                    Visibility="{Binding IsLoadingFavoriteTargets, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <Grid Grid.Row="3" Margin="0,0,0,6">
@@ -139,7 +150,7 @@
                                           IsChecked="{Binding IsBrowseFilterPanelVisible, Mode=TwoWay}" />
                             <Border Grid.Column="6"
                                     Padding="8,4"
-                                    BorderBrush="#E4E7EB"
+                                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="4"
                                     Visibility="{Binding IsBrowseFilterPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -160,7 +171,7 @@
                         </Grid>
                         <TextBlock Grid.Row="4"
                                    Text="{Binding WorkspaceLookupStatus}"
-                                   Foreground="#555555"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
                                    Margin="0,0,0,6"
                                    TextWrapping="Wrap" />
                         <TreeView Grid.Row="5"
@@ -170,10 +181,10 @@
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem">
                                     <EventSetter Event="Expanded" Handler="OnBrowseNodeExpanded" />
-                                    <Setter Property="Foreground" Value="#1F2933" />
+                                    <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
                                     <Style.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter Property="Foreground" Value="#FFFFFF" />
+                                            <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                         </Trigger>
                                     </Style.Triggers>
                                 </Style>
@@ -190,7 +201,7 @@
                                                     <Setter Property="Foreground" Value="{Binding IconColorHex}" />
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
-                                                            <Setter Property="Foreground" Value="#FFFFFF" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
@@ -200,10 +211,10 @@
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="#1F2933" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
-                                                                <Setter Property="Foreground" Value="#FFFFFF" />
+                                                                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -212,10 +223,10 @@
                                             <TextBlock Text="{Binding Metadata}" FontSize="11">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="#666666" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
-                                                                <Setter Property="Foreground" Value="#E5EDFF" />
+                                                                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -229,8 +240,17 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Grid.Row="3" Text="{Binding TargetBrowserMessage}" Foreground="#555555" FontSize="12" Margin="0,0,0,6" TextWrapping="Wrap" />
-                <TextBlock Grid.Row="4" Text="{Binding TargetProfileMetadataStatus}" Foreground="#555555" TextWrapping="Wrap" Margin="0,4,0,8" />
+                <TextBlock Grid.Row="3"
+                           Text="{Binding TargetBrowserMessage}"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           FontSize="12"
+                           Margin="0,0,0,6"
+                           TextWrapping="Wrap" />
+                <TextBlock Grid.Row="4"
+                           Text="{Binding TargetProfileMetadataStatus}"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,8" />
             </Grid>
         </Border>
     </Grid>

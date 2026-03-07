@@ -33,6 +33,8 @@ public sealed class NetDocumentsConnectionSettings
 
     public bool ExportDownloadFiltersAsFolders { get; set; } = true;
 
+    public bool ExportIncludeCustomAttributes { get; set; }
+
     // Legacy fields retained for migration from older settings versions.
     public string ClientId { get; set; } = string.Empty;
 

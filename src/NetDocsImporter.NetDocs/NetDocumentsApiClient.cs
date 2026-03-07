@@ -22,6 +22,7 @@ public sealed class NetDocumentsApiClient
     private readonly HttpClient _client;
     private readonly Func<NetDocumentsAuthContext> _authContextAccessor;
     private readonly Func<string> _apiBaseUrlAccessor;
+    private readonly AsyncLocal<Action<NdApiCallTrace>?> _callTraceObserver = new();
 
     /// <summary>
     /// Initializes a NetDocuments API client instance.
@@ -72,6 +73,18 @@ public sealed class NetDocumentsApiClient
         var content = await ReadContentAsStringAsync(response.Content, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
+            EmitApiCallTrace(new NdApiCallTrace
+            {
+                Method = "GET",
+                RelativePath = relativeOrAbsolutePath,
+                Url = requestUri.ToString(),
+                StatusCode = (int)response.StatusCode,
+                Succeeded = false,
+                DurationMs = stopwatch.ElapsedMilliseconds,
+                ResponseLength = content.Length,
+                ResponsePreview = BuildResponsePreview(content),
+                ErrorMessage = $"{(int)response.StatusCode} {response.ReasonPhrase}"
+            });
             LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, content);
             throw new InvalidOperationException(
                 $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(content)}");
@@ -88,8 +101,26 @@ public sealed class NetDocumentsApiClient
 
         Trace.WriteLine(
             $"ND-HTTP success method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+        EmitApiCallTrace(new NdApiCallTrace
+        {
+            Method = "GET",
+            RelativePath = relativeOrAbsolutePath,
+            Url = requestUri.ToString(),
+            StatusCode = (int)response.StatusCode,
+            Succeeded = true,
+            DurationMs = stopwatch.ElapsedMilliseconds,
+            ResponseLength = content.Length,
+            ResponsePreview = BuildResponsePreview(content)
+        });
 
         return JsonDocument.Parse(content);
+    }
+
+    public IDisposable PushApiCallTraceObserver(Action<NdApiCallTrace> observer)
+    {
+        var previous = _callTraceObserver.Value;
+        _callTraceObserver.Value = observer;
+        return new DelegateDisposable(() => _callTraceObserver.Value = previous);
     }
 
     /// <summary>
@@ -106,6 +137,73 @@ public sealed class NetDocumentsApiClient
         {
             PropertyNameCaseInsensitive = true
         });
+    }
+
+    public async Task<NdBinaryDownloadResponse> DownloadBinaryAsync(
+        string relativeOrAbsolutePath,
+        Stream destination,
+        CancellationToken cancellationToken = default,
+        TimeSpan? requestTimeout = null)
+    {
+        if (destination is null)
+        {
+            throw new ArgumentNullException(nameof(destination));
+        }
+
+        if (!destination.CanWrite)
+        {
+            throw new ArgumentException("Destination stream must be writable.", nameof(destination));
+        }
+
+        var requestUri = BuildUri(relativeOrAbsolutePath);
+        var stopwatch = Stopwatch.StartNew();
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.TryAddWithoutValidation("Accept", "*/*");
+        using var response = await SendRequestHeadersReadAsync(request, cancellationToken, requestTimeout);
+        stopwatch.Stop();
+
+        var statusCode = (int)response.StatusCode;
+        var retryAfter = response.Headers.RetryAfter?.Delta;
+        var contentLength = response.Content.Headers.ContentLength;
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await ReadContentAsStringAsync(response.Content, cancellationToken);
+            LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, errorBody);
+            return new NdBinaryDownloadResponse
+            {
+                Succeeded = false,
+                StatusCode = statusCode,
+                RequestPath = relativeOrAbsolutePath,
+                ErrorMessage = $"{statusCode} {response.ReasonPhrase}",
+                RetryAfter = retryAfter,
+                ContentLength = contentLength
+            };
+        }
+
+        await using var sourceStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await sourceStream.CopyToAsync(destination, cancellationToken);
+
+        var bytesWritten = 0L;
+        if (destination.CanSeek)
+        {
+            bytesWritten = destination.Position;
+        }
+        else if (contentLength.HasValue)
+        {
+            bytesWritten = contentLength.Value;
+        }
+
+        Trace.WriteLine(
+            $"ND-HTTP success method=GET-BINARY path='{relativeOrAbsolutePath}' url='{requestUri}' status={statusCode} latencyMs={stopwatch.ElapsedMilliseconds} bytes={bytesWritten}");
+
+        return new NdBinaryDownloadResponse
+        {
+            Succeeded = true,
+            StatusCode = statusCode,
+            RequestPath = relativeOrAbsolutePath,
+            BytesWritten = bytesWritten,
+            ContentLength = contentLength
+        };
     }
 
     /// <summary>
@@ -392,6 +490,22 @@ public sealed class NetDocumentsApiClient
         return SensitiveDataRedactor.RedactBearerTokens(snippet);
     }
 
+    private static string BuildResponsePreview(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = NormalizeWhitespace(text);
+        if (normalized.Length > 2048)
+        {
+            normalized = normalized[..2048];
+        }
+
+        return SensitiveDataRedactor.RedactBearerTokens(normalized);
+    }
+
     private static bool LooksLikeAkamaiAccessDenied(string text)
     {
         return text.IndexOf("Access Denied", StringComparison.OrdinalIgnoreCase) >= 0 &&
@@ -594,6 +708,21 @@ public sealed class NetDocumentsApiClient
         return await _client.SendAsync(request, timeoutCts.Token);
     }
 
+    private async Task<HttpResponseMessage> SendRequestHeadersReadAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout)
+    {
+        if (requestTimeout is null || requestTimeout <= TimeSpan.Zero)
+        {
+            return await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(requestTimeout.Value);
+        return await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+    }
+
     private static void AddRequestHeaders(
         HttpRequestMessage request,
         IReadOnlyDictionary<string, string>? requestHeaders)
@@ -627,5 +756,32 @@ public sealed class NetDocumentsApiClient
         }
 
         return values.FirstOrDefault();
+    }
+
+    private void EmitApiCallTrace(NdApiCallTrace trace)
+    {
+        _callTraceObserver.Value?.Invoke(trace);
+    }
+
+    private sealed class DelegateDisposable : IDisposable
+    {
+        private readonly Action _disposeAction;
+        private bool _disposed;
+
+        public DelegateDisposable(Action disposeAction)
+        {
+            _disposeAction = disposeAction;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _disposeAction();
+        }
     }
 }

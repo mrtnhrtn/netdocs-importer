@@ -3827,6 +3827,391 @@ public class NetDocumentsSyncServiceTargetsTests
         }
     }
 
+    [Fact]
+    public async Task CompareWorkspaceLoadingStrategiesAsync_CapturesBothStrategyTimingsAndApiCalls()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+
+                if (string.Equals(path, "/v2/container/WS-1/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": "WS-1",
+                            "description": "Workspace Root",
+                            "extension": "ndws"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v1/Workspace/WS-1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLT-1",
+                                "description": "All docs",
+                                "workspaceId": "WS-1",
+                                "Ext": "ndflt"
+                              }
+                            },
+                            {
+                              "standardAttributes": {
+                                "id": "FLD-1",
+                                "description": "General",
+                                "workspaceId": "WS-1",
+                                "Ext": "ndfld"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        [
+                          [
+                            { "EnvId": "FLT-1", "Name": "All docs", "MaxItems": 8, "ItemType": "SavedSearch" },
+                            { "EnvId": "FLD-1", "Name": "General", "MaxItems": 20, "ItemType": "Folder" }
+                          ]
+                        ]
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/FLT-1/", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("top=8", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "Results": [
+                            { "docId": "DOC-1", "standardAttributes": { "name": "A.pdf" } },
+                            { "docId": "DOC-2", "standardAttributes": { "name": "B.pdf" } }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/FLD-1/", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("top=20", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "Results": [
+                            { "docId": "DOC-3", "standardAttributes": { "name": "C.pdf" } }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, $$"""{"error":"not found","path":"{{path}}"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var result = await service.CompareWorkspaceLoadingStrategiesAsync("NG-CAB", "WS-1");
+
+            Assert.True(result.CurrentStrategy.Succeeded);
+            Assert.True(result.UiLikeMetadataOnlyStrategy.Succeeded);
+            Assert.True(result.UiLikeStrategy.Succeeded);
+            Assert.True(result.UiLikeParallelStrategy.Succeeded);
+            Assert.Equal(2, result.CurrentStrategy.ContainerCount);
+            Assert.Equal(2, result.UiLikeMetadataOnlyStrategy.SummaryRowCount);
+            Assert.Equal(0, result.UiLikeMetadataOnlyStrategy.DocumentCount);
+            Assert.Equal(2, result.UiLikeStrategy.SummaryRowCount);
+            Assert.Equal(3, result.UiLikeStrategy.DocumentCount);
+            Assert.Equal(2, result.UiLikeParallelStrategy.SummaryRowCount);
+            Assert.Equal(3, result.UiLikeParallelStrategy.DocumentCount);
+            Assert.NotEmpty(result.CurrentStrategy.ApiCalls);
+            Assert.NotEmpty(result.UiLikeMetadataOnlyStrategy.ApiCalls);
+            Assert.NotEmpty(result.UiLikeStrategy.ApiCalls);
+            Assert.NotEmpty(result.UiLikeParallelStrategy.ApiCalls);
+            Assert.Equal(1, result.CurrentStrategy.ApiCalls[0].Sequence);
+            Assert.Equal(1, result.UiLikeMetadataOnlyStrategy.ApiCalls[0].Sequence);
+            Assert.Equal(1, result.UiLikeStrategy.ApiCalls[0].Sequence);
+            Assert.Equal(1, result.UiLikeParallelStrategy.ApiCalls[0].Sequence);
+            Assert.Contains(
+                result.UiLikeStrategy.ApiCalls,
+                call => call.RelativePath.Contains("/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                result.UiLikeParallelStrategy.ApiCalls,
+                call => call.RelativePath.Contains("/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CompareWorkspaceLoadingStrategiesAsync_ReportsUiLikeErrorsWithoutHidingCurrentResults()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                if (string.Equals(path, "/v2/container/WS-1/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": "WS-1",
+                            "description": "Workspace Root",
+                            "extension": "ndws"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v1/Workspace/WS-1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLD-1",
+                                "description": "General",
+                                "workspaceId": "WS-1",
+                                "Ext": "ndfld"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.InternalServerError, """{"error":"summary failed"}""");
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, $$"""{"error":"not found","path":"{{path}}"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var result = await service.CompareWorkspaceLoadingStrategiesAsync("NG-CAB", "WS-1");
+
+            Assert.True(result.CurrentStrategy.Succeeded);
+            Assert.False(result.UiLikeMetadataOnlyStrategy.Succeeded);
+            Assert.False(result.UiLikeStrategy.Succeeded);
+            Assert.False(result.UiLikeParallelStrategy.Succeeded);
+            Assert.Contains("500", result.UiLikeStrategy.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("500", result.UiLikeMetadataOnlyStrategy.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("500", result.UiLikeParallelStrategy.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEmpty(result.UiLikeMetadataOnlyStrategy.ApiCalls);
+            Assert.NotEmpty(result.UiLikeStrategy.ApiCalls);
+            Assert.NotEmpty(result.UiLikeParallelStrategy.ApiCalls);
+            Assert.Contains(result.UiLikeMetadataOnlyStrategy.ApiCalls, call => !call.Succeeded && call.StatusCode == 500);
+            Assert.Contains(result.UiLikeStrategy.ApiCalls, call => !call.Succeeded && call.StatusCode == 500);
+            Assert.Contains(result.UiLikeParallelStrategy.ApiCalls, call => !call.Succeeded && call.StatusCode == 500);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetContainerChildrenAsync_PrefersWorkspaceSummaryForWorkspaceExpansion()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri);
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                if (string.Equals(path, "/v2/container/WS-1/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        { "data": { "id": "WS-1", "description": "Workspace Root", "extension": "ndws" } }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        [
+                          [
+                            { "EnvId": "FLT-1", "Name": "All docs", "MaxItems": 8, "ItemType": "SavedSearch" },
+                            { "EnvId": "FLD-1", "Name": "General", "MaxItems": 20, "ItemType": "Folder" }
+                          ]
+                        ]
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync("NG-CAB", parentContainerId: "WS-1", workspaceId: "WS-1", preferredType: NdTargetType.Workspace);
+
+            Assert.Equal(2, nodes.Count);
+            Assert.Equal(NdTargetType.WorkspaceFilter, nodes.Single(n => n.Id == "FLT-1").SupportedType);
+            Assert.Equal(NdTargetType.Folder, nodes.Single(n => n.Id == "FLD-1").SupportedType);
+            Assert.Contains(requests, uri => Uri.UnescapeDataString(uri.AbsolutePath).Equals("/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(requests, uri => Uri.UnescapeDataString(uri.AbsolutePath).StartsWith("/v1/Workspace/WS-1", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetContainerChildrenAsync_FallsBackToLegacyWhenWorkspaceSummaryFails()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri);
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                if (string.Equals(path, "/v2/container/WS-1/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        { "data": { "id": "WS-1", "description": "Workspace Root", "extension": "ndws" } }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.InternalServerError, """{"error":"summary failed"}""");
+                }
+
+                if (string.Equals(path, "/v1/Workspace/WS-1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLD-1",
+                                "description": "General",
+                                "workspaceId": "WS-1",
+                                "Ext": "ndfld"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync("NG-CAB", parentContainerId: "WS-1", workspaceId: "WS-1", preferredType: NdTargetType.Workspace);
+
+            var folder = Assert.Single(nodes);
+            Assert.Equal("FLD-1", folder.Id);
+            Assert.Equal(NdTargetType.Folder, folder.SupportedType);
+            Assert.Contains(requests, uri => Uri.UnescapeDataString(uri.AbsolutePath).Equals("/v2/container/WS-1/summary", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(requests, uri => Uri.UnescapeDataString(uri.AbsolutePath).Equals("/v1/Workspace/WS-1", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
     private static NetDocumentsSyncService CreateSyncService(HttpMessageHandler handler, string dbPath)
     {
         var apiClient = new NetDocumentsApiClient(

@@ -90,6 +90,7 @@ public sealed partial class MainViewModel
                 OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
                 OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
                 OnPropertyChanged(nameof(CanRunDirectUpload));
+                RaiseDirectUploadQueueAvailabilityChanged();
                 OnPropertyChanged(nameof(CanRefreshExportPreflight));
                 OnPropertyChanged(nameof(CanRunExport));
                 OnPropertyChanged(nameof(CanCancelExport));
@@ -133,6 +134,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            RaiseDirectUploadQueueAvailabilityChanged();
             OnPropertyChanged(nameof(CanRefreshExportPreflight));
             OnPropertyChanged(nameof(CanRunExport));
             HandleDirectUploadContextChanged(
@@ -180,6 +182,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(CanSearchWorkspaceTargets));
             OnPropertyChanged(nameof(CanUseWorkspaceSearchSelection));
             OnPropertyChanged(nameof(CanRunDirectUpload));
+            RaiseDirectUploadQueueAvailabilityChanged();
             OnPropertyChanged(nameof(CanRefreshExportPreflight));
             OnPropertyChanged(nameof(CanRunExport));
             HandleDirectUploadContextChanged(

@@ -229,6 +229,18 @@
                                     Click="OnRunDirectUpload"
                                     Style="{StaticResource PrimaryButton}"
                                     IsEnabled="{Binding CanRunDirectUpload}" />
+                            <Button Content="Add to Queue"
+                                    Width="110"
+                                    Margin="0,0,6,0"
+                                    Click="OnAddDirectUploadToQueue"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanAddDirectUploadToQueue}" />
+                            <Button Content="Schedule..."
+                                    Width="95"
+                                    Margin="0,0,6,0"
+                                    Click="OnScheduleDirectUpload"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanScheduleDirectUpload}" />
                             <Button Content="Cancel Upload"
                                     Width="110"
                                     Margin="0,0,6,0"
@@ -292,6 +304,9 @@
                                       Margin="0,0,16,0" />
                             <CheckBox Content="Download filters as folders"
                                       IsChecked="{Binding ExportDownloadFiltersAsFolders}" />
+                            <CheckBox Content="Include custom attributes"
+                                      IsChecked="{Binding ExportIncludeCustomAttributes}"
+                                      Margin="16,0,0,0" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBlock Text="Metadata format:" VerticalAlignment="Center" Margin="0,0,8,0" />

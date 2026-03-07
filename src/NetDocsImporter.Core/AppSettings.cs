@@ -29,6 +29,8 @@ public sealed class AppSettings
 
     public string ProfileSchemaPath { get; set; } = string.Empty;
 
+    public string Theme { get; set; } = "Light";
+
     public NetDocumentsConnectionSettings NetDocumentsConnection { get; set; } = new();
 
     public static async Task<AppSettings> LoadAsync(string path, CancellationToken cancellationToken = default)

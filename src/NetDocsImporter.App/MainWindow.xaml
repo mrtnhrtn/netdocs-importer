@@ -7,7 +7,13 @@
         xmlns:core="clr-namespace:NetDocsImporter.Core;assembly=NetDocsImporter.Core"
         xmlns:steps="clr-namespace:NetDocsImporter.App.Views.Steps"
         mc:Ignorable="d"
-        Title="NetDocs Importer" Height="720" Width="1180" MinHeight="620" MinWidth="980" WindowState="Maximized">
+        Title="NetDocs Importer"
+        Height="720"
+        Width="1180"
+        MinHeight="620"
+        MinWidth="980"
+        WindowState="Maximized"
+        Background="{DynamicResource WindowBackgroundBrush}">
     <Window.Resources>
         <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
@@ -153,7 +159,12 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="#F5F7FA" Padding="12" CornerRadius="6" BorderBrush="#E4E7EB" BorderThickness="1">
+        <Border Grid.Row="0"
+                Background="{DynamicResource SurfaceBackgroundBrush}"
+                Padding="12"
+                CornerRadius="6"
+                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                BorderThickness="1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -219,8 +230,8 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
-                    Background="#F8FAFC"
-                    BorderBrush="#E4E7EB"
+                    Background="{DynamicResource SurfaceBackgroundBrush}"
+                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="6"
                     Padding="8"
@@ -238,9 +249,11 @@
                             <Setter Property="Margin" Value="0,2" />
                             <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
                             <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
                             <Style.Triggers>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="#E9EDF2" />
+                                    <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                 </Trigger>
                             </Style.Triggers>
                         </Style>
@@ -254,7 +267,11 @@
                                     </Border>
                                     <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
                                 </StackPanel>
-                                <TextBlock Text="{Binding Subtitle}" Foreground="#667085" TextWrapping="Wrap" TextAlignment="Center" Margin="0,2,0,0" />
+                                <TextBlock Text="{Binding Subtitle}"
+                                           Foreground="{DynamicResource MutedForegroundBrush}"
+                                           TextWrapping="Wrap"
+                                           TextAlignment="Center"
+                                           Margin="0,2,0,0" />
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -262,8 +279,8 @@
             </Border>
 
             <Border Grid.Column="1"
-                    Background="White"
-                    BorderBrush="#E4E7EB"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="6"
                     Padding="12"
@@ -301,8 +318,8 @@
             </Border>
 
             <Border Grid.ColumnSpan="2"
-                    Background="#CCF8FAFC"
-                    BorderBrush="#D7DEE8"
+                    Background="{DynamicResource SurfaceBackgroundBrush}"
+                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="18"
@@ -312,14 +329,14 @@
                     <TextBlock Text="NetDocuments sign-in required"
                                FontWeight="SemiBold"
                                FontSize="18"
-                               Foreground="#0B2B5D"
+                               Foreground="{DynamicResource AccentForegroundBrush}"
                                Margin="0,0,0,8" />
                     <TextBlock Text="Open Settings (gear icon) and authenticate before using the workflow."
-                               Foreground="#334155"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
                                TextWrapping="Wrap"
                                Margin="0,0,0,6" />
                     <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}"
-                               Foreground="#475569"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
                                TextWrapping="Wrap"
                                Margin="0,0,0,12" />
                     <Button Content="Open Settings"
@@ -334,8 +351,8 @@
                     VerticalAlignment="Top"
                     Width="430"
                     MaxHeight="640"
-                    Background="#FFFFFF"
-                    BorderBrush="#CBD5E1"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="12"
@@ -349,7 +366,11 @@
                     </Grid.RowDefinitions>
 
                     <DockPanel LastChildFill="False" Margin="0,0,0,10">
-                        <TextBlock DockPanel.Dock="Left" Text="Settings" FontSize="18" FontWeight="SemiBold" Foreground="#0B2B5D" />
+                        <TextBlock DockPanel.Dock="Left"
+                                   Text="Settings"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentForegroundBrush}" />
                         <Button DockPanel.Dock="Right"
                                 Width="80"
                                 Content="Close"
@@ -360,14 +381,20 @@
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
+                            <TextBlock Text="Appearance" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,8" />
+                            <CheckBox Content="Enable dark mode"
+                                      IsChecked="{Binding IsDarkMode, Mode=TwoWay}"
+                                      Margin="0,0,0,12" />
                             <TextBlock Text="NetDocuments Connection" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,8" />
-                            <TextBlock Text="Region" Foreground="#555555" />
+                            <TextBlock Text="Region" Foreground="{DynamicResource MutedForegroundBrush}" />
                             <ComboBox ItemsSource="{Binding NetDocumentsRegions}"
                                       SelectedItem="{Binding SelectedNetDocumentsRegion}"
                                       Margin="0,2,0,6" />
                             <Border BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                                 <StackPanel>
-                                    <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}" Foreground="#555555" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding NetDocumentsConnectionProfileStatus}"
+                                               Foreground="{DynamicResource MutedForegroundBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border BorderBrush="#E4E7EB"
@@ -382,13 +409,13 @@
                                                FontWeight="SemiBold"
                                                Margin="0,0,0,6"
                                                TextWrapping="Wrap" />
-                                    <TextBlock Text="Client Id" Foreground="#555555" />
+                                    <TextBlock Text="Client Id" Foreground="{DynamicResource MutedForegroundBrush}" />
                                     <TextBox Text="{Binding NetDocumentsBootstrapClientId, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-                                    <TextBlock Text="Client Secret" Foreground="#555555" />
+                                    <TextBlock Text="Client Secret" Foreground="{DynamicResource MutedForegroundBrush}" />
                                     <PasswordBox Margin="0,2,0,6"
                                                  Loaded="OnNetDocumentsBootstrapClientSecretLoaded"
                                                  PasswordChanged="OnNetDocumentsBootstrapClientSecretPasswordChanged" />
-                                    <TextBlock Text="Redirect URI" Foreground="#555555" />
+                                    <TextBlock Text="Redirect URI" Foreground="{DynamicResource MutedForegroundBrush}" />
                                     <TextBox Text="{Binding NetDocumentsBootstrapRedirectUri, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,8" />
                                     <Button Content="Save Local OAuth Profile"
                                             Width="180"
@@ -416,16 +443,24 @@
                                         IsEnabled="{Binding CanDisconnectFromNetDocuments}"
                                         Style="{StaticResource SecondaryButton}" />
                             </StackPanel>
-                            <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}" Foreground="#555555" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding NetDocumentsConnectedUser, StringFormat=Connected user: {0}}"
+                                       Foreground="{DynamicResource MutedForegroundBrush}"
+                                       TextWrapping="Wrap" />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>
 
-        <Border Grid.Row="2" Background="#F8FAFC" BorderBrush="#E4E7EB" BorderThickness="1" Padding="8">
+        <Border Grid.Row="2"
+                Background="{DynamicResource SurfaceBackgroundBrush}"
+                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                BorderThickness="1"
+                Padding="8">
             <DockPanel>
-                <TextBlock Text="{Binding StatusText}" Foreground="#52606D" DockPanel.Dock="Left" />
+                <TextBlock Text="{Binding StatusText}"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           DockPanel.Dock="Left" />
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                     <TextBlock Text="Included:" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding IncludedFilesCountDisplay}" FontWeight="SemiBold" Margin="0,0,12,0" />

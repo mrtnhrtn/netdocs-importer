@@ -293,6 +293,93 @@ public sealed partial class NetDocumentsSyncService
         return Array.Empty<NdExportAttributeValue>();
     }
 
+    public async Task<NdBinaryDownloadResponse> DownloadDocumentBinaryForExportRunAsync(
+        string documentId,
+        string destinationFilePath,
+        string? versionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            return new NdBinaryDownloadResponse
+            {
+                Succeeded = false,
+                StatusCode = 0,
+                ErrorMessage = "Document id is required."
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(destinationFilePath))
+        {
+            return new NdBinaryDownloadResponse
+            {
+                Succeeded = false,
+                StatusCode = 0,
+                ErrorMessage = "Destination file path is required."
+            };
+        }
+
+        var encodedDocumentId = Uri.EscapeDataString(documentId);
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(versionId))
+        {
+            var encodedVersionId = Uri.EscapeDataString(versionId);
+            candidates.Add($"/v1/Document/{encodedDocumentId}/{encodedVersionId}");
+            candidates.Add($"/v1/Document/{encodedDocumentId}/{encodedVersionId}?download=true");
+        }
+        else
+        {
+            candidates.Add($"/v1/Document/{encodedDocumentId}");
+            candidates.Add($"/v1/Document/{encodedDocumentId}?download=true");
+        }
+
+        NdBinaryDownloadResponse? lastFailure = null;
+        foreach (var path in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await using var stream = new FileStream(destinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+                var response = await _apiClient.DownloadBinaryAsync(path, stream, cancellationToken);
+                if (response.Succeeded)
+                {
+                    return response;
+                }
+
+                lastFailure = response;
+                DeleteIfExists(destinationFilePath);
+                if (response.StatusCode is 429 or 408 or 500 or 502 or 503 or 504)
+                {
+                    return response;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                DeleteIfExists(destinationFilePath);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                DeleteIfExists(destinationFilePath);
+                lastFailure = new NdBinaryDownloadResponse
+                {
+                    Succeeded = false,
+                    StatusCode = 0,
+                    RequestPath = path,
+                    ErrorMessage = ex.Message
+                };
+            }
+        }
+
+        return lastFailure ?? new NdBinaryDownloadResponse
+        {
+            Succeeded = false,
+            StatusCode = 0,
+            ErrorMessage = "Document download failed for all endpoint variants."
+        };
+    }
+
     private async Task<IReadOnlyList<NdExportDocument>> QueryContainerDocumentPageAsync(
         string cabinetId,
         string containerId,
@@ -446,6 +533,24 @@ public sealed partial class NetDocumentsSyncService
                         ?? ReadNullableLong(item, "sizeBytes", "size", "bytes", "contentLength"),
             OfficialVersionId = ReadOfficialVersionId(source) ?? ReadOfficialVersionId(item)
         };
+        row.VersionHints.AddRange(ReadVersionsLite(source));
+        row.VersionHints.AddRange(ReadVersionsLite(item));
+        if (row.VersionHints.Count > 1)
+        {
+            var dedupedHints = row.VersionHints
+                .Where(version => !string.IsNullOrWhiteSpace(version.VersionId))
+                .GroupBy(version => version.VersionId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+            row.VersionHints.Clear();
+            row.VersionHints.AddRange(dedupedHints);
+        }
+        if (string.IsNullOrWhiteSpace(row.OfficialVersionId))
+        {
+            row.OfficialVersionId = row.VersionHints
+                .FirstOrDefault(version => version.IsOfficial)?
+                .VersionId;
+        }
 
         row.StandardAttributes.AddRange(ReadStandardAttributes(source));
         row.StandardAttributes.AddRange(ReadStandardAttributes(item));
@@ -573,6 +678,67 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<NdExportDocumentVersion> ReadVersionsLite(JsonElement node)
+    {
+        var versions = new List<NdExportDocumentVersion>();
+        if (!TryGetPropertyIgnoreCase(node, "versionsLite", out var versionsLiteNode))
+        {
+            return versions;
+        }
+
+        if (versionsLiteNode.ValueKind == JsonValueKind.Object)
+        {
+            var versionId = ReadString(
+                versionsLiteNode,
+                "officialVersionId",
+                "officialVersion",
+                "currentVersionId",
+                "latestVersionId",
+                "versionId",
+                "id");
+            if (!string.IsNullOrWhiteSpace(versionId))
+            {
+                versions.Add(new NdExportDocumentVersion
+                {
+                    VersionId = versionId,
+                    IsOfficial = true
+                });
+            }
+
+            return versions;
+        }
+
+        if (versionsLiteNode.ValueKind != JsonValueKind.Array)
+        {
+            return versions;
+        }
+
+        foreach (var versionNode in versionsLiteNode.EnumerateArray())
+        {
+            var versionId = ReadString(
+                versionNode,
+                "versionId",
+                "version",
+                "id",
+                "verNo",
+                "ver");
+            if (string.IsNullOrWhiteSpace(versionId))
+            {
+                continue;
+            }
+
+            versions.Add(new NdExportDocumentVersion
+            {
+                VersionId = versionId,
+                FileName = ReadString(versionNode, "name", "description", "title", "docName", "filename"),
+                SizeBytes = ReadNullableLong(versionNode, "sizeBytes", "size", "bytes", "contentLength"),
+                IsOfficial = ReadBool(versionNode, "official", "isOfficial", "officialVersion", "isCurrent")
+            });
+        }
+
+        return versions;
     }
 
     private static IReadOnlyList<NdExportAttributeValue> ReadStandardAttributes(JsonElement node)
@@ -750,5 +916,25 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return null;
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup.
+        }
     }
 }
