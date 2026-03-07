@@ -13,8 +13,8 @@
                 <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
                 <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanLaunchNdImport}" />
             </StackPanel>
-            <TextBlock Text="Launch is enabled after a valid export CSV is generated." Foreground="#666666" Margin="0,0,0,6" />
-            <TextBlock Text="Path to ndimport.exe" Foreground="#555555" />
+            <TextBlock Text="Launch is enabled after a valid export CSV is generated." Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" />
+            <TextBlock Text="Path to ndimport.exe" Foreground="{DynamicResource MutedForegroundBrush}" />
             <Grid Margin="0,2,0,6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -23,17 +23,17 @@
                 <TextBox Grid.Column="0" Text="{Binding NdImportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,6,0" />
                 <Button Grid.Column="1" Content="Browse..." Width="90" Click="OnBrowseNdImportExecutable" Style="{StaticResource SecondaryButton}" />
             </Grid>
-            <TextBlock Text="Host" Foreground="#555555" />
+            <TextBlock Text="Host" Foreground="{DynamicResource MutedForegroundBrush}" />
             <ComboBox SelectedValue="{Binding NdImportHost}" SelectedValuePath="Content" Margin="0,2,0,6">
                 <ComboBoxItem Content="upload.au.netdocuments.com" />
                 <ComboBoxItem Content="upload.eu.netdocuments.com" />
                 <ComboBoxItem Content="upload.vault.netvoyage.com" />
             </ComboBox>
-            <TextBlock Text="Cabinet" Foreground="#555555" />
+            <TextBlock Text="Cabinet" Foreground="{DynamicResource MutedForegroundBrush}" />
             <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-            <TextBlock Text="Username" Foreground="#555555" />
+            <TextBlock Text="Username" Foreground="{DynamicResource MutedForegroundBrush}" />
             <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-            <TextBlock Text="Password (optional)" Foreground="#555555" />
+            <TextBlock Text="Password (optional)" Foreground="{DynamicResource MutedForegroundBrush}" />
             <PasswordBox Margin="0,2,0,4" PasswordChanged="OnNdImportPasswordChanged" Loaded="OnNdImportPasswordLoaded" />
             <CheckBox Content="Remember password on this device (encrypted)" IsChecked="{Binding RememberNdImportPassword}" Margin="0,0,0,6" />
             <CheckBox Content="Include password on CLI /pass (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
@@ -61,8 +61,8 @@
                 <Button Content="Cancel Upload" Width="110" Margin="0,0,6,0" Click="OnCancelDirectUpload" Style="{StaticResource SecondaryButton}" IsEnabled="{Binding CanCancelDirectUpload}" />
                 <Button Content="Open Last CSV" Width="110" Click="OnOpenLastDirectUploadReport" Style="{StaticResource SecondaryButton}" IsEnabled="{Binding CanOpenLastDirectUploadReport}" />
             </StackPanel>
-            <TextBlock Text="{Binding DirectUploadStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
-            <TextBlock Text="Preflight Issues" Foreground="#555555" />
+            <TextBlock Text="{Binding DirectUploadStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+            <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
             <DataGrid ItemsSource="{Binding DirectUploadPreflightIssues}" AutoGenerateColumns="False" CanUserAddRows="False" Margin="0,4,0,0" MinHeight="160">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="90" />

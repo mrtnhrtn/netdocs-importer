@@ -87,11 +87,11 @@ public sealed class NetDocumentsSyncServiceExportTests
             var includeFilters = await service.EnumerateExportScopesAsync("NG-CAB", root, includeWorkspaceFilters: true);
             var excludeFilters = await service.EnumerateExportScopesAsync("NG-CAB", root, includeWorkspaceFilters: false);
 
-            Assert.Equal(3, includeFilters.Count);
-            Assert.Contains(includeFilters, scope => scope.Kind == NdExportScopeKind.WorkspaceFilter);
+            Assert.Equal(3, includeFilters.Scopes.Count);
+            Assert.Contains(includeFilters.Scopes, scope => scope.Kind == NdExportScopeKind.WorkspaceFilter);
 
-            Assert.Equal(2, excludeFilters.Count);
-            Assert.DoesNotContain(excludeFilters, scope => scope.Kind == NdExportScopeKind.WorkspaceFilter);
+            Assert.Equal(2, excludeFilters.Scopes.Count);
+            Assert.DoesNotContain(excludeFilters.Scopes, scope => scope.Kind == NdExportScopeKind.WorkspaceFilter);
         }
         finally
         {
@@ -273,9 +273,9 @@ public sealed class NetDocumentsSyncServiceExportTests
 
             var scopes = await service.EnumerateExportScopesAsync("NG-CAB", root, includeWorkspaceFilters: true);
 
-            Assert.Equal(2, scopes.Count);
-            Assert.Contains(scopes, scope => scope.ContainerId == envWorkspaceId);
-            Assert.Contains(scopes, scope => scope.ContainerId == "FLD-1");
+            Assert.Equal(2, scopes.Scopes.Count);
+            Assert.Contains(scopes.Scopes, scope => scope.ContainerId == envWorkspaceId);
+            Assert.Contains(scopes.Scopes, scope => scope.ContainerId == "FLD-1");
         }
         finally
         {
@@ -408,8 +408,63 @@ public sealed class NetDocumentsSyncServiceExportTests
 
             var scopes = await service.EnumerateExportScopesAsync("NG-CAB", root, includeWorkspaceFilters: true);
 
-            Assert.Equal(251, scopes.Count);
-            Assert.Contains(scopes, scope => scope.ContainerId == ":AU2:3:u:l:a:^F250.nev");
+            Assert.Equal(251, scopes.Scopes.Count);
+            Assert.Contains(scopes.Scopes, scope => scope.ContainerId == ":AU2:3:u:l:a:^F250.nev");
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnumerateExportScopesAsync_SurfacesTraversalFailuresAsIssues()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-scope-issue-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                var path = request.RequestUri.AbsolutePath;
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.InternalServerError, """{"error":"container lookup failed"}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var root = new NdTargetSelection
+            {
+                Type = NdTargetType.Workspace,
+                Id = "ROOT",
+                Name = "Workspace Root",
+                Extension = "ndws"
+            };
+
+            var result = await service.EnumerateExportScopesAsync("NG-CAB", root, includeWorkspaceFilters: true);
+
+            Assert.Single(result.Scopes);
+            Assert.Single(result.Issues);
+            Assert.True(result.IsPartial);
+            Assert.Equal("ROOT", result.Issues[0].ContainerId);
+            Assert.Equal("Workspace Root", result.Issues[0].ScopeName);
         }
         finally
         {

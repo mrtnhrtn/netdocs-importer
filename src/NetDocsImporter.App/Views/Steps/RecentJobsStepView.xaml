@@ -11,7 +11,8 @@
                    Foreground="{DynamicResource MutedForegroundBrush}"
                    Margin="0,0,0,8"
                    TextWrapping="Wrap" />
-        <Border BorderBrush="#E4E7EB"
+        <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                BorderBrush="{DynamicResource SurfaceBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="8"
@@ -25,42 +26,56 @@
 
         <TabControl Height="500">
             <TabItem Header="Queue">
-                <Grid Margin="0,8,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="{Binding QueueMonitorStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" />
-                    <ListView Grid.Row="1" ItemsSource="{Binding UploadQueueJobs}">
+                <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                        BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8"
+                        Margin="0,8,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="{Binding QueueMonitorStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" />
+                        <ListView Grid.Row="1" ItemsSource="{Binding UploadQueueJobs}">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Queue ID" Width="90" DisplayMemberBinding="{Binding QueueJobShortId}" />
+                                    <GridViewColumn Header="State" Width="90" DisplayMemberBinding="{Binding State}" />
+                                    <GridViewColumn Header="Scheduled For" Width="130" DisplayMemberBinding="{Binding ScheduledDisplay}" />
+                                    <GridViewColumn Header="Created" Width="130" DisplayMemberBinding="{Binding CreatedDisplay}" />
+                                    <GridViewColumn Header="Source Job" Width="100" DisplayMemberBinding="{Binding SourceJobId}" />
+                                    <GridViewColumn Header="Source Root" Width="420" DisplayMemberBinding="{Binding SourceRoot}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Grid>
+                </Border>
+            </TabItem>
+            <TabItem Header="History">
+                <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                        BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8"
+                        Margin="0,8,0,0">
+                    <ListView ItemsSource="{Binding RecentJobs}" SelectedItem="{Binding SelectedRecentJob, Mode=TwoWay}">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Queue ID" Width="90" DisplayMemberBinding="{Binding QueueJobShortId}" />
-                                <GridViewColumn Header="State" Width="90" DisplayMemberBinding="{Binding State}" />
-                                <GridViewColumn Header="Scheduled For" Width="130" DisplayMemberBinding="{Binding ScheduledDisplay}" />
-                                <GridViewColumn Header="Created" Width="130" DisplayMemberBinding="{Binding CreatedDisplay}" />
-                                <GridViewColumn Header="Source Job" Width="100" DisplayMemberBinding="{Binding SourceJobId}" />
-                                <GridViewColumn Header="Source Root" Width="420" DisplayMemberBinding="{Binding SourceRoot}" />
+                                <GridViewColumn Header="Job ID" Width="90" DisplayMemberBinding="{Binding JobIdShort}" />
+                                <GridViewColumn Header="Created" Width="125" DisplayMemberBinding="{Binding CreatedDisplay}" />
+                                <GridViewColumn Header="Status" Width="95" DisplayMemberBinding="{Binding Status}" />
+                                <GridViewColumn Header="Files" Width="70" DisplayMemberBinding="{Binding FileCountDisplay}" />
+                                <GridViewColumn Header="Total Size" Width="95" DisplayMemberBinding="{Binding TotalBytesDisplay}" />
+                                <GridViewColumn Header="Large Warnings" Width="95" DisplayMemberBinding="{Binding LargeWarningsDisplay}" />
+                                <GridViewColumn Header="Last Run" Width="125" DisplayMemberBinding="{Binding LastRunDisplay}" />
+                                <GridViewColumn Header="Run Status" Width="140" DisplayMemberBinding="{Binding LastRunStatus}" />
+                                <GridViewColumn Header="Run Summary" Width="420" DisplayMemberBinding="{Binding LastRunSummary}" />
                             </GridView>
                         </ListView.View>
                     </ListView>
-                </Grid>
-            </TabItem>
-            <TabItem Header="History">
-                <ListView ItemsSource="{Binding RecentJobs}" SelectedItem="{Binding SelectedRecentJob, Mode=TwoWay}" Margin="0,8,0,0">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Job ID" Width="90" DisplayMemberBinding="{Binding JobIdShort}" />
-                            <GridViewColumn Header="Created" Width="125" DisplayMemberBinding="{Binding CreatedDisplay}" />
-                            <GridViewColumn Header="Status" Width="95" DisplayMemberBinding="{Binding Status}" />
-                            <GridViewColumn Header="Files" Width="70" DisplayMemberBinding="{Binding FileCountDisplay}" />
-                            <GridViewColumn Header="Total Size" Width="95" DisplayMemberBinding="{Binding TotalBytesDisplay}" />
-                            <GridViewColumn Header="Large Warnings" Width="95" DisplayMemberBinding="{Binding LargeWarningsDisplay}" />
-                            <GridViewColumn Header="Last Run" Width="125" DisplayMemberBinding="{Binding LastRunDisplay}" />
-                            <GridViewColumn Header="Run Status" Width="140" DisplayMemberBinding="{Binding LastRunStatus}" />
-                            <GridViewColumn Header="Run Summary" Width="420" DisplayMemberBinding="{Binding LastRunSummary}" />
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                </Border>
             </TabItem>
         </TabControl>
     </StackPanel>

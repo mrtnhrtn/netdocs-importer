@@ -68,6 +68,39 @@ Do not break import code or change query or order of existing netdocuments calls
   - `ContainerCount`, `DocumentCount`, `VersionCount`, `EstimatedBytes`
   - warning counts for unsupported/failed scopes and metadata fallback paths
 
+## Workspace Coverage Confidence
+When the user selects a workspace as the export root, the current search/enumeration behavior is intended to give confidence that all reachable items under that workspace were planned and exported.
+
+For customer-facing wording, see `docs/export-workspace-coverage-assurance.md`.
+
+What the exporter does today:
+- Normalize the selected root id before traversal so Recent/Favorite workspace ids and browse ids converge on the same container identity.
+- Traverse the selected root breadth-first across all supported child container types:
+  - folders (`ndfld`)
+  - workspace filters (`ndflt`) when the option is enabled
+  - saved searches (`ndsq`) even when filters are otherwise excluded
+  - collabspaces (`ndcs`)
+- Enumerate documents directly under every discovered container, including files that live at the selected workspace root and not only inside child folders.
+- Continue paging document queries until exhaustion, using `skiptoken` or offset progression depending on the endpoint shape.
+- Deduplicate repeated container hits by `(target type, container id)` so the same branch is not traversed twice under alternate ids.
+- Deduplicate repeated document/version hits by `(document id, version id)` across overlapping scopes, while keeping the preferred folder/workspace surface as the canonical export path.
+
+What gives the user evidence after the run:
+- `manifest-<run>.json` records the canonical exported path for each document/version.
+- Each manifest item also keeps `SourceReferences` for every overlapping search surface that matched the same item, marking them as `Exported` or `SkippedDuplicate`.
+- `metadata-<run>.json` or `.xml` records per-item status so the user can distinguish planned-but-failed downloads from items that were never discovered.
+- The export run log records aggregate counts and per-item outcomes, which is the audit trail for a specific run.
+
+What this means in practice:
+- If a document appears through multiple workspace surfaces, it should still produce one exported file, not duplicates.
+- The retained manifest and metadata artifacts are the proof set for that run: one file per canonical item, plus the alternate source references showing where duplicates were suppressed.
+- A clean run with expected counts, no preflight warnings, and no per-item failures is the strongest evidence we currently provide that the workspace content was retained.
+
+Current known confidence limits:
+- Scope traversal failures in `EnumerateExportScopesAsync(...)` are now surfaced as export preflight issues and mark the result incomplete, so export should not proceed until those coverage issues are resolved.
+- `All versions=true` is only reliable when version data is present in `VersionsLite`. If version hints are absent, the current fallback path does not prove full historical version coverage.
+- The confidence claim is therefore accurate for reachable, successfully enumerated containers and for the version data actually returned by the supported APIs used in preflight.
+
 ## Custom Attributes Option
 - `Include custom attributes` is an export option and defaults to `false`.
 - With default settings, preflight does not expand synced custom-attribute ids into document-list `select`.

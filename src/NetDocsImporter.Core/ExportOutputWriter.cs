@@ -10,10 +10,10 @@ public sealed class ExportOutputWriter
         WriteIndented = true
     };
 
-    public async Task<string> WriteManifestAsync(string destinationRootPath, IReadOnlyList<ExportItem> items, CancellationToken cancellationToken = default)
+    public async Task<string> WriteManifestAsync(string destinationRootPath, string artifactId, IReadOnlyList<ExportItem> items, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(destinationRootPath);
-        var manifestPath = Path.Combine(destinationRootPath, "manifest.json");
+        var manifestPath = BuildArtifactPath(destinationRootPath, "manifest", artifactId, ".json");
 
         var manifest = new ExportManifest
         {
@@ -23,7 +23,16 @@ public sealed class ExportOutputWriter
                 DocumentId = item.DocumentId,
                 VersionId = item.VersionId,
                 SourcePath = item.SourcePath,
-                LocalPath = item.LocalPath
+                LocalPath = item.LocalPath,
+                SourceReferences = item.SourceReferences
+                    .Select(reference => new ExportSourceReference
+                    {
+                        SourcePath = reference.SourcePath,
+                        ScopeKind = reference.ScopeKind,
+                        Disposition = reference.Disposition,
+                        Reason = reference.Reason
+                    })
+                    .ToList()
             }).ToList()
         };
 
@@ -32,25 +41,34 @@ public sealed class ExportOutputWriter
         return manifestPath;
     }
 
-    public async Task<string> WriteMetadataAsync(string destinationRootPath, MetadataDump metadata, ExportMetadataFormat format, CancellationToken cancellationToken = default)
+    public async Task<string> WriteMetadataAsync(string destinationRootPath, string artifactId, MetadataDump metadata, ExportMetadataFormat format, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(destinationRootPath);
         if (format == ExportMetadataFormat.Xml)
         {
-            var xmlPath = Path.Combine(destinationRootPath, "metadata.xml");
+            var xmlPath = BuildArtifactPath(destinationRootPath, "metadata", artifactId, ".xml");
             var serializer = new XmlSerializer(typeof(MetadataDump));
             await using var stream = new FileStream(xmlPath, FileMode.Create, FileAccess.Write, FileShare.Read);
             serializer.Serialize(stream, metadata);
             return xmlPath;
         }
 
-        var jsonPath = Path.Combine(destinationRootPath, "metadata.json");
+        var jsonPath = BuildArtifactPath(destinationRootPath, "metadata", artifactId, ".json");
         await using (var stream = new FileStream(jsonPath, FileMode.Create, FileAccess.Write, FileShare.Read))
         {
             await JsonSerializer.SerializeAsync(stream, metadata, JsonOptions, cancellationToken);
         }
 
         return jsonPath;
+    }
+
+    private static string BuildArtifactPath(string destinationRootPath, string prefix, string artifactId, string extension)
+    {
+        var sanitizedArtifactId = string.IsNullOrWhiteSpace(artifactId)
+            ? DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff")
+            : string.Concat(artifactId.Trim().Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-'));
+
+        return Path.Combine(destinationRootPath, $"{prefix}-{sanitizedArtifactId}{extension}");
     }
 }
 
@@ -70,4 +88,6 @@ public sealed class ExportManifestItem
     public string SourcePath { get; set; } = string.Empty;
 
     public string LocalPath { get; set; } = string.Empty;
+
+    public List<ExportSourceReference> SourceReferences { get; set; } = new();
 }

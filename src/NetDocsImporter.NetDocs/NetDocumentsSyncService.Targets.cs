@@ -668,9 +668,12 @@ public sealed partial class NetDocumentsSyncService
         string? parentContainerId = null,
         string? workspaceId = null,
         NdTargetType? preferredType = null,
+        bool throwOnFailure = false,
         CancellationToken cancellationToken = default)
     {
         var results = new List<NdContainerNode>();
+        Exception? lastFailure = null;
+        var hadSuccessfulEnumeration = false;
         var workspaceContext = preferredType == NdTargetType.Workspace || !string.IsNullOrWhiteSpace(workspaceId);
         var forceWorkspaceEndpoints = ShouldForceWorkspaceChildEndpoints(parentContainerId, workspaceId, preferredType);
         var searchScopeId = !string.IsNullOrWhiteSpace(parentContainerId)
@@ -732,6 +735,7 @@ public sealed partial class NetDocumentsSyncService
                         cancellationToken,
                         forceWorkspaceEndpoints: forceWorkspaceEndpoints ||
                                                  IsContainerIdentityEquivalent(scopeCandidate, workspaceId));
+                    hadSuccessfulEnumeration |= queryResult.EndpointSucceeded;
                     if (queryResult.Items.Count > 0)
                     {
                         var beforeCount = results.Count;
@@ -768,6 +772,7 @@ public sealed partial class NetDocumentsSyncService
                                 cancellationToken,
                                 top: 200,
                                 containerId: scopeCandidate);
+                            hadSuccessfulEnumeration |= items.Count > 0;
                             if (items.Count == 0)
                             {
                                 continue;
@@ -806,8 +811,9 @@ public sealed partial class NetDocumentsSyncService
                         .ToList();
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                lastFailure = ex;
                 // Continue to endpoint fallback.
             }
         }
@@ -825,6 +831,7 @@ public sealed partial class NetDocumentsSyncService
             try
             {
                 using var document = await _apiClient.GetJsonAsync(path, cancellationToken);
+                hadSuccessfulEnumeration = true;
                 var nodes = await ParseContainerChildrenAsync(
                     document.RootElement,
                     fallbackParentId,
@@ -835,10 +842,18 @@ public sealed partial class NetDocumentsSyncService
                     break;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                lastFailure = ex;
                 // Continue to endpoint fallback.
             }
+        }
+
+        if (throwOnFailure && results.Count == 0 && !hadSuccessfulEnumeration && lastFailure is not null)
+        {
+            throw new InvalidOperationException(
+                $"Failed to enumerate child containers for '{parentContainerId ?? workspaceId ?? cabinetId}'.",
+                lastFailure);
         }
 
         return results

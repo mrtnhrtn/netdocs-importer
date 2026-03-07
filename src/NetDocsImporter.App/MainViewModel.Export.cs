@@ -25,6 +25,8 @@ public sealed partial class MainViewModel
 
     public ObservableCollection<ExportPreflightIssueView> ExportPreflightIssues => _exportPreflightIssues;
 
+    public bool HasExportPreflightWarnings => ExportPreflightWarnings.Count > 0;
+
     public bool IsExportBusy
     {
         get => _isExportBusy;
@@ -70,6 +72,7 @@ public sealed partial class MainViewModel
         !IsExportBusy &&
         _exportPlan is not null &&
         IsExportPlanAlignedWithCurrentContext() &&
+        !_exportPlan.HasBlockingCoverageIssues &&
         _exportPlan.Items.Count > 0 &&
         !string.IsNullOrWhiteSpace(ExportDestinationRootPath);
 
@@ -106,9 +109,7 @@ public sealed partial class MainViewModel
         try
         {
             IsExportBusy = true;
-            ExportProgressPercent = 0;
-            OnPropertyChanged(nameof(ExportProgressPercentDisplay));
-            ExportStatus = "Building export preflight plan...";
+            UpdateExportPreflightProgress(2, "Preparing export preflight...");
 
             var sync = RequireSyncService();
             var resolver = new ExportPathResolver();
@@ -119,10 +120,24 @@ public sealed partial class MainViewModel
             var savedSearchCount = 0;
             var collabspaceCount = 0;
             var rootSelection = CloneSelection(_selectedNetDocumentsTarget);
-            var scopes = await sync.EnumerateExportScopesAsync(
+            UpdateExportPreflightProgress(8, "Resolving export scope...");
+            var scopeEnumeration = await sync.EnumerateExportScopesAsync(
                 SelectedNetDocumentsCabinetId,
                 rootSelection,
                 includeWorkspaceFilters: ExportDownloadFiltersAsFolders);
+            var scopes = scopeEnumeration.Scopes;
+            UpdateExportPreflightProgress(
+                20,
+                $"Export scope resolved. {scopes.Count:N0} container(s) queued for planning.");
+
+            foreach (var traversalIssue in scopeEnumeration.Issues)
+            {
+                issues.Add(new ExportPreflightIssueView(
+                    "Error",
+                    "SCOPE_ENUMERATION_FAILED",
+                    traversalIssue.Message,
+                    traversalIssue.ScopeName));
+            }
 
             foreach (var scope in scopes)
             {
@@ -143,13 +158,22 @@ public sealed partial class MainViewModel
                 }
             }
 
-            var exportItems = new List<ExportItem>();
+            var plannedCandidates = new Dictionary<string, PlannedExportCandidate>(StringComparer.OrdinalIgnoreCase);
             var folderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var uniqueDocumentIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var duplicateCandidateCount = 0;
+            var totalScopes = Math.Max(1, scopes.Count);
+            var processedScopes = 0;
 
             foreach (var scope in scopes)
             {
+                processedScopes++;
+                var scopeStartPercent = 20 + (((double)processedScopes - 1) / totalScopes * 55d);
+                var scopeEndPercent = 20 + ((double)processedScopes / totalScopes * 55d);
+                UpdateExportPreflightProgress(
+                    scopeStartPercent,
+                    $"Planning scope {processedScopes:N0}/{scopes.Count:N0}: {scope.Name}");
+
                 var relativeDirectoryPath = resolver.ResolveRelativeDirectoryPath(scope.PathSegments);
                 if (!string.IsNullOrWhiteSpace(relativeDirectoryPath))
                 {
@@ -171,7 +195,28 @@ public sealed partial class MainViewModel
                         "DOCUMENT_ENUMERATION_FAILED",
                         ex.Message,
                         scope.Name));
+                    UpdateExportPreflightProgress(
+                        scopeEndPercent,
+                        $"Skipped scope {processedScopes:N0}/{scopes.Count:N0}: {scope.Name}");
                     continue;
+                }
+
+                var documentsProcessedInScope = 0;
+                void ReportScopeDocumentProgress()
+                {
+                    documentsProcessedInScope++;
+                    if (documentsProcessedInScope % 25 != 0 && documentsProcessedInScope != documents.Count)
+                    {
+                        return;
+                    }
+
+                    var scopePercent = scopeStartPercent +
+                                       ((double)documentsProcessedInScope / Math.Max(1, documents.Count) *
+                                        (scopeEndPercent - scopeStartPercent));
+                    UpdateExportPreflightProgress(
+                        scopePercent,
+                        $"Planning scope {processedScopes:N0}/{scopes.Count:N0}: {scope.Name} " +
+                        $"({documentsProcessedInScope:N0}/{documents.Count:N0} documents)");
                 }
 
                 foreach (var document in documents)
@@ -220,29 +265,29 @@ public sealed partial class MainViewModel
 
                         if (versions.Count == 0)
                         {
-                            var fallback = BuildExportItem(
-                                resolver,
+                            AddOrUpdatePlannedCandidate(
+                                plannedCandidates,
                                 scope,
                                 document,
                                 version: null,
                                 dedupedBaseMetadata,
-                                usedRelativePaths);
-                            exportItems.Add(fallback);
+                                ref duplicateCandidateCount);
+                            ReportScopeDocumentProgress();
                             continue;
                         }
 
                         foreach (var version in versions)
                         {
-                            var item = BuildExportItem(
-                                resolver,
+                            AddOrUpdatePlannedCandidate(
+                                plannedCandidates,
                                 scope,
                                 document,
                                 version,
                                 dedupedBaseMetadata,
-                                usedRelativePaths);
-                            exportItems.Add(item);
+                                ref duplicateCandidateCount);
                         }
 
+                        ReportScopeDocumentProgress();
                         continue;
                     }
 
@@ -255,13 +300,47 @@ public sealed partial class MainViewModel
                             SizeBytes = document.SizeBytes
                         };
 
-                    exportItems.Add(BuildExportItem(
-                        resolver,
+                    AddOrUpdatePlannedCandidate(
+                        plannedCandidates,
                         scope,
                         document,
                         officialVersion,
                         dedupedBaseMetadata,
-                        usedRelativePaths));
+                        ref duplicateCandidateCount);
+                    ReportScopeDocumentProgress();
+                }
+
+                if (documents.Count == 0)
+                {
+                    UpdateExportPreflightProgress(
+                        scopeEndPercent,
+                        $"Planning scope {processedScopes:N0}/{scopes.Count:N0}: {scope.Name} (no documents)");
+                }
+            }
+
+            UpdateExportPreflightProgress(82, "Assembling export plan...");
+            var exportItems = new List<ExportItem>(plannedCandidates.Count);
+            var usedRelativePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var assembledItems = 0;
+            var totalCandidates = Math.Max(1, plannedCandidates.Count);
+            foreach (var candidate in plannedCandidates.Values)
+            {
+                exportItems.Add(BuildExportItem(
+                    resolver,
+                    candidate.Scope,
+                    candidate.Document,
+                    candidate.Version,
+                    candidate.BaseMetadata,
+                    candidate.SourceReferences,
+                    usedRelativePaths));
+
+                assembledItems++;
+                if (assembledItems % 200 == 0 || assembledItems == plannedCandidates.Count)
+                {
+                    var assemblePercent = 82 + ((double)assembledItems / totalCandidates * 13d);
+                    UpdateExportPreflightProgress(
+                        assemblePercent,
+                        $"Assembling export plan... {assembledItems:N0}/{plannedCandidates.Count:N0} item(s)");
                 }
             }
 
@@ -282,7 +361,16 @@ public sealed partial class MainViewModel
                 warnings.Add("Custom attributes are deferred from preflight and will be added during a later export phase.");
             }
 
-            warnings.Add("Run export downloads binaries to disk and writes manifest/metadata artifacts.");
+            if (duplicateCandidateCount > 0)
+            {
+                warnings.Add($"Suppressed {duplicateCandidateCount:N0} duplicate document hit(s) across overlapping scopes; canonical folder/workspace paths were kept.");
+            }
+
+            if (scopeEnumeration.IsPartial)
+            {
+                warnings.Add(
+                    $"Export preflight is incomplete because {scopeEnumeration.Issues.Count:N0} child container enumeration failure(s) were encountered. Resolve the reported issues and refresh preflight before running export.");
+            }
 
             var plan = new ExportPlan
             {
@@ -301,12 +389,20 @@ public sealed partial class MainViewModel
                 DocumentCount = uniqueDocumentIds.Count,
                 VersionCount = exportItems.Count,
                 EstimatedBytes = exportItems.Sum(item => item.SizeBytes ?? 0),
-                Warnings = warnings
+                Warnings = warnings,
+                HasBlockingCoverageIssues = scopeEnumeration.IsPartial
             };
 
+            UpdateExportPreflightProgress(97, "Finalizing export preflight...");
             SetExportPlan(plan);
             UpdateOnUi(() =>
             {
+                ExportPreflightWarnings.Clear();
+                foreach (var warning in plan.Warnings)
+                {
+                    ExportPreflightWarnings.Add(new ExportPreflightWarningView(warning));
+                }
+
                 _exportPreflightIssues.Clear();
                 foreach (var issue in issues)
                 {
@@ -317,9 +413,10 @@ public sealed partial class MainViewModel
             ExportSummary =
                 $"Scope discovered: folders={folderCount:N0}, filters={filterCount:N0}, saved searches={savedSearchCount:N0}, collabspaces={collabspaceCount:N0}, containers={scopes.Count:N0}. " +
                 $"Documents={plan.DocumentCount:N0}, versions={plan.VersionCount:N0}, estimated={FormatBytes(plan.EstimatedBytes)}.";
-            ExportStatus = $"Export preflight ready. {plan.Warnings.Count} warning(s).";
-            ExportProgressPercent = 100;
-            OnPropertyChanged(nameof(ExportProgressPercentDisplay));
+            var finalStatus = plan.HasBlockingCoverageIssues
+                ? $"Export preflight incomplete. {scopeEnumeration.Issues.Count} blocking coverage issue(s) found."
+                : $"Export preflight ready. {plan.Warnings.Count} warning(s).";
+            UpdateExportPreflightProgress(100, finalStatus);
         }
         catch (Exception ex)
         {
@@ -336,7 +433,9 @@ public sealed partial class MainViewModel
     {
         if (!CanRunExport || _exportPlan is null)
         {
-            ExportStatus = "Run export is unavailable. Refresh preflight and select an export destination first.";
+            ExportStatus = _exportPlan is { HasBlockingCoverageIssues: true }
+                ? "Run export is unavailable. Export preflight is incomplete; resolve reported coverage issues and refresh preflight."
+                : "Run export is unavailable. Refresh preflight and select an export destination first.";
             return;
         }
 
@@ -387,8 +486,11 @@ public sealed partial class MainViewModel
                 PlannedFolderCreates = _exportPlan.FolderPaths.Count
             }, _exportCancellation.Token);
 
+            var artifactId = $"{runStartedUtc:yyyyMMddTHHmmssfff}-{runJobId}";
+
             var manifestPath = await writer.WriteManifestAsync(
                 ExportDestinationRootPath,
+                artifactId,
                 _exportPlan.Items,
                 _exportCancellation.Token);
 
@@ -468,6 +570,7 @@ public sealed partial class MainViewModel
                         LocalPath = item.LocalPath,
                         Status = "Succeeded",
                         Error = string.Empty,
+                        SourceReferences = CloneSourceReferences(item.SourceReferences),
                         MetadataFields = metadataFields
                     };
                 }
@@ -483,6 +586,7 @@ public sealed partial class MainViewModel
                         LocalPath = item.LocalPath,
                         Status = "Failed",
                         Error = finalResponse?.ErrorMessage ?? "Unknown download error.",
+                        SourceReferences = CloneSourceReferences(item.SourceReferences),
                         MetadataFields = metadataFields
                     };
                 }
@@ -511,6 +615,7 @@ public sealed partial class MainViewModel
 
             var metadataPath = await writer.WriteMetadataAsync(
                 ExportDestinationRootPath,
+                artifactId,
                 new MetadataDump
                 {
                     SourceCabinetId = _exportPlan.Config.SourceCabinetId,
@@ -634,7 +739,11 @@ public sealed partial class MainViewModel
     private void HandleExportContextChanged(string reason, bool refreshPreflight)
     {
         SetExportPlan(null);
-        UpdateOnUi(() => _exportPreflightIssues.Clear());
+        UpdateOnUi(() =>
+        {
+            ExportPreflightWarnings.Clear();
+            _exportPreflightIssues.Clear();
+        });
         ExportSummary = "No preflight has been run yet.";
         ExportStatus = reason;
 
@@ -646,12 +755,20 @@ public sealed partial class MainViewModel
         _ = RefreshExportPreflightAsync();
     }
 
+    private void UpdateExportPreflightProgress(double percent, string status)
+    {
+        ExportProgressPercent = Math.Clamp(percent, 0, 100);
+        OnPropertyChanged(nameof(ExportProgressPercentDisplay));
+        ExportStatus = status;
+    }
+
     private static ExportItem BuildExportItem(
         ExportPathResolver resolver,
         NdExportScope scope,
         NdExportDocument document,
         NdExportDocumentVersion? version,
         IReadOnlyList<ExportMetadataField> baseMetadata,
+        IReadOnlyList<PlannedSourceReference> plannedSourceReferences,
         IDictionary<string, string> usedRelativePaths)
     {
         var versionId = version?.VersionId;
@@ -675,9 +792,29 @@ public sealed partial class MainViewModel
         }
         usedRelativePaths[relativePath] = stableId;
 
-        var sourcePath = string.IsNullOrWhiteSpace(versionId)
-            ? $"{scope.ContainerId}/{document.DocumentId}"
-            : $"{scope.ContainerId}/{document.DocumentId}/{versionId}";
+        var sourcePath = BuildSourcePath(scope, document.DocumentId, versionId);
+        var canonicalReferenceMatched = false;
+        var sourceReferences = new List<ExportSourceReference>();
+        foreach (var reference in plannedSourceReferences)
+        {
+            var isCanonical = !canonicalReferenceMatched &&
+                string.Equals(reference.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(reference.ScopeKind, scope.Kind.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (isCanonical)
+            {
+                canonicalReferenceMatched = true;
+            }
+
+            sourceReferences.Add(new ExportSourceReference
+            {
+                SourcePath = reference.SourcePath,
+                ScopeKind = reference.ScopeKind,
+                Disposition = isCanonical ? "Exported" : "SkippedDuplicate",
+                Reason = isCanonical
+                    ? "Chosen as the canonical export surface for this document/version."
+                    : $"Skipped because this document/version was already planned from a preferred {scope.Kind.ToString().ToLowerInvariant()} or folder/workspace surface."
+            });
+        }
 
         var metadata = baseMetadata
             .Select(field => new ExportMetadataField
@@ -702,11 +839,65 @@ public sealed partial class MainViewModel
             SourcePath = sourcePath,
             LocalPath = relativePath,
             SizeBytes = version?.SizeBytes ?? document.SizeBytes,
+            SourceReferences = sourceReferences,
             MetadataFields = metadata
                 .GroupBy(field => field.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.Last())
                 .ToList()
         };
+    }
+
+    private static void AddOrUpdatePlannedCandidate(
+        IDictionary<string, PlannedExportCandidate> candidates,
+        NdExportScope scope,
+        NdExportDocument document,
+        NdExportDocumentVersion? version,
+        IReadOnlyList<ExportMetadataField> baseMetadata,
+        ref int duplicateCandidateCount)
+    {
+        var key = BuildExportIdentityKey(document.DocumentId, version?.VersionId);
+        if (candidates.TryGetValue(key, out var existing))
+        {
+            duplicateCandidateCount++;
+            existing.AddSourceReference(scope, document.DocumentId, version?.VersionId);
+            if (!NdExportScopePreference.IsPreferredCanonicalScope(scope, existing.Scope))
+            {
+                return;
+            }
+
+            existing.Scope = scope;
+            existing.Document = document;
+            existing.Version = version;
+            existing.BaseMetadata = baseMetadata;
+            return;
+        }
+
+        candidates[key] = new PlannedExportCandidate(scope, document, version, baseMetadata);
+    }
+
+    private static string BuildExportIdentityKey(string documentId, string? versionId)
+    {
+        return $"{documentId}:{versionId ?? "official"}";
+    }
+
+    private static string BuildSourcePath(NdExportScope scope, string documentId, string? versionId)
+    {
+        return string.IsNullOrWhiteSpace(versionId)
+            ? $"{scope.ContainerId}/{documentId}"
+            : $"{scope.ContainerId}/{documentId}/{versionId}";
+    }
+
+    private static List<ExportSourceReference> CloneSourceReferences(IReadOnlyList<ExportSourceReference> sourceReferences)
+    {
+        return sourceReferences
+            .Select(reference => new ExportSourceReference
+            {
+                SourcePath = reference.SourcePath,
+                ScopeKind = reference.ScopeKind,
+                Disposition = reference.Disposition,
+                Reason = reference.Reason
+            })
+            .ToList();
     }
 
     private static string ResolveExportFileExtension(
@@ -822,6 +1013,47 @@ public sealed partial class MainViewModel
     }
 }
 
+internal sealed class PlannedExportCandidate(
+    NdExportScope scope,
+    NdExportDocument document,
+    NdExportDocumentVersion? version,
+    IReadOnlyList<ExportMetadataField> baseMetadata)
+{
+    public NdExportScope Scope { get; set; } = scope;
+
+    public NdExportDocument Document { get; set; } = document;
+
+    public NdExportDocumentVersion? Version { get; set; } = version;
+
+    public IReadOnlyList<ExportMetadataField> BaseMetadata { get; set; } = baseMetadata;
+
+    public List<PlannedSourceReference> SourceReferences { get; } =
+    [
+        new PlannedSourceReference(
+            string.IsNullOrWhiteSpace(version?.VersionId)
+                ? $"{scope.ContainerId}/{document.DocumentId}"
+                : $"{scope.ContainerId}/{document.DocumentId}/{version.VersionId}",
+            scope.Kind.ToString())
+    ];
+
+    public void AddSourceReference(NdExportScope scope, string documentId, string? versionId)
+    {
+        var sourcePath = string.IsNullOrWhiteSpace(versionId)
+            ? $"{scope.ContainerId}/{documentId}"
+            : $"{scope.ContainerId}/{documentId}/{versionId}";
+        if (SourceReferences.Any(reference =>
+            string.Equals(reference.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(reference.ScopeKind, scope.Kind.ToString(), StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        SourceReferences.Add(new PlannedSourceReference(sourcePath, scope.Kind.ToString()));
+    }
+}
+
+internal sealed record PlannedSourceReference(string SourcePath, string ScopeKind);
+
 internal sealed class ExportThrottleState
 {
     private long _delayUntilUtcTicks;
@@ -891,4 +1123,14 @@ public sealed class ExportPreflightIssueView
     public string Message { get; }
 
     public string Scope { get; }
+}
+
+public sealed class ExportPreflightWarningView
+{
+    public ExportPreflightWarningView(string message)
+    {
+        Message = message;
+    }
+
+    public string Message { get; }
 }

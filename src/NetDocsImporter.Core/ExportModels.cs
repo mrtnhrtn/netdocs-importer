@@ -38,6 +38,8 @@ public sealed class ExportPlan
     public long EstimatedBytes { get; set; }
 
     public List<string> Warnings { get; set; } = new();
+
+    public bool HasBlockingCoverageIssues { get; set; }
 }
 
 public sealed class ExportItem
@@ -51,6 +53,8 @@ public sealed class ExportItem
     public string LocalPath { get; set; } = string.Empty;
 
     public long? SizeBytes { get; set; }
+
+    public List<ExportSourceReference> SourceReferences { get; set; } = new();
 
     public List<ExportMetadataField> MetadataFields { get; set; } = new();
 }
@@ -97,6 +101,8 @@ public sealed class MetadataDumpItem
 
     public string Error { get; set; } = string.Empty;
 
+    public List<ExportSourceReference> SourceReferences { get; set; } = new();
+
     public List<ExportMetadataField> MetadataFields { get; set; } = new();
 }
 
@@ -105,4 +111,15 @@ public sealed class ExportMetadataField
     public string Name { get; set; } = string.Empty;
 
     public string Value { get; set; } = string.Empty;
+}
+
+public sealed class ExportSourceReference
+{
+    public string SourcePath { get; set; } = string.Empty;
+
+    public string ScopeKind { get; set; } = string.Empty;
+
+    public string Disposition { get; set; } = string.Empty;
+
+    public string Reason { get; set; } = string.Empty;
 }

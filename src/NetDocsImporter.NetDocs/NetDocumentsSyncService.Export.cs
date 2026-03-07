@@ -8,7 +8,7 @@ namespace NetDocsImporter.NetDocs;
 public sealed partial class NetDocumentsSyncService
 {
 
-    public async Task<IReadOnlyList<NdExportScope>> EnumerateExportScopesAsync(
+    public async Task<NdExportScopeEnumerationResult> EnumerateExportScopesAsync(
         string cabinetId,
         NdTargetSelection root,
         bool includeWorkspaceFilters,
@@ -25,6 +25,7 @@ public sealed partial class NetDocumentsSyncService
         }
 
         var result = new List<NdExportScope>();
+        var issues = new List<NdExportScopeTraversalIssue>();
         var queue = new Queue<NdExportScope>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -76,10 +77,18 @@ public sealed partial class NetDocumentsSyncService
                     cabinetId,
                     parentContainerId: scope.ContainerId,
                     preferredType: scope.TargetType,
+                    throwOnFailure: true,
                     cancellationToken: cancellationToken);
             }
-            catch
+            catch (Exception ex)
             {
+                issues.Add(new NdExportScopeTraversalIssue
+                {
+                    ContainerId = scope.ContainerId,
+                    ScopeName = scope.Name,
+                    TargetType = scope.TargetType,
+                    Message = ex.Message
+                });
                 continue;
             }
 
@@ -106,7 +115,11 @@ public sealed partial class NetDocumentsSyncService
             }
         }
 
-        return result;
+        return new NdExportScopeEnumerationResult
+        {
+            Scopes = result,
+            Issues = issues
+        };
     }
 
     public async Task<IReadOnlyList<NdExportDocument>> EnumerateContainerDocumentsAsync(

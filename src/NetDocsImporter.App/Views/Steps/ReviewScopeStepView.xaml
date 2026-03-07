@@ -43,8 +43,8 @@
                                 Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 Style="{StaticResource SecondaryButton}" />
                     </StackPanel>
-                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#555555" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="{DynamicResource MutedForegroundBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2"
@@ -64,17 +64,17 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Cabinet:" FontWeight="SemiBold" Foreground="#374151" />
-                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ReviewTargetCabinetDisplay}" Foreground="#555555" TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Target container:" FontWeight="SemiBold" Foreground="#374151" Margin="0,4,0,0" />
-                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReviewWorkspaceNameDisplay}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Cabinet:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ReviewTargetCabinetDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Target container:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" Margin="0,4,0,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReviewWorkspaceNameDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
                     </Grid>
 
-                    <TextBlock Text="Profile Attributes (Inherited Defaults)" FontWeight="SemiBold" Foreground="#374151" Margin="0,0,0,4" />
+                    <TextBlock Text="Profile Attributes (Inherited Defaults)" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" Margin="0,0,0,4" />
                     <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="6" MinWidth="320" MaxHeight="170">
                         <Grid>
                             <TextBlock Text="No inherited profile attributes available."
-                                       Foreground="#6B7280"
+                                       Foreground="{DynamicResource MutedForegroundBrush}"
                                        TextWrapping="Wrap">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -111,11 +111,11 @@
                                                 <TextBlock Grid.Column="0"
                                                            Text="{Binding AttributeName}"
                                                            FontWeight="SemiBold"
-                                                           Foreground="#374151"
+                                                           Foreground="{DynamicResource BodyForegroundBrush}"
                                                            TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Grid.Column="2"
                                                            Text="{Binding DisplayValue}"
-                                                           Foreground="#555555"
+                                                           Foreground="{DynamicResource MutedForegroundBrush}"
                                                            TextWrapping="Wrap" />
                                             </Grid>
                                         </DataTemplate>
@@ -181,8 +181,8 @@
                                          Value="{Binding DirectUploadProgressPercent, Mode=OneWay}" />
                             <TextBlock Text="{Binding DirectUploadProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
-                        <TextBlock Text="{Binding DirectUploadStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
-                        <TextBlock Text="Preflight Issues" Foreground="#555555" />
+                        <TextBlock Text="{Binding DirectUploadStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
                         <DataGrid ItemsSource="{Binding DirectUploadPreflightIssues}"
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
@@ -267,9 +267,21 @@
                                          Value="{Binding ExportProgressPercent, Mode=OneWay}" />
                             <TextBlock Text="{Binding ExportProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
-                        <TextBlock Text="{Binding ExportStatus}" Foreground="#555555" Margin="0,0,0,4" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding ExportSummary}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
-                        <TextBlock Text="Preflight Issues" Foreground="#555555" />
+                        <TextBlock Text="{Binding ExportStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,4" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ExportSummary}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <TextBlock Text="Preflight Warnings"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Visibility="{Binding HasExportPreflightWarnings, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <ItemsControl ItemsSource="{Binding ExportPreflightWarnings}"
+                                      Margin="0,4,0,6"
+                                      Visibility="{Binding HasExportPreflightWarnings, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Margin="0,0,0,4" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
                         <DataGrid ItemsSource="{Binding ExportPreflightIssues}"
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
@@ -291,9 +303,9 @@
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBlock Text="{Binding ValidationErrorCountDisplay, StringFormat=Errors: {0}}" Foreground="#B42318" Margin="0,0,8,0" />
                             <TextBlock Text="{Binding ValidationWarningCountDisplay, StringFormat=Warnings: {0}}" Foreground="#B45309" Margin="0,0,8,0" />
-                            <TextBlock Text="{Binding ValidationInfoCountDisplay, StringFormat=Info: {0}}" Foreground="#555555" />
+                            <TextBlock Text="{Binding ValidationInfoCountDisplay, StringFormat=Info: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" />
                         </StackPanel>
-                        <TextBlock Text="Validating..." Foreground="#555555" Margin="0,0,0,6">
+                        <TextBlock Text="Validating..." Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -321,7 +333,7 @@
                 <StackPanel Visibility="Collapsed">
                     <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
                     <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,8" TextWrapping="Wrap" />
                     <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
                                Foreground="#B45309"
                                TextWrapping="Wrap"
@@ -357,8 +369,8 @@
                         </Button>
                     </StackPanel>
                     <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
-                    <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
-                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
+                    <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,10" />
 
                 </StackPanel>
             </StackPanel>

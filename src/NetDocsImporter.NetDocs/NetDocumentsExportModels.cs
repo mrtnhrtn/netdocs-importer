@@ -28,6 +28,26 @@ public sealed class NdExportScope
     public List<string> PathSegments { get; set; } = new();
 }
 
+public sealed class NdExportScopeEnumerationResult
+{
+    public List<NdExportScope> Scopes { get; set; } = new();
+
+    public List<NdExportScopeTraversalIssue> Issues { get; set; } = new();
+
+    public bool IsPartial => Issues.Count > 0;
+}
+
+public sealed class NdExportScopeTraversalIssue
+{
+    public string ContainerId { get; set; } = string.Empty;
+
+    public string ScopeName { get; set; } = string.Empty;
+
+    public NdTargetType TargetType { get; set; }
+
+    public string Message { get; set; } = string.Empty;
+}
+
 public sealed class NdExportAttributeValue
 {
     public string Name { get; set; } = string.Empty;

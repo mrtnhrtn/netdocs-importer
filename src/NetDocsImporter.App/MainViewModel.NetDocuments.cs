@@ -37,6 +37,7 @@ public sealed partial class MainViewModel
     private readonly SemaphoreSlim _netDocumentsConnectGate = new(1, 1);
     private CancellationTokenSource? _netDocumentsConnectCts;
     private bool _isNetDocumentsConnectInProgress;
+    private long _cabinetFilterRequestVersion;
 
     /// <summary>
     /// Gets the repositories available in the connected NetDocuments region.
@@ -742,14 +743,16 @@ public sealed partial class MainViewModel
     private void FilterCabinetsByRepository()
     {
         var region = SelectedNetDocumentsRegion.ToString();
+        var repositoryId = SelectedNetDocumentsRepositoryId;
+        var requestVersion = Interlocked.Increment(ref _cabinetFilterRequestVersion);
         _ = Task.Run(async () =>
         {
             await _jobStore.InitializeAsync();
             var allCabinets = await _jobStore.GetNetDocumentsCabinetsAsync(region);
             var cabinets = allCabinets
                 .Where(c =>
-                    string.IsNullOrWhiteSpace(SelectedNetDocumentsRepositoryId) ||
-                    string.Equals(c.RepositoryId, SelectedNetDocumentsRepositoryId, StringComparison.OrdinalIgnoreCase))
+                    string.IsNullOrWhiteSpace(repositoryId) ||
+                    string.Equals(c.RepositoryId, repositoryId, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(c => c.CabinetName, StringComparer.OrdinalIgnoreCase)
                 .Select(c => new NetDocumentsCabinetView(
                     c.CabinetId,
@@ -763,6 +766,13 @@ public sealed partial class MainViewModel
 
             UpdateOnUi(() =>
             {
+                if (requestVersion != Volatile.Read(ref _cabinetFilterRequestVersion) ||
+                    !string.Equals(region, SelectedNetDocumentsRegion.ToString(), StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(repositoryId ?? string.Empty, SelectedNetDocumentsRepositoryId ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
                 _netDocumentsCabinets.Clear();
                 foreach (var cabinet in cabinets)
                 {

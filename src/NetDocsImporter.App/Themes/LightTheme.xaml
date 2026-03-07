@@ -8,13 +8,22 @@
     <SolidColorBrush x:Key="BodyForegroundBrush" Color="#FF1F2933" />
     <SolidColorBrush x:Key="MutedForegroundBrush" Color="#FF52606D" />
 
-    <SolidColorBrush x:Key="PrimaryButtonBackgroundBrush" Color="#FF2F5BEA" />
-    <SolidColorBrush x:Key="PrimaryButtonForegroundBrush" Color="#FFFFFFFF" />
-    <SolidColorBrush x:Key="PrimaryButtonBorderBrush" Color="#FF2F5BEA" />
+    <SolidColorBrush x:Key="PrimaryButtonBackgroundBrush" Color="#FFDCEFE8" />
+    <SolidColorBrush x:Key="PrimaryButtonForegroundBrush" Color="#FF123C33" />
+    <SolidColorBrush x:Key="PrimaryButtonBorderBrush" Color="#FF9FC9BC" />
 
     <SolidColorBrush x:Key="SecondaryButtonBackgroundBrush" Color="#FFF5F7FA" />
     <SolidColorBrush x:Key="SecondaryButtonForegroundBrush" Color="#FF1F2933" />
     <SolidColorBrush x:Key="SecondaryButtonBorderBrush" Color="#FFD9E2EC" />
+    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush" Color="#FFE9EDF2" />
+    <SolidColorBrush x:Key="ButtonPressedBorderBrush" Color="#FFC3CED9" />
+    <SolidColorBrush x:Key="ControlHoverBorderBrush" Color="#FFC9D5E2" />
+    <SolidColorBrush x:Key="FocusBorderBrush" Color="#FF7A97F2" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedBackgroundBrush" Color="#FFE9EDF2" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedForegroundBrush" Color="#FF102A43" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedBorderBrush" Color="#FFC3CED9" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedHoverBackgroundBrush" Color="#FFE1E7EF" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedHoverBorderBrush" Color="#FFB6C2CF" />
     <SolidColorBrush x:Key="DisabledButtonBackgroundBrush" Color="#FFE6EBF1" />
     <SolidColorBrush x:Key="DisabledButtonForegroundBrush" Color="#FF5F6C7B" />
     <SolidColorBrush x:Key="DisabledButtonBorderBrush" Color="#FFD0DAE6" />
@@ -22,10 +31,24 @@
     <SolidColorBrush x:Key="InputBackgroundBrush" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="InputForegroundBrush" Color="#FF1F2933" />
     <SolidColorBrush x:Key="InputBorderBrush" Color="#FFD9E2EC" />
+    <SolidColorBrush x:Key="DisabledInputBackgroundBrush" Color="#FFF5F7FA" />
+    <SolidColorBrush x:Key="DisabledInputForegroundBrush" Color="#FF52606D" />
+    <SolidColorBrush x:Key="DisabledInputBorderBrush" Color="#FFD9E2EC" />
     <SolidColorBrush x:Key="ControlBorderBrush" Color="#FFD9E2EC" />
     <SolidColorBrush x:Key="ControlHoverBrush" Color="#FFE9EDF2" />
     <SolidColorBrush x:Key="SelectionBrush" Color="#FF2F5BEA" />
     <SolidColorBrush x:Key="SelectionForegroundBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="TabSelectedBackgroundBrush" Color="#FFE7F4EF" />
+    <SolidColorBrush x:Key="TabSelectedForegroundBrush" Color="#FF123C33" />
+    <SolidColorBrush x:Key="TabSelectedBorderBrush" Color="#FFB2D4C8" />
     <SolidColorBrush x:Key="ListBackgroundBrush" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="MenuBackgroundBrush" Color="#FFFFFFFF" />
+
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FF1F2933" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FF1F2933" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF2F5BEA" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FF5F6C7B" />
 </ResourceDictionary>

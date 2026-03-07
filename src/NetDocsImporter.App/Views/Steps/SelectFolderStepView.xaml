@@ -13,9 +13,9 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="NetDocuments Upload Target" Style="{StaticResource SectionTitle}" />
+        <TextBlock Grid.Row="0" Text="NetDocuments Location" Style="{StaticResource SectionTitle}" />
         <TextBlock Grid.Row="1"
-                   Text="Choose your NetDocuments upload destination. Connection and sign-in are managed in Settings (gear icon)."
+                   Text="Choose your NetDocuments location. Connection and sign-in are managed in Settings (gear icon)."
                    Foreground="{DynamicResource MutedForegroundBrush}"
                    Margin="0,0,0,8"
                    TextWrapping="Wrap" />
@@ -36,7 +36,7 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0">
-                    <TextBlock Text="1) Select NetDocuments Upload Destination" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <TextBlock Text="1) Select NetDocuments Location" FontWeight="SemiBold" Margin="0,0,0,8" />
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -49,25 +49,41 @@
                             <TextBlock Text="Repository" Foreground="{DynamicResource MutedForegroundBrush}" />
                             <ComboBox ItemsSource="{Binding NetDocumentsRepositories}"
                                       SelectedValuePath="RepositoryId"
-                                      DisplayMemberPath="RepositoryName"
                                       SelectedValue="{Binding SelectedNetDocumentsRepositoryId, UpdateSourceTrigger=PropertyChanged}"
+                                      Background="{DynamicResource InputBackgroundBrush}"
+                                      Foreground="{DynamicResource InputForegroundBrush}"
+                                      TextElement.Foreground="{DynamicResource InputForegroundBrush}"
                                       Margin="0,2,0,0"
                                       MinWidth="240"
                                       MaxWidth="520"
                                       HorizontalAlignment="Left"
-                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                                      IsEnabled="{Binding IsNetDocumentsConnected}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding RepositoryName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <TextBlock Text="Cabinet" Foreground="{DynamicResource MutedForegroundBrush}" />
                             <ComboBox ItemsSource="{Binding NetDocumentsCabinets}"
                                       SelectedValuePath="CabinetId"
-                                      DisplayMemberPath="CabinetName"
                                       SelectedValue="{Binding SelectedNetDocumentsCabinetId, UpdateSourceTrigger=PropertyChanged}"
+                                      Background="{DynamicResource InputBackgroundBrush}"
+                                      Foreground="{DynamicResource InputForegroundBrush}"
+                                      TextElement.Foreground="{DynamicResource InputForegroundBrush}"
                                       Margin="0,2,0,0"
                                       MinWidth="240"
                                       MaxWidth="520"
                                       HorizontalAlignment="Left"
-                                      IsEnabled="{Binding IsNetDocumentsConnected}" />
+                                      IsEnabled="{Binding IsNetDocumentsConnected}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding CabinetName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
                         </StackPanel>
                         <Button Grid.Column="4"
                                 Content="Force Refresh"
