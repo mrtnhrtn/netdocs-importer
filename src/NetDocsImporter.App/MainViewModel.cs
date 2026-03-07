@@ -134,7 +134,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ProfileFieldView> ProfileFields { get; } = new();
     public ObservableCollection<FileRowView> FolderFiles { get; } = new();
     public ObservableCollection<PreExportWarningView> PreExportWarnings { get; } = new();
-    public ObservableCollection<ExportPreflightWarningView> ExportPreflightWarnings { get; } = new();
     public ObservableCollection<NdImportSessionView> NdImportSessions { get; } = new();
     public ObservableCollection<StepItem> Steps { get; } = new();
     public IReadOnlyList<NetDocumentsRegion> NetDocumentsRegions { get; } = Enum.GetValues<NetDocumentsRegion>();
@@ -787,7 +786,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
         FolderRoots.CollectionChanged += (_, _) => HasFolderRoots = FolderRoots.Count > 0;
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
-        ExportPreflightWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasExportPreflightWarnings));
 
         Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments", "Choose your NetDocuments location", this));
         Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and plan", this));

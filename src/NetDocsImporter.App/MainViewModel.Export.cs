@@ -25,8 +25,6 @@ public sealed partial class MainViewModel
 
     public ObservableCollection<ExportPreflightIssueView> ExportPreflightIssues => _exportPreflightIssues;
 
-    public bool HasExportPreflightWarnings => ExportPreflightWarnings.Count > 0;
-
     public bool IsExportBusy
     {
         get => _isExportBusy;
@@ -397,13 +395,16 @@ public sealed partial class MainViewModel
             SetExportPlan(plan);
             UpdateOnUi(() =>
             {
-                ExportPreflightWarnings.Clear();
+                _exportPreflightIssues.Clear();
                 foreach (var warning in plan.Warnings)
                 {
-                    ExportPreflightWarnings.Add(new ExportPreflightWarningView(warning));
+                    _exportPreflightIssues.Add(new ExportPreflightIssueView(
+                        "Warning",
+                        "EXPORT_PREFLIGHT_WARNING",
+                        warning,
+                        string.Empty));
                 }
 
-                _exportPreflightIssues.Clear();
                 foreach (var issue in issues)
                 {
                     _exportPreflightIssues.Add(issue);
@@ -739,11 +740,7 @@ public sealed partial class MainViewModel
     private void HandleExportContextChanged(string reason, bool refreshPreflight)
     {
         SetExportPlan(null);
-        UpdateOnUi(() =>
-        {
-            ExportPreflightWarnings.Clear();
-            _exportPreflightIssues.Clear();
-        });
+        UpdateOnUi(() => _exportPreflightIssues.Clear());
         ExportSummary = "No preflight has been run yet.";
         ExportStatus = reason;
 
@@ -1123,14 +1120,4 @@ public sealed class ExportPreflightIssueView
     public string Message { get; }
 
     public string Scope { get; }
-}
-
-public sealed class ExportPreflightWarningView
-{
-    public ExportPreflightWarningView(string message)
-    {
-        Message = message;
-    }
-
-    public string Message { get; }
 }

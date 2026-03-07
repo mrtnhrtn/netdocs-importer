@@ -269,18 +269,6 @@
                         </StackPanel>
                         <TextBlock Text="{Binding ExportStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,4" TextWrapping="Wrap" />
                         <TextBlock Text="{Binding ExportSummary}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
-                        <TextBlock Text="Preflight Warnings"
-                                   Foreground="{DynamicResource MutedForegroundBrush}"
-                                   Visibility="{Binding HasExportPreflightWarnings, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <ItemsControl ItemsSource="{Binding ExportPreflightWarnings}"
-                                      Margin="0,4,0,6"
-                                      Visibility="{Binding HasExportPreflightWarnings, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Margin="0,0,0,4" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                         <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
                         <DataGrid ItemsSource="{Binding ExportPreflightIssues}"
                                   AutoGenerateColumns="False"
