@@ -235,6 +235,9 @@ public sealed partial class NetDocumentsSyncService
                 {
                     return versions;
                 }
+
+                Trace.WriteLine(
+                    $"ND-EXPORT-VERSION-PARSE-EMPTY doc='{documentId}' source='{source}' path='{path}' shape='{DescribeVersionProbeJsonShape(document.RootElement)}'.");
             }
             catch
             {
@@ -643,13 +646,19 @@ public sealed partial class NetDocumentsSyncService
         var results = new List<NdExportDocumentVersion>();
         foreach (var item in EnumerateArray(root))
         {
-            var versionId = ReadString(item, "versionId", "version", "id", "verNo", "ver");
+            var versionId = ReadString(item, "versionId", "version", "id", "verNo", "ver", "number");
             if (string.IsNullOrWhiteSpace(versionId))
             {
                 continue;
             }
 
-            var fileName = ReadString(item, "name", "description", "title", "docName", "filename");
+            var versionNumber = ReadString(item, "number", "versionId", "version", "id", "verNo", "ver");
+            if (string.IsNullOrWhiteSpace(versionNumber))
+            {
+                versionNumber = versionId;
+            }
+
+            var fileName = ReadString(item, "name", "verName", "description", "title", "docName", "filename");
             if (string.IsNullOrWhiteSpace(fileName) &&
                 TryGetPropertyIgnoreCase(item, "standardAttributes", out var standardNode))
             {
@@ -659,7 +668,7 @@ public sealed partial class NetDocumentsSyncService
             results.Add(new NdExportDocumentVersion
             {
                 VersionId = versionId,
-                VersionNumber = versionId,
+                VersionNumber = versionNumber,
                 FileName = fileName,
                 SizeBytes = ReadNullableLong(item, "sizeBytes", "size", "bytes", "contentLength"),
                 IsOfficial = ReadBool(item, "official", "isOfficial", "officialVersion", "isCurrent"),
@@ -801,6 +810,56 @@ public sealed partial class NetDocumentsSyncService
         }
 
         return ParseDocumentVersions(root, discoverySource);
+    }
+
+    private static string DescribeVersionProbeJsonShape(JsonElement node)
+    {
+        return node.ValueKind switch
+        {
+            JsonValueKind.Object => DescribeObjectShape(node),
+            JsonValueKind.Array => DescribeArrayShape(node),
+            _ => node.ValueKind.ToString()
+        };
+    }
+
+    private static string DescribeObjectShape(JsonElement node)
+    {
+        var parts = new List<string>();
+        foreach (var property in node.EnumerateObject().Take(8))
+        {
+            parts.Add($"{property.Name}:{DescribeShallowValue(property.Value)}");
+        }
+
+        return parts.Count == 0
+            ? "Object{}"
+            : $"Object{{{string.Join(", ", parts)}}}";
+    }
+
+    private static string DescribeArrayShape(JsonElement node)
+    {
+        var length = node.GetArrayLength();
+        if (length == 0)
+        {
+            return "Array[0]";
+        }
+
+        var first = node.EnumerateArray().First();
+        return $"Array[{length}]<{DescribeShallowValue(first)}>";
+    }
+
+    private static string DescribeShallowValue(JsonElement node)
+    {
+        return node.ValueKind switch
+        {
+            JsonValueKind.Object => DescribeObjectShape(node),
+            JsonValueKind.Array => DescribeArrayShape(node),
+            JsonValueKind.String => "String",
+            JsonValueKind.Number => "Number",
+            JsonValueKind.True => "True",
+            JsonValueKind.False => "False",
+            JsonValueKind.Null => "Null",
+            _ => node.ValueKind.ToString()
+        };
     }
 
     private static IReadOnlyList<NdExportDocumentVersion> NormalizeExactDocumentVersions(IEnumerable<NdExportDocumentVersion> versions)

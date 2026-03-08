@@ -1144,6 +1144,72 @@ public sealed class NetDocumentsSyncServiceExportTests
     }
 
     [Fact]
+    public async Task EnumerateDocumentVersionsAsync_ParsesDocVersionsNumberShape()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-version-number-shape-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.BadRequest, """{"error":"missing uri"}""");
+                }
+
+                if (string.Equals(request.RequestUri.PathAndQuery, "/v1/Document/DOC-3/versionList", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "docVersions": [
+                            { "number": 1, "official": false, "verName": "Agreement.docx", "versionLabel": "v1" },
+                            { "number": 2, "official": true, "verName": "Agreement.docx", "versionLabel": "v2" }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, """{"error":"not found"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var versions = await service.EnumerateDocumentVersionsAsync("DOC-3");
+
+            Assert.Equal(2, versions.Count);
+            Assert.Collection(
+                versions,
+                version =>
+                {
+                    Assert.Equal("1", version.VersionId);
+                    Assert.Equal("1", version.VersionNumber);
+                    Assert.False(version.IsOfficial);
+                    Assert.Equal("Agreement.docx", version.FileName);
+                    Assert.Equal("versionList", version.DiscoverySource);
+                },
+                version =>
+                {
+                    Assert.Equal("2", version.VersionId);
+                    Assert.Equal("2", version.VersionNumber);
+                    Assert.True(version.IsOfficial);
+                    Assert.Equal("Agreement.docx", version.FileName);
+                    Assert.Equal("versionList", version.DiscoverySource);
+                });
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GetDocumentStandardAttributesForExportRunAsync_ReadsV1DocumentAttributes()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-export-run-meta-tests-{Guid.NewGuid():N}");
