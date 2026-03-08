@@ -17,6 +17,9 @@ public sealed class ExportOutputWriterTests
                 {
                     DocumentId = "doc-1",
                     VersionId = "1",
+                    VersionNumber = "1",
+                    IsOfficialVersion = false,
+                    VersionDiscoverySource = "versionList",
                     SourcePath = "/workspace/folder/file.docx",
                     LocalPath = "workspace/folder/file.docx",
                     SourceReferences = new List<ExportSourceReference>
@@ -45,6 +48,10 @@ public sealed class ExportOutputWriterTests
             Assert.EndsWith("manifest-run-1.json", manifestPath, StringComparison.OrdinalIgnoreCase);
             var content = await File.ReadAllTextAsync(manifestPath);
             Assert.Contains("\"documentId\": \"doc-1\"", content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"versionId\": \"1\"", content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"versionNumber\": \"1\"", content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"isOfficialVersion\": false", content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"versionDiscoverySource\": \"versionList\"", content, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("\"sourceReferences\"", content, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("\"disposition\": \"SkippedDuplicate\"", content, StringComparison.OrdinalIgnoreCase);
         }

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using NetDocsImporter.Core;
@@ -159,6 +160,8 @@ public sealed partial class MainViewModel
             var plannedCandidates = new Dictionary<string, PlannedExportCandidate>(StringComparer.OrdinalIgnoreCase);
             var folderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var uniqueDocumentIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var documentsWithUnknownVersionCoverage = new List<string>();
+            var documentsMissingExactVersionIds = new List<string>();
             var duplicateCandidateCount = 0;
             var totalScopes = Math.Max(1, scopes.Count);
             var processedScopes = 0;
@@ -239,52 +242,72 @@ public sealed partial class MainViewModel
 
                     if (ExportAllVersions)
                     {
-                        IReadOnlyList<NdExportDocumentVersion> versions;
-                        if (document.VersionHints.Count > 0)
-                        {
-                            versions = document.VersionHints;
-                        }
-                        else
+                        var expansionMethodUsed = string.Empty;
+                        var expansionSucceeded = false;
+                        if (document.NeedsExpansion)
                         {
                             try
                             {
-                                versions = await sync.EnumerateDocumentVersionsAsync(document.DocumentId);
+                                var expandedVersions = await sync.EnumerateDocumentVersionsAsync(document.DocumentId);
+                                if (expandedVersions.Count > 0)
+                                {
+                                    document.VersionHints.Clear();
+                                    document.VersionHints.AddRange(expandedVersions);
+                                    document.HasExactVersionCoverage = !document.KnownVersionCount.HasValue ||
+                                                                      expandedVersions.Count >= document.KnownVersionCount.Value;
+                                    document.CoverageReliable = document.HasExactVersionCoverage;
+                                    document.NeedsExpansion = !document.CoverageReliable;
+                                    expansionMethodUsed = expandedVersions
+                                        .Select(version => version.DiscoverySource)
+                                        .FirstOrDefault(source => !string.IsNullOrWhiteSpace(source)) ?? "versionList";
+                                    expansionSucceeded = document.CoverageReliable;
+                                }
                             }
                             catch (Exception ex)
                             {
+                                expansionMethodUsed = "versionList";
                                 issues.Add(new ExportPreflightIssueView(
                                     "Warning",
-                                    "VERSION_ENUMERATION_FAILED",
+                                    "VERSION_EXPANSION_FAILED",
                                     ex.Message,
                                     document.DocumentId));
-                                versions = Array.Empty<NdExportDocumentVersion>();
                             }
                         }
 
-                        if (versions.Count == 0)
+                        Trace.WriteLine(
+                            $"ND-EXPORT-VERSION-COVERAGE doc='{document.DocumentId}' knownCount='{document.KnownVersionCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty}' exactCount='{document.VersionHints.Count.ToString(CultureInfo.InvariantCulture)}' officialHint='{document.OfficialVersionHint ?? string.Empty}' reliable={document.CoverageReliable} needsExpansion={document.NeedsExpansion} expansionMethod='{expansionMethodUsed}' expansionSucceeded={expansionSucceeded} finalExportVersionCount='{document.VersionHints.Count.ToString(CultureInfo.InvariantCulture)}'.");
+
+                        if (document.HasExactVersionCoverage && document.VersionHints.Count > 0)
                         {
-                            AddOrUpdatePlannedCandidate(
-                                plannedCandidates,
-                                scope,
-                                document,
-                                version: null,
-                                dedupedBaseMetadata,
-                                ref duplicateCandidateCount);
+                            foreach (var version in document.VersionHints)
+                            {
+                                AddOrUpdatePlannedCandidate(
+                                    plannedCandidates,
+                                    scope,
+                                    document,
+                                    version,
+                                    dedupedBaseMetadata,
+                                    ref duplicateCandidateCount);
+                            }
+
                             ReportScopeDocumentProgress();
                             continue;
                         }
 
-                        foreach (var version in versions)
+                        var documentLabel = !string.IsNullOrWhiteSpace(document.FileName)
+                            ? document.FileName
+                            : document.DocumentId;
+                        if (document.KnownVersionCount.HasValue && document.KnownVersionCount.Value > document.VersionHints.Count)
                         {
-                            AddOrUpdatePlannedCandidate(
-                                plannedCandidates,
-                                scope,
-                                document,
-                                version,
-                                dedupedBaseMetadata,
-                                ref duplicateCandidateCount);
+                            if (!documentsMissingExactVersionIds.Contains(documentLabel, StringComparer.OrdinalIgnoreCase))
+                            {
+                                documentsMissingExactVersionIds.Add(documentLabel);
+                            }
                         }
-
+                        else if (!documentsWithUnknownVersionCoverage.Contains(documentLabel, StringComparer.OrdinalIgnoreCase))
+                        {
+                            documentsWithUnknownVersionCoverage.Add(documentLabel);
+                        }
                         ReportScopeDocumentProgress();
                         continue;
                     }
@@ -328,6 +351,7 @@ public sealed partial class MainViewModel
                     candidate.Scope,
                     candidate.Document,
                     candidate.Version,
+                    ExportAllVersions,
                     candidate.BaseMetadata,
                     candidate.SourceReferences,
                     usedRelativePaths));
@@ -370,6 +394,24 @@ public sealed partial class MainViewModel
                     $"Export preflight is incomplete because {scopeEnumeration.Issues.Count:N0} child container enumeration failure(s) were encountered. Resolve the reported issues and refresh preflight before running export.");
             }
 
+            var allVersionsCoverage = ExportAllVersions
+                ? ExportCoverageEvaluator.AssessAllVersionsCoverage(
+                    documentsWithUnknownVersionCoverage,
+                    documentsMissingExactVersionIds)
+                : new ExportAllVersionsCoverageAssessment();
+            if (allVersionsCoverage.HasBlockingIssue)
+            {
+                issues.Add(new ExportPreflightIssueView(
+                    "Error",
+                    "ALL_VERSIONS_COVERAGE_UNVERIFIED",
+                    allVersionsCoverage.Message,
+                    string.Empty));
+            }
+
+            var blockingCoverageIssueCount =
+                (scopeEnumeration.IsPartial ? scopeEnumeration.Issues.Count : 0) +
+                (allVersionsCoverage.HasBlockingIssue ? 1 : 0);
+
             var plan = new ExportPlan
             {
                 Config = new ExportConfig
@@ -388,7 +430,8 @@ public sealed partial class MainViewModel
                 VersionCount = exportItems.Count,
                 EstimatedBytes = exportItems.Sum(item => item.SizeBytes ?? 0),
                 Warnings = warnings,
-                HasBlockingCoverageIssues = scopeEnumeration.IsPartial
+                BlockingCoverageIssueCount = blockingCoverageIssueCount,
+                HasBlockingCoverageIssues = blockingCoverageIssueCount > 0
             };
 
             UpdateExportPreflightProgress(97, "Finalizing export preflight...");
@@ -415,7 +458,7 @@ public sealed partial class MainViewModel
                 $"Scope discovered: folders={folderCount:N0}, filters={filterCount:N0}, saved searches={savedSearchCount:N0}, collabspaces={collabspaceCount:N0}, containers={scopes.Count:N0}. " +
                 $"Documents={plan.DocumentCount:N0}, versions={plan.VersionCount:N0}, estimated={FormatBytes(plan.EstimatedBytes)}.";
             var finalStatus = plan.HasBlockingCoverageIssues
-                ? $"Export preflight incomplete. {scopeEnumeration.Issues.Count} blocking coverage issue(s) found."
+                ? $"Export preflight incomplete. {plan.BlockingCoverageIssueCount} blocking coverage issue(s) found."
                 : $"Export preflight ready. {plan.Warnings.Count} warning(s).";
             UpdateExportPreflightProgress(100, finalStatus);
         }
@@ -567,6 +610,9 @@ public sealed partial class MainViewModel
                     {
                         DocumentId = item.DocumentId,
                         VersionId = item.VersionId,
+                        VersionNumber = item.VersionNumber,
+                        IsOfficialVersion = item.IsOfficialVersion,
+                        VersionDiscoverySource = item.VersionDiscoverySource,
                         SourcePath = item.SourcePath,
                         LocalPath = item.LocalPath,
                         Status = "Succeeded",
@@ -583,6 +629,9 @@ public sealed partial class MainViewModel
                     {
                         DocumentId = item.DocumentId,
                         VersionId = item.VersionId,
+                        VersionNumber = item.VersionNumber,
+                        IsOfficialVersion = item.IsOfficialVersion,
+                        VersionDiscoverySource = item.VersionDiscoverySource,
                         SourcePath = item.SourcePath,
                         LocalPath = item.LocalPath,
                         Status = "Failed",
@@ -764,6 +813,7 @@ public sealed partial class MainViewModel
         NdExportScope scope,
         NdExportDocument document,
         NdExportDocumentVersion? version,
+        bool includeVersionLabel,
         IReadOnlyList<ExportMetadataField> baseMetadata,
         IReadOnlyList<PlannedSourceReference> plannedSourceReferences,
         IDictionary<string, string> usedRelativePaths)
@@ -781,7 +831,15 @@ public sealed partial class MainViewModel
 
         var extension = ResolveExportFileExtension(version, baseMetadata);
         var stableId = $"{scope.ContainerId}:{document.DocumentId}:{versionId ?? "official"}";
-        var relativePath = resolver.ResolveRelativePath(scope.PathSegments, fileName, stableId, extension);
+        var variantLabel = includeVersionLabel && !string.IsNullOrWhiteSpace(versionId)
+            ? $"v{versionId}"
+            : null;
+        var relativePath = resolver.ResolveRelativePath(
+            scope.PathSegments,
+            fileName,
+            stableId,
+            extension,
+            variantLabel);
         if (usedRelativePaths.TryGetValue(relativePath, out var existingStableId) &&
             !string.Equals(existingStableId, stableId, StringComparison.OrdinalIgnoreCase))
         {
@@ -833,6 +891,11 @@ public sealed partial class MainViewModel
         {
             DocumentId = document.DocumentId,
             VersionId = versionId,
+            VersionNumber = version?.VersionNumber ?? versionId,
+            IsOfficialVersion = version?.IsOfficial == true ||
+                                (!string.IsNullOrWhiteSpace(document.OfficialVersionId) &&
+                                 string.Equals(document.OfficialVersionId, versionId, StringComparison.OrdinalIgnoreCase)),
+            VersionDiscoverySource = version?.DiscoverySource ?? string.Empty,
             SourcePath = sourcePath,
             LocalPath = relativePath,
             SizeBytes = version?.SizeBytes ?? document.SizeBytes,

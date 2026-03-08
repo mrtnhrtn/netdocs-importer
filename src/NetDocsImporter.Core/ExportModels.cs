@@ -39,6 +39,8 @@ public sealed class ExportPlan
 
     public List<string> Warnings { get; set; } = new();
 
+    public int BlockingCoverageIssueCount { get; set; }
+
     public bool HasBlockingCoverageIssues { get; set; }
 }
 
@@ -47,6 +49,12 @@ public sealed class ExportItem
     public string DocumentId { get; set; } = string.Empty;
 
     public string? VersionId { get; set; }
+
+    public string? VersionNumber { get; set; }
+
+    public bool IsOfficialVersion { get; set; }
+
+    public string VersionDiscoverySource { get; set; } = string.Empty;
 
     public string SourcePath { get; set; } = string.Empty;
 
@@ -92,6 +100,12 @@ public sealed class MetadataDumpItem
     public string DocumentId { get; set; } = string.Empty;
 
     public string? VersionId { get; set; }
+
+    public string? VersionNumber { get; set; }
+
+    public bool IsOfficialVersion { get; set; }
+
+    public string VersionDiscoverySource { get; set; } = string.Empty;
 
     public string SourcePath { get; set; } = string.Empty;
 

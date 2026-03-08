@@ -22,6 +22,9 @@ public sealed class ExportOutputWriter
             {
                 DocumentId = item.DocumentId,
                 VersionId = item.VersionId,
+                VersionNumber = item.VersionNumber,
+                IsOfficialVersion = item.IsOfficialVersion,
+                VersionDiscoverySource = item.VersionDiscoverySource,
                 SourcePath = item.SourcePath,
                 LocalPath = item.LocalPath,
                 SourceReferences = item.SourceReferences
@@ -84,6 +87,12 @@ public sealed class ExportManifestItem
     public string DocumentId { get; set; } = string.Empty;
 
     public string? VersionId { get; set; }
+
+    public string? VersionNumber { get; set; }
+
+    public bool IsOfficialVersion { get; set; }
+
+    public string VersionDiscoverySource { get; set; } = string.Empty;
 
     public string SourcePath { get; set; } = string.Empty;
 

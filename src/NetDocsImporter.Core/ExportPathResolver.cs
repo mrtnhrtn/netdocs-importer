@@ -20,7 +20,12 @@ public sealed class ExportPathResolver
         _maxRelativePathLength = Math.Max(80, maxRelativePathLength);
     }
 
-    public string ResolveRelativePath(IReadOnlyList<string> sourceSegments, string fileName, string stableId, string? fileExtension = null)
+    public string ResolveRelativePath(
+        IReadOnlyList<string> sourceSegments,
+        string fileName,
+        string stableId,
+        string? fileExtension = null,
+        string? fileVariantLabel = null)
     {
         var safeSegments = sourceSegments
             .Where(segment => !string.IsNullOrWhiteSpace(segment))
@@ -29,6 +34,7 @@ public sealed class ExportPathResolver
             .ToList();
 
         var safeFileName = EnsureFileNameExtension(SanitizeFileName(fileName), fileExtension);
+        safeFileName = AppendVariantLabel(safeFileName, fileVariantLabel);
         if (safeFileName.Length == 0)
         {
             safeFileName = "document";
@@ -123,6 +129,26 @@ public sealed class ExportPathResolver
         return string.IsNullOrWhiteSpace(normalizedExtension)
             ? fileName
             : $"{fileName}.{normalizedExtension}";
+    }
+
+    private static string AppendVariantLabel(string fileName, string? fileVariantLabel)
+    {
+        if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(fileVariantLabel))
+        {
+            return fileName;
+        }
+
+        var safeVariantLabel = SanitizePathSegment(fileVariantLabel);
+        if (string.IsNullOrWhiteSpace(safeVariantLabel) || safeVariantLabel == "_")
+        {
+            return fileName;
+        }
+
+        var extension = Path.GetExtension(fileName);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        return string.IsNullOrWhiteSpace(extension)
+            ? $"{stem} ({safeVariantLabel})"
+            : $"{stem} ({safeVariantLabel}){extension}";
     }
 
     private static string NormalizeExtension(string? extension)

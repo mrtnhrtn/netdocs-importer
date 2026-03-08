@@ -58,4 +58,18 @@ public sealed class ExportPathResolverTests
 
         Assert.Equal("Client A/Invoice_1.pdf", relativePath);
     }
+
+    [Fact]
+    public void ResolveRelativePath_AppendsHumanReadableVariantLabelBeforeExtension()
+    {
+        var resolver = new ExportPathResolver();
+
+        var relativePath = resolver.ResolveRelativePath(
+            sourceSegments: new[] { "Client A" },
+            fileName: "Invoice_1.docx",
+            stableId: "doc-123:v2",
+            fileVariantLabel: "v2");
+
+        Assert.Equal("Client A/Invoice_1 (v2).docx", relativePath);
+    }
 }

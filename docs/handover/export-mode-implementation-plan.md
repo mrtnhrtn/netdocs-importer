@@ -127,6 +127,21 @@
   - next branch is `wand`.
   - next non-export task is expected to rebrand the app from `NetDocsImporter` to `Wand`.
 
+## 2026-03-08 Update - All versions exact enumeration
+- `All versions` preflight is now stricter:
+  - `VersionsLite` is treated as summary-only coverage data.
+  - exact version enumeration is required before the export plan is allowed to proceed.
+- Targeted expansion is now implemented only for unresolved documents:
+  - primary: `GET /v1/Document/{id}/versionList`
+  - fallback: `GET /v1/Document/{id}/info?getVersions=true`
+- Manifest/export items now carry version provenance:
+  - `VersionId`
+  - `VersionNumber`
+  - `IsOfficialVersion`
+  - `VersionDiscoverySource`
+- Follow-up guidance:
+  - if preflight volume becomes too slow under tenant throttling, move targeted expansion behind bounded concurrency with a shared throttle gate instead of widening the search query to `select=Versions` for every document.
+
 ## Handover Checklist (Next Agent)
 1. Confirm preflight API query shape in `NetDocumentsSyncService.Export.cs`:
    - verify `/v2/search/<cabinet>?container=...` remains the primary path for export document pages.

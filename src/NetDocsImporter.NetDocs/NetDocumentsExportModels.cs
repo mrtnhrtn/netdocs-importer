@@ -59,11 +59,15 @@ public sealed class NdExportDocumentVersion
 {
     public string VersionId { get; set; } = string.Empty;
 
+    public string VersionNumber { get; set; } = string.Empty;
+
     public string FileName { get; set; } = string.Empty;
 
     public long? SizeBytes { get; set; }
 
     public bool IsOfficial { get; set; }
+
+    public string DiscoverySource { get; set; } = string.Empty;
 
     public List<NdExportAttributeValue> Attributes { get; set; } = new();
 }
@@ -77,6 +81,16 @@ public sealed class NdExportDocument
     public long? SizeBytes { get; set; }
 
     public string? OfficialVersionId { get; set; }
+
+    public string? OfficialVersionHint { get; set; }
+
+    public int? KnownVersionCount { get; set; }
+
+    public bool HasExactVersionCoverage { get; set; }
+
+    public bool CoverageReliable { get; set; }
+
+    public bool NeedsExpansion { get; set; }
 
     public List<NdExportDocumentVersion> VersionHints { get; set; } = new();
 
