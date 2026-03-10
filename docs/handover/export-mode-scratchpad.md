@@ -27,7 +27,14 @@
     - all versions
     - metadata format
     - download filters as folders
-  - run export currently writes manifest/metadata plan artifacts (download execution pending)
+  - run export now downloads binaries to disk and writes manifest/metadata artifacts
+  - export run supports:
+    - bounded worker concurrency
+    - temp-file download + atomic rename
+    - cancel during run
+    - shared 429/retry backoff
+    - per-run export log output
+    - active-run marker creation/deletion
 
 ## Files Updated
 - `src/NetDocsImporter.Core/ExportModels.cs` (new)
@@ -50,30 +57,31 @@
 - Persisted export mode state under `NetDocumentsConnectionSettings` to keep mode and ND target context together.
 
 ## Next Steps (for next agent)
-1. Slim preflight to MVP:
-   - keep scope traversal, but reduce document-list payload.
-   - remove `ValidateWorkspaces` from export document-list queries.
-   - reduce `select` fields to planning essentials.
-2. Stop preflight overfetch:
-   - do not append all synced custom attribute ids during planning by default.
-   - defer custom attributes to optional enrichment (`IncludeCustomAttributes`) or post-MVP.
-3. Shift rich metadata retrieval to run phase:
-   - retrieve content + standard attributes with `v1/Document` during download execution.
-4. Implement binary streaming download runner (temp file + atomic rename) with worker concurrency and cancellation.
-5. Add shared 429 backoff state across workers (`Retry-After` first, otherwise exponential + jitter).
-6. Add export run logs parallel to direct-upload logs with per-request trace correlation fields.
-7. Add `.active` run marker + startup recovery path + resumability skip logic for completed items.
-8. Add tests for:
-   - pagination no-progress guard behavior
-   - lean preflight parameter shape
-   - shared backoff behavior
-   - cancellation cleanup
-   - resume marker recovery and skip-on-rerun semantics
+1. Close the `All versions` truthfulness gap:
+   - keep using `VersionsLite` when exact version ids are present.
+   - do not silently imply full historical coverage when only the official version is known.
+   - decide whether the UX should warn, block, or capability-gate `All versions` when coverage cannot be proven.
+2. Finish export metadata enrichment:
+   - the run-phase helper for `v1/Document` standard attributes exists.
+   - wire that helper into the actual export run so metadata output reflects fetched run-phase attributes rather than only preflight fields.
+3. Decide and implement the product behavior for `Include custom attributes`:
+   - selected subset vs all synced custom attributes
+   - run-phase enrichment vs explicit disable/remove of the toggle
+4. Finish export resumability:
+   - active-run marker creation/deletion is implemented
+   - startup recovery summary and deterministic skip-on-rerun are still pending
+5. Add targeted tests for:
+   - binary export success/failure and retry behavior
+   - shared backoff coordination
+   - export cancellation cleanup
+   - export active-marker recovery and skip-on-rerun semantics
 
 ## Risks / Notes
 - `LoadSettingsAsync` still forces `ImportExecutionMode.DirectApi` in current codebase; export toggle currently only controls new mode flag and UI text.
 - Existing target-browser flows are unchanged; this is intentional per "do not break importer code."
-- `Run Export` currently emits plan artifacts (`manifest.json` + metadata) and does not yet download document binaries.
+- `Run Export` now downloads binaries, but resumability is still partial: active-run markers exist, while startup recovery and skip-on-rerun are not fully wired.
+- `All versions` is only as reliable as the `VersionsLite` data returned by the tenant/query shape; the undocumented fallback version enumeration path remains disabled.
+- `Include custom attributes` still does not enrich export output end-to-end.
 
 ## Design Notes Added This Iteration
 - `docs/exportmode.md` now includes:
@@ -159,6 +167,21 @@
   - the branch is in a mergeable state.
   - workspace export confidence messaging, surfaced coverage failures, and visible preflight warnings are now internally aligned.
   - remaining known runtime issue is still the tenant/API-side `500` for document `3459-7537-1065` during `GET /v1/Document/...`, which is outside this preflight UX fix.
+
+## 2026-03-08 - Export run pipeline landed in main
+- Export execution is no longer artifacts-only:
+  - `Run Export` now downloads document binaries with bounded parallel workers.
+  - files stream to `*.part` and are atomically renamed on success.
+  - export honors cancel requests during the run.
+  - retriable failures use shared backoff state, including `429 Retry-After` handling.
+  - per-run export logs and completed-job summaries are written.
+  - active export run markers are created and deleted through `CompletedJobLogStore`.
+- Remaining gaps after this landing:
+  - run-phase standard-attribute enrichment helper exists but is not yet wired into the export metadata path.
+  - startup recovery for interrupted export markers is not yet implemented.
+  - deterministic skip-on-rerun/resume semantics are not yet implemented.
+  - `All versions` still depends on `VersionsLite` coverage; the undocumented fallback enumeration path remains intentionally disabled.
+  - `Include custom attributes` still warns as deferred rather than exporting end-to-end.
 
 ## Next Branch Preparation
 - Created branch: `wand`

@@ -66,7 +66,7 @@
 - If the team still wants historical context, copy a brief note about the removed legacy explorer into a changelog or ADR rather than retaining dormant code.
 
 ## Current Merge Readiness
-- Current state is acceptable for merge to `main`.
+- Current state has been reflected into `main`; treat this note as historical context for the deprecation and export-preflight cleanup thread.
 - The branch should now be described as:
   - deprecation of dead legacy defaults and scope-explorer paths
   - export preflight coverage surfacing and run blocking for incomplete traversal

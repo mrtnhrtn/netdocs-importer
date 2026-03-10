@@ -12,6 +12,7 @@
 - 2026-03-07: Confirmed preflight always passes `customAttributeIds: null`.
 - 2026-03-07: Confirmed the run path does not perform later enrichment for custom attributes.
 - 2026-03-07: Created this scratchpad for the later feature branch.
+- 2026-03-08: Confirmed the preflight now surfaces a visible warning when `Include custom attributes` is enabled, but export output is still not enriched end-to-end.
 
 ## Recommended Direction
 - Preferred: implement the feature fully so the toggle becomes truthful.
@@ -31,5 +32,5 @@
 
 ## Recommended Next Steps
 - Decide product behavior first: all custom attributes vs selected subset.
-- Avoid shipping a toggle that still does nothing after the branch is merged.
+- Avoid shipping a toggle that only warns but still does not affect export output after the branch is merged.
 

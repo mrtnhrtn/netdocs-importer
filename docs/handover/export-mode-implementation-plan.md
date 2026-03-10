@@ -114,7 +114,12 @@
 ## Current Gap Notes
 - Current implementation preflight still does heavy document/version metadata enumeration for planning.
 - Export document-list requests currently overfetch fields and include `ValidateWorkspaces` in contexts where it is not needed.
-- Binary document download execution remains pending; cancel support for execution is still pending.
+- Binary document download execution is now wired into `Run Export`.
+- Shared retry/backoff and cancel support are wired into export execution.
+- Remaining execution gaps are:
+  - run-phase standard-attribute enrichment is not yet hooked into final metadata output
+  - startup recovery for interrupted export runs is not yet implemented
+  - deterministic skip-on-rerun/resume behavior is not yet implemented
 
 ## 2026-03-07 Update
 - The worst preflight query noise has now been reduced:
@@ -134,14 +139,31 @@
 2. Keep `select` limited to MVP fields for preflight unless a concrete enrichment need is proven.
 3. Keep preflight custom attribute expansion disabled by default; if reintroduced, gate it explicitly and test against tenant-specific container failures.
 4. Keep/extend pagination stall guards and tests for repeated-page/no-progress responses.
-5. Update `docs/exportmode.md` to reflect the current MVP split:
-   - lightweight preflight
-   - metadata/content retrieval in run phase (`v1/Document`).
-6. For branch `wand`, plan the rename in this order:
+5. Wire `GetDocumentStandardAttributesForExportRunAsync(...)` into export execution so metadata output reflects run-phase enrichment rather than preflight-only fields.
+6. Implement export interrupted-run recovery and deterministic skip-on-rerun semantics; current code writes/deletes active markers but does not yet recover or resume export runs.
+7. Resolve `All versions` truthfulness:
+   - keep using `VersionsLite` when exact version ids are present
+   - warn or block when coverage cannot be proven
+   - avoid undocumented endpoint probing unless a supported contract is verified
+8. For branch `wand`, plan the rename in this order:
    - app/window/product strings
    - docs and user-facing copy
    - package/installer identity
    - icons/logo assets after a logo direction is chosen
+
+## 2026-03-08 Update
+- Export execution is now implemented in the app:
+  - downloads run with bounded parallel workers
+  - content streams to temp files and atomically renames on success
+  - cancel support is wired through `CancelExport()`
+  - retriable failures coordinate through shared backoff state
+  - export run logs and completed-job summaries are written
+  - active export markers are created and deleted through `CompletedJobLogStore`
+- Remaining known gaps:
+  - run-phase standard-attribute enrichment helper exists but is not yet applied to final metadata output
+  - custom attributes remain deferred
+  - export startup recovery and skip-on-rerun are still pending
+  - `All versions` still relies on trustworthy `VersionsLite` coverage
 
 ## 2026-02-25 Phase Gate Outcome (Validation Run)
 - Observed run status:

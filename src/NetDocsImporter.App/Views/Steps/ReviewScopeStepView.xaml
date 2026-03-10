@@ -53,7 +53,18 @@
                             HorizontalAlignment="Left"
                             MaxWidth="520"
                             Visibility="{Binding ShowReviewTargetProfileContext, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
+                    <TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource SectionTitle}">
+                                <Setter Property="Text" Value="NetDocuments Target &amp; Profiling" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Text" Value="NetDocuments Source Confirmation" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -63,15 +74,74 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Cabinet:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" />
                         <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ReviewTargetCabinetDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" TextWrapping="Wrap" />
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Target container:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" Margin="0,4,0,0" />
                         <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReviewWorkspaceNameDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="Target path:"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource BodyForegroundBrush}"
+                                   Margin="0,4,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="2"
+                                   Text="{Binding ReviewTargetPath}"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </Grid>
 
-                    <TextBlock Text="Profile Attributes (Inherited Defaults)" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" Margin="0,0,0,4" />
+                    <TextBlock Text="Profile Attributes (Inherited Defaults)"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource BodyForegroundBrush}"
+                               Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                     <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="6" MinWidth="320" MaxHeight="170">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
                         <Grid>
                             <TextBlock Text="No inherited profile attributes available."
                                        Foreground="{DynamicResource MutedForegroundBrush}"
