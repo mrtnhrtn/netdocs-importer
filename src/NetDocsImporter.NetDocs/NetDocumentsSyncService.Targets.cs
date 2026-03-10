@@ -11,6 +11,7 @@ namespace NetDocsImporter.NetDocs;
 /// </summary>
 public sealed partial class NetDocumentsSyncService
 {
+    private const string DisableWorkspaceLegacyVariantProbingEnvVar = "ND_TARGETBROWSER_DISABLE_WORKSPACE_LEGACY_VARIANT_PROBING";
     private static readonly HashSet<string> HiddenCabinetPseudoContainerNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Cabinet",
@@ -676,6 +677,8 @@ public sealed partial class NetDocumentsSyncService
         var hadSuccessfulEnumeration = false;
         var workspaceContext = preferredType == NdTargetType.Workspace || !string.IsNullOrWhiteSpace(workspaceId);
         var forceWorkspaceEndpoints = ShouldForceWorkspaceChildEndpoints(parentContainerId, workspaceId, preferredType);
+        var disableWorkspaceLegacyVariantProbing =
+            IsEnvironmentFlagEnabled(DisableWorkspaceLegacyVariantProbingEnvVar);
         var searchScopeId = !string.IsNullOrWhiteSpace(parentContainerId)
             ? parentContainerId
             : workspaceId;
@@ -686,19 +689,27 @@ public sealed partial class NetDocumentsSyncService
             {
                 resolvedSearchScopeId = await ResolveContainerIdForBrowseAsync(searchScopeId, cancellationToken);
                 var searchScopeCandidates = new List<string>();
-                AddSearchScopeCandidate(searchScopeCandidates, resolvedSearchScopeId);
-                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(resolvedSearchScopeId));
-                AddSearchScopeCandidate(searchScopeCandidates, searchScopeId);
-                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(searchScopeId));
-                AddSearchScopeCandidate(searchScopeCandidates, workspaceId);
-                AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(workspaceId));
-                foreach (var candidate in BuildContainerIdCandidates(searchScopeId, NormalizeWorkspaceEnvId(searchScopeId)))
+                if (disableWorkspaceLegacyVariantProbing && workspaceContext)
                 {
-                    AddSearchScopeCandidate(searchScopeCandidates, candidate);
+                    AddSearchScopeCandidate(searchScopeCandidates, resolvedSearchScopeId);
+                    AddSearchScopeCandidate(searchScopeCandidates, searchScopeId);
                 }
-                foreach (var candidate in BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId)))
+                else
                 {
-                    AddSearchScopeCandidate(searchScopeCandidates, candidate);
+                    AddSearchScopeCandidate(searchScopeCandidates, resolvedSearchScopeId);
+                    AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(resolvedSearchScopeId));
+                    AddSearchScopeCandidate(searchScopeCandidates, searchScopeId);
+                    AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(searchScopeId));
+                    AddSearchScopeCandidate(searchScopeCandidates, workspaceId);
+                    AddSearchScopeCandidate(searchScopeCandidates, TrimContainerIdVersionSuffix(workspaceId));
+                    foreach (var candidate in BuildContainerIdCandidates(searchScopeId, NormalizeWorkspaceEnvId(searchScopeId)))
+                    {
+                        AddSearchScopeCandidate(searchScopeCandidates, candidate);
+                    }
+                    foreach (var candidate in BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId)))
+                    {
+                        AddSearchScopeCandidate(searchScopeCandidates, candidate);
+                    }
                 }
 
                 if (workspaceContext)
@@ -730,12 +741,14 @@ public sealed partial class NetDocumentsSyncService
                 var seenDisplayKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var scopeCandidate in searchScopeCandidates)
                 {
+                    var forceWorkspaceEndpointForCandidate = forceWorkspaceEndpoints ||
+                                                            IsContainerIdentityEquivalent(scopeCandidate, workspaceId);
                     var queryResult = await QueryContainerChildSelectionsAsync(
                         scopeCandidate,
                         cancellationToken,
-                        forceWorkspaceEndpoints: forceWorkspaceEndpoints ||
-                                                 IsContainerIdentityEquivalent(scopeCandidate, workspaceId));
+                        forceWorkspaceEndpoints: forceWorkspaceEndpointForCandidate);
                     hadSuccessfulEnumeration |= queryResult.EndpointSucceeded;
+                    var addedBrowseNodes = false;
                     if (queryResult.Items.Count > 0)
                     {
                         var beforeCount = results.Count;
@@ -748,17 +761,25 @@ public sealed partial class NetDocumentsSyncService
                             seenDisplayKeys,
                             parentContainerId,
                             cancellationToken);
+                        addedBrowseNodes = results.Count > beforeCount;
                         if (!acceptedPrimaryContainerRows)
                         {
-                            acceptedPrimaryContainerRows = results.Count > beforeCount;
+                            acceptedPrimaryContainerRows = addedBrowseNodes;
                         }
                     }
 
                     // Workspace expansion uses /v1/Workspace to retrieve anchored containers.
-                    // Keep extension lookups only as fallback when workspace endpoints yielded nothing.
-                    var shouldRunExtensionSearch = !workspaceContext ||
-                                                   queryResult.Items.Count == 0 ||
-                                                   !queryResult.Items.Any(item => item.Type == NdTargetType.WorkspaceFilter);
+                    // Keep extension lookups as compatibility fallback only when the primary
+                    // container response did not yield usable browse nodes.
+                    var workspaceLikeCandidate = workspaceContext ||
+                                                 forceWorkspaceEndpointForCandidate ||
+                                                 preferredType == NdTargetType.Workspace ||
+                                                 InferTargetTypeFromContainerId(scopeCandidate) == NdTargetType.Workspace ||
+                                                 queryResult.Items.Any(item => !string.IsNullOrWhiteSpace(item.ParentWorkspaceId));
+                    var shouldRunExtensionSearch = workspaceLikeCandidate
+                        ? queryResult.Items.Count == 0 ||
+                          !queryResult.Items.Any(item => item.Type == NdTargetType.WorkspaceFilter)
+                        : !addedBrowseNodes;
                     if (shouldRunExtensionSearch)
                     {
                         // Some tenants omit ndflt/ndsq/ndcs rows in container list responses.
@@ -801,6 +822,15 @@ public sealed partial class NetDocumentsSyncService
                         // Some tenants return ndflt/ndsq/ndcs rows only for specific id shapes (for example with/without version suffix).
                         continue;
                     }
+
+                    if (workspaceLikeCandidate &&
+                        IsEnvironmentFlagEnabled(DisableWorkspaceLegacyVariantProbingEnvVar) &&
+                        queryResult.Items.Count == 0)
+                    {
+                        Trace.WriteLine(
+                            $"ND-BROWSER workspace legacy variant probing disabled after zero-yield candidate='{scopeCandidate}'.");
+                        break;
+                    }
                 }
 
                 if (results.Count > 0)
@@ -826,7 +856,12 @@ public sealed partial class NetDocumentsSyncService
             : workspaceId;
         // TEMP-FALLBACK (candidate for future removal):
         // Final endpoint candidate list retained for resilience while summary-first rollout is observed.
-        foreach (var path in BuildChildrenEndpointCandidates(cabinetId, fallbackParentId, fallbackWorkspaceId, preferredType))
+        foreach (var path in BuildChildrenEndpointCandidates(
+                     cabinetId,
+                     fallbackParentId,
+                     fallbackWorkspaceId,
+                     preferredType,
+                     includeLegacyWorkspaceVariants: !disableWorkspaceLegacyVariantProbing))
         {
             try
             {
@@ -839,6 +874,14 @@ public sealed partial class NetDocumentsSyncService
                 if (nodes.Count > 0)
                 {
                     results.AddRange(nodes);
+                    break;
+                }
+
+                if (disableWorkspaceLegacyVariantProbing &&
+                    (workspaceContext || preferredType == NdTargetType.Workspace))
+                {
+                    Trace.WriteLine(
+                        $"ND-BROWSER workspace legacy variant probing disabled after zero-yield fallback endpoint='{path}'.");
                     break;
                 }
             }
@@ -1381,7 +1424,14 @@ public sealed partial class NetDocumentsSyncService
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var dedupeIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var endpointSucceeded = false;
-        var candidateIds = BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId))
+        var disableWorkspaceLegacyVariantProbing =
+            IsEnvironmentFlagEnabled(DisableWorkspaceLegacyVariantProbingEnvVar);
+        var shouldSuppressWorkspaceCandidateVariants = disableWorkspaceLegacyVariantProbing &&
+                                                      (forceWorkspaceEndpoints ||
+                                                       InferTargetTypeFromContainerId(containerId) == NdTargetType.Workspace);
+        var candidateIds = (shouldSuppressWorkspaceCandidateVariants
+                ? EnumerateSingleContainerIdCandidate(containerId)
+                : BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId)))
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToList();
         if (candidateIds.Count == 0)
@@ -1502,14 +1552,17 @@ public sealed partial class NetDocumentsSyncService
 
                     if (results.Count > 0)
                     {
-                        if (forceWorkspaceEndpoints)
+                        if (forceWorkspaceEndpoints || preferWorkspaceEndpoint)
                         {
-                            break;
+                            // Workspace variants can legitimately split folder/filter rows across
+                            // identifier shapes, so keep probing those candidates.
+                            continue;
                         }
 
-                        // Keep probing additional endpoint variants for this candidate id.
-                        // Some tenants split folder/filter rows across endpoint shapes.
-                        continue;
+                        // Non-workspace containers should stop after the first successful endpoint
+                        // that produced usable rows; additional endpoint-shape probes are pure cost
+                        // unless later evidence shows a tenant-specific gap.
+                        break;
                     }
                 }
                 catch
@@ -1523,6 +1576,14 @@ public sealed partial class NetDocumentsSyncService
                 // Keep merging across all candidate id variants (for example env-id vs numeric id).
                 // Some tenants return filter rows only for one id shape.
                 continue;
+            }
+
+            if ((forceWorkspaceEndpoints || candidateType == NdTargetType.Workspace) &&
+                disableWorkspaceLegacyVariantProbing)
+            {
+                Trace.WriteLine(
+                    $"ND-BROWSER workspace legacy variant probing disabled after zero-yield internal candidate='{candidateId}'.");
+                break;
             }
         }
 
@@ -1599,7 +1660,13 @@ public sealed partial class NetDocumentsSyncService
 
         var candidates = new List<string>();
         AddSearchScopeCandidate(candidates, containerId);
-        foreach (var candidate in BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId)))
+        var disableWorkspaceLegacyVariantProbing =
+            IsEnvironmentFlagEnabled(DisableWorkspaceLegacyVariantProbingEnvVar);
+        var candidateSource = disableWorkspaceLegacyVariantProbing &&
+                              InferTargetTypeFromContainerId(containerId) == NdTargetType.Workspace
+            ? EnumerateSingleContainerIdCandidate(containerId)
+            : BuildContainerIdCandidates(containerId, NormalizeWorkspaceEnvId(containerId));
+        foreach (var candidate in candidateSource)
         {
             AddSearchScopeCandidate(candidates, candidate);
         }
@@ -3099,14 +3166,20 @@ public sealed partial class NetDocumentsSyncService
         string cabinetId,
         string? parentContainerId,
         string? workspaceId,
-        NdTargetType? preferredType)
+        NdTargetType? preferredType,
+        bool includeLegacyWorkspaceVariants = true)
     {
         _ = cabinetId;
 
         if (!string.IsNullOrWhiteSpace(parentContainerId))
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var candidate in BuildContainerIdCandidates(parentContainerId, NormalizeWorkspaceEnvId(parentContainerId)))
+            var parentCandidates = includeLegacyWorkspaceVariants &&
+                                   (preferredType == NdTargetType.Workspace ||
+                                    InferTargetTypeFromContainerId(parentContainerId) == NdTargetType.Workspace)
+                ? BuildContainerIdCandidates(parentContainerId, NormalizeWorkspaceEnvId(parentContainerId))
+                : EnumerateSingleContainerIdCandidate(parentContainerId);
+            foreach (var candidate in parentCandidates)
             {
                 if (string.IsNullOrWhiteSpace(candidate))
                 {
@@ -3146,7 +3219,10 @@ public sealed partial class NetDocumentsSyncService
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var candidate in BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId)))
+            var workspaceCandidates = includeLegacyWorkspaceVariants
+                ? BuildContainerIdCandidates(workspaceId, NormalizeWorkspaceEnvId(workspaceId))
+                : EnumerateSingleContainerIdCandidate(workspaceId);
+            foreach (var candidate in workspaceCandidates)
             {
                 if (string.IsNullOrWhiteSpace(candidate))
                 {
@@ -3180,6 +3256,14 @@ public sealed partial class NetDocumentsSyncService
             }
 
             yield break;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateSingleContainerIdCandidate(string? containerId)
+    {
+        if (!string.IsNullOrWhiteSpace(containerId))
+        {
+            yield return containerId;
         }
     }
 
@@ -3720,6 +3804,27 @@ public sealed partial class NetDocumentsSyncService
         yield return "ndflt";
         yield return "ndsq";
         yield return "ndcs";
+    }
+
+    private static bool IsEnvironmentFlagEnabled(string variableName)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        return raw.Trim() switch
+        {
+            "1" => true,
+            "true" => true,
+            "TRUE" => true,
+            "yes" => true,
+            "YES" => true,
+            "on" => true,
+            "ON" => true,
+            _ => false
+        };
     }
 
     private static IEnumerable<string?> BuildExtensionSearchListFlags(string extension)

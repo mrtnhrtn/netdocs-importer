@@ -445,6 +445,8 @@ public sealed partial class MainViewModel
         var throttle = new ExportThrottleState();
         var maxAttemptsPerItem = 4;
         string? activeRunMarkerPath = null;
+        var apiCalls = new List<NdApiCallTrace>();
+        var apiCallsLock = new object();
 
         try
         {
@@ -457,6 +459,13 @@ public sealed partial class MainViewModel
 
             Directory.CreateDirectory(ExportDestinationRootPath);
             var sync = RequireSyncService();
+            using var apiTraceObserver = sync.PushApiCallTraceObserver(trace =>
+            {
+                lock (apiCallsLock)
+                {
+                    apiCalls.Add(trace);
+                }
+            });
             var writer = new ExportOutputWriter();
             var createdFolders = 0;
 
@@ -627,7 +636,13 @@ public sealed partial class MainViewModel
                 ExportMetadataFormat,
                 _exportCancellation.Token);
 
-            var runLogPath = await WriteExportRunLogAsync(runJobId, runStartedUtc, runLogLines, succeeded, failed, _exportPlan.Items.Count, manifestPath, metadataPath);
+            NdApiRunSummary apiSummary;
+            lock (apiCallsLock)
+            {
+                apiSummary = NdApiTraceSummaryBuilder.Build(apiCalls);
+            }
+
+            var runLogPath = await WriteExportRunLogAsync(runJobId, runStartedUtc, runLogLines, succeeded, failed, _exportPlan.Items.Count, manifestPath, metadataPath, apiSummary);
             await _completedJobLogStore.WriteSummaryAsync(new CompletedJobRunSummary
             {
                 JobId = runJobId,
@@ -952,7 +967,8 @@ public sealed partial class MainViewModel
         int failed,
         int total,
         string manifestPath,
-        string metadataPath)
+        string metadataPath,
+        NdApiRunSummary apiSummary)
     {
         var builder = new StringBuilder();
         builder.AppendLine("+------------------------------------------------------------+");
@@ -966,6 +982,10 @@ public sealed partial class MainViewModel
         builder.AppendLine($" Failed: {failed:N0}");
         builder.AppendLine($" Manifest: {manifestPath}");
         builder.AppendLine($" Metadata: {metadataPath}");
+        foreach (var line in NdApiRunSummaryFormatter.BuildLogSectionLines(apiSummary))
+        {
+            builder.AppendLine(line);
+        }
         builder.AppendLine("+------------------------------------------------------------+");
         builder.AppendLine("| Item Outcomes                                              |");
         builder.AppendLine("+------------------------------------------------------------+");

@@ -3507,6 +3507,111 @@ public class NetDocumentsSyncServiceTargetsTests
     }
 
     [Fact]
+    public async Task GetContainerChildrenAsync_CanDisableWorkspaceLegacyVariantProbingAfterFirstZeroYieldCandidate()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+        const string envVar = "ND_TARGETBROWSER_DISABLE_WORKSPACE_LEGACY_VARIANT_PROBING";
+        const string workspaceVersioned = ":AU2:o:w:m:v:^W200423132232851.nev|1";
+        const string workspaceUnversioned = ":AU2:o:w:m:v:^W200423132232851.nev";
+
+        var previous = Environment.GetEnvironmentVariable(envVar);
+        Environment.SetEnvironmentVariable(envVar, "1");
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri);
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+
+                if (string.Equals(path, $"/v2/container/{workspaceVersioned}/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, $$"""
+                        { "data": { "id": "{{workspaceVersioned}}", "description": "Workspace Root", "extension": "ndws" } }
+                        """);
+                }
+
+                if (path.StartsWith($"/v2/container/{workspaceVersioned}/sub", StringComparison.OrdinalIgnoreCase) ||
+                    (path.StartsWith($"/v2/container/{workspaceVersioned}", StringComparison.OrdinalIgnoreCase) &&
+                     query.Contains("top=200", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                if (string.Equals(path, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                if (string.Equals(path, $"/v1/Workspace/{workspaceUnversioned}", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, $"/v2/container/{workspaceUnversioned}/sub", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, $"/v2/container/{workspaceUnversioned}", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLT-200",
+                                "description": "Would have been found on second candidate",
+                                "Ext": "ndflt",
+                                "workspaceId": "WS-1"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, $$"""{"error":"unexpected request","path":"{{path}}","query":"{{query}}"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync("NG-CAB", parentContainerId: workspaceVersioned, workspaceId: workspaceUnversioned);
+
+            Assert.Empty(nodes);
+            Assert.DoesNotContain(
+                requests,
+                uri => Uri.UnescapeDataString(uri.AbsolutePath).Contains($"{workspaceUnversioned}/", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(
+                           Uri.UnescapeDataString(uri.AbsolutePath),
+                           $"/v2/container/{workspaceUnversioned}",
+                           StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(
+                           Uri.UnescapeDataString(uri.AbsolutePath),
+                           $"/v1/Workspace/{workspaceUnversioned}",
+                           StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                requests,
+                uri => string.Equals(uri.AbsolutePath, "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, previous);
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GetContainerChildrenAsync_ClassifiesAmbiguousWorkspaceRowsAsFilters()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
@@ -3822,6 +3927,102 @@ public class NetDocumentsSyncServiceTargetsTests
             Assert.Equal(2, nodes.Count);
             Assert.Equal(NdTargetType.Folder, nodes.Single(n => n.Id == "FLD-100").SupportedType);
             Assert.Equal(NdTargetType.WorkspaceFilter, nodes.Single(n => n.Id == filterId).SupportedType);
+        }
+        finally
+        {
+            DeleteIfExists(dbPath);
+            DeleteIfExists($"{dbPath}-wal");
+            DeleteIfExists($"{dbPath}-shm");
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetContainerChildrenAsync_NonWorkspaceStopsAfterFirstSuccessfulEndpoint_AndSkipsExtensionFallback()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"nd-target-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "jobstore.db");
+        var requests = new List<Uri>();
+
+        try
+        {
+            var handler = new StubHttpHandler(request =>
+            {
+                if (request.Method != HttpMethod.Get || request.RequestUri is null)
+                {
+                    return JsonResponse(HttpStatusCode.MethodNotAllowed, """{"error":"method not allowed"}""");
+                }
+
+                lock (requests)
+                {
+                    requests.Add(request.RequestUri);
+                }
+
+                var path = Uri.UnescapeDataString(request.RequestUri.AbsolutePath);
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+
+                if (string.Equals(path, "/v2/container/FLD-1/info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "data": {
+                            "id": "FLD-1",
+                            "description": "Parent Folder",
+                            "extension": "ndfld"
+                          }
+                        }
+                        """);
+                }
+
+                if (string.Equals(path, "/v2/container/FLD-1/sub", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("recursive=false", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("max=200", StringComparison.OrdinalIgnoreCase) &&
+                    query.Contains("listflags=ValidateWorkspaces", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """
+                        {
+                          "standardList": [
+                            {
+                              "standardAttributes": {
+                                "id": "FLD-CHILD",
+                                "description": "Child Folder",
+                                "Ext": "ndfld"
+                              }
+                            }
+                          ]
+                        }
+                        """);
+                }
+
+                if (path.StartsWith("/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(path, "/v2/search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonResponse(HttpStatusCode.OK, """{"standardList": []}""");
+                }
+
+                return JsonResponse(HttpStatusCode.NotFound, $$"""{"error":"unexpected request","path":"{{path}}","query":"{{query}}"}""");
+            });
+
+            var service = CreateSyncService(handler, dbPath);
+            var nodes = await service.GetContainerChildrenAsync("NG-CAB", parentContainerId: "FLD-1");
+
+            var child = Assert.Single(nodes);
+            Assert.Equal("FLD-CHILD", child.Id);
+            Assert.Equal(NdTargetType.Folder, child.SupportedType);
+            Assert.DoesNotContain(
+                requests,
+                uri => string.Equals(Uri.UnescapeDataString(uri.AbsolutePath), "/v2/search/NG-CAB", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                requests,
+                uri => string.Equals(Uri.UnescapeDataString(uri.AbsolutePath), "/v2/container/FLD-1", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                requests,
+                uri => string.Equals(Uri.UnescapeDataString(uri.AbsolutePath), "/v2/container/FLD-1/sub", StringComparison.OrdinalIgnoreCase) &&
+                       !Uri.UnescapeDataString(uri.Query).Contains("listflags=ValidateWorkspaces", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

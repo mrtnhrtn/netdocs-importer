@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
+using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
@@ -270,6 +271,8 @@ public sealed partial class MainViewModel
         string? activeRunMarkerPath = null;
         var runStartedUtc = DateTime.UtcNow;
         var completedFiles = 0;
+        var apiCalls = new List<NdApiCallTrace>();
+        var apiCallsLock = new object();
 
         try
         {
@@ -278,6 +281,14 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(DirectUploadProgressPercentDisplay));
             StatusText = "Running direct upload...";
             var service = RequireDirectUploadService();
+            var syncService = RequireSyncService();
+            using var apiTraceObserver = syncService.PushApiCallTraceObserver(trace =>
+            {
+                lock (apiCallsLock)
+                {
+                    apiCalls.Add(trace);
+                }
+            });
             DirectUploadStatus = "Materializing direct upload plan...";
             var executionContext = BuildDirectUploadPlanContext(allowCreateFolders: true);
             currentJobId = CurrentJobId ?? string.Empty;
@@ -329,7 +340,13 @@ public sealed partial class MainViewModel
 
             var result = await service.UploadAsync(executionPlan, executionContext, progress, runCancellation.Token);
             var reportPath = await WriteDirectUploadReportAsync(executionPlan, result, runStartedUtc);
-            var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath, runStartedUtc);
+            NdApiRunSummary apiSummary;
+            lock (apiCallsLock)
+            {
+                apiSummary = NdApiTraceSummaryBuilder.Build(apiCalls);
+            }
+
+            var runLogPath = await WriteDirectUploadRunLogAsync(executionPlan, result, reportPath, runStartedUtc, apiSummary);
             _lastDirectUploadReportPath = reportPath;
             _lastDirectUploadLogPath = runLogPath;
             OnPropertyChanged(nameof(CanOpenLastDirectUploadReport));
@@ -747,7 +764,8 @@ public sealed partial class MainViewModel
         UploadPlanResult plan,
         DirectUploadRunResult result,
         string reportPath,
-        DateTime runStartedUtc)
+        DateTime runStartedUtc,
+        NdApiRunSummary apiSummary)
     {
         var job = CurrentJobId ?? "unknown";
 
@@ -766,6 +784,10 @@ public sealed partial class MainViewModel
         builder.AppendLine($" Resumed: {result.ResumedFiles:N0}");
         builder.AppendLine($" CreatedFolders: {result.CreatedFolders:N0}");
         builder.AppendLine($" CSV Report: {reportPath}");
+        foreach (var line in NdApiRunSummaryFormatter.BuildLogSectionLines(apiSummary))
+        {
+            builder.AppendLine(line);
+        }
         builder.AppendLine("+------------------------------------------------------------+");
         builder.AppendLine("| File Outcomes                                              |");
         builder.AppendLine("+------------------------------------------------------------+");

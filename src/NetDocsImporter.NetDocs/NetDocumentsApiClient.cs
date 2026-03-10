@@ -18,6 +18,10 @@ public sealed class NetDocumentsApiClient
     private static readonly Regex HtmlTagRegex = new("<[^>]+>", RegexOptions.Compiled);
     private static readonly Regex UrlRegex = new(@"https?://[^\s""'<>]+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ReferenceRegex = new(@"Reference\s*#\s*(?<value>[^\s<]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly string[] ApiCostHeaderNames = ["X-ND-API-Cost", "X-API-Cost"];
+    private static readonly string[] ApiRemainingHeaderNames = ["X-ND-API-Remaining", "X-RateLimit-Remaining"];
+    private static readonly string[] ApiTotalAvailablePropertyNames = ["totalAvailable", "totalavailable", "total_available", "apiTotalAvailable"];
+    private static readonly string[] ApiSpendSoFarPropertyNames = ["spendSoFar", "spendsofar", "spentSoFar", "spentsofar", "spend_so_far", "spent_so_far", "apiSpendSoFar"];
 
     private readonly HttpClient _client;
     private readonly Func<NetDocumentsAuthContext> _authContextAccessor;
@@ -71,6 +75,7 @@ public sealed class NetDocumentsApiClient
         stopwatch.Stop();
 
         var content = await ReadContentAsStringAsync(response.Content, cancellationToken);
+        var usage = ExtractApiUsage(response, content);
         if (!response.IsSuccessStatusCode)
         {
             EmitApiCallTrace(new NdApiCallTrace
@@ -83,7 +88,12 @@ public sealed class NetDocumentsApiClient
                 DurationMs = stopwatch.ElapsedMilliseconds,
                 ResponseLength = content.Length,
                 ResponsePreview = BuildResponsePreview(content),
-                ErrorMessage = $"{(int)response.StatusCode} {response.ReasonPhrase}"
+                ErrorMessage = $"{(int)response.StatusCode} {response.ReasonPhrase}",
+                ApiCost = usage.ApiCost,
+                ApiRemaining = usage.ApiRemaining,
+                ApiSpendSoFar = usage.ApiSpendSoFar,
+                ApiTotalAvailable = usage.ApiTotalAvailable,
+                ApiUsageSource = usage.Source
             });
             LogHttpFailure("GET", relativeOrAbsolutePath, requestUri, response, content);
             throw new InvalidOperationException(
@@ -100,7 +110,7 @@ public sealed class NetDocumentsApiClient
         }
 
         Trace.WriteLine(
-            $"ND-HTTP success method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+            $"ND-HTTP success method=GET path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
         EmitApiCallTrace(new NdApiCallTrace
         {
             Method = "GET",
@@ -110,7 +120,12 @@ public sealed class NetDocumentsApiClient
             Succeeded = true,
             DurationMs = stopwatch.ElapsedMilliseconds,
             ResponseLength = content.Length,
-            ResponsePreview = BuildResponsePreview(content)
+            ResponsePreview = BuildResponsePreview(content),
+            ApiCost = usage.ApiCost,
+            ApiRemaining = usage.ApiRemaining,
+            ApiSpendSoFar = usage.ApiSpendSoFar,
+            ApiTotalAvailable = usage.ApiTotalAvailable,
+            ApiUsageSource = usage.Source
         });
 
         return JsonDocument.Parse(content);
@@ -165,6 +180,7 @@ public sealed class NetDocumentsApiClient
         var statusCode = (int)response.StatusCode;
         var retryAfter = response.Headers.RetryAfter?.Delta;
         var contentLength = response.Content.Headers.ContentLength;
+        var usage = ExtractApiUsage(response, body: null);
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await ReadContentAsStringAsync(response.Content, cancellationToken);
@@ -194,7 +210,7 @@ public sealed class NetDocumentsApiClient
         }
 
         Trace.WriteLine(
-            $"ND-HTTP success method=GET-BINARY path='{relativeOrAbsolutePath}' url='{requestUri}' status={statusCode} latencyMs={stopwatch.ElapsedMilliseconds} bytes={bytesWritten}");
+            $"ND-HTTP success method=GET-BINARY path='{relativeOrAbsolutePath}' url='{requestUri}' status={statusCode} latencyMs={stopwatch.ElapsedMilliseconds} bytes={bytesWritten} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
 
         return new NdBinaryDownloadResponse
         {
@@ -248,8 +264,9 @@ public sealed class NetDocumentsApiClient
                 $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
         }
 
+        var usage = ExtractApiUsage(response, responseContent);
         Trace.WriteLine(
-            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
     }
 
     /// <summary>
@@ -290,8 +307,9 @@ public sealed class NetDocumentsApiClient
                 $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
         }
 
+        var usage = ExtractApiUsage(response, responseContent);
         Trace.WriteLine(
-            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+            $"ND-HTTP success method=POST path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
 
         if (string.IsNullOrWhiteSpace(responseContent))
         {
@@ -399,8 +417,9 @@ public sealed class NetDocumentsApiClient
                 $"NetDocuments API request failed ({(int)response.StatusCode} {response.ReasonPhrase}) for '{relativeOrAbsolutePath}'. Snippet: {BuildSnippet(responseContent)}");
         }
 
+        var usage = ExtractApiUsage(response, responseContent);
         Trace.WriteLine(
-            $"ND-HTTP success method={method.Method} path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds}");
+            $"ND-HTTP success method={method.Method} path='{relativeOrAbsolutePath}' url='{requestUri}' status={(int)response.StatusCode} latencyMs={stopwatch.ElapsedMilliseconds} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
 
         return responseContent;
     }
@@ -423,12 +442,9 @@ public sealed class NetDocumentsApiClient
             }
 
             var retryAfter = response.Headers.RetryAfter?.Delta ?? delay;
-            var apiCost = TryReadFirstHeaderValue(response, "X-ND-API-Cost") ??
-                          TryReadFirstHeaderValue(response, "X-API-Cost");
-            var remaining = TryReadFirstHeaderValue(response, "X-ND-API-Remaining") ??
-                            TryReadFirstHeaderValue(response, "X-RateLimit-Remaining");
+            var usage = ExtractApiUsage(response, body: null);
             Trace.WriteLine(
-                $"ND-HTTP retry status={(int)response.StatusCode} attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0} apiCost='{apiCost ?? string.Empty}' remaining='{remaining ?? string.Empty}'");
+                $"ND-HTTP retry status={(int)response.StatusCode} attempt={attempt}/{maxAttempts} retryAfterMs={retryAfter.TotalMilliseconds:F0} apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}'");
             response.Dispose();
             await Task.Delay(retryAfter, cancellationToken);
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
@@ -463,12 +479,9 @@ public sealed class NetDocumentsApiClient
     {
         var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
         var snippet = BuildSnippet(body);
-        var apiCost = TryReadFirstHeaderValue(response, "X-ND-API-Cost") ??
-                      TryReadFirstHeaderValue(response, "X-API-Cost");
-        var remaining = TryReadFirstHeaderValue(response, "X-ND-API-Remaining") ??
-                        TryReadFirstHeaderValue(response, "X-RateLimit-Remaining");
+        var usage = ExtractApiUsage(response, body);
         Trace.WriteLine(
-            $"ND-HTTP error method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' apiCost='{apiCost ?? string.Empty}' remaining='{remaining ?? string.Empty}' snippet='{snippet}'");
+            $"ND-HTTP error method={method} path='{path}' url='{requestUri}' status={(int)response.StatusCode} reason='{response.ReasonPhrase}' mediaType='{mediaType}' apiCost='{FormatApiMetric(usage.ApiCost)}' remaining='{FormatApiMetric(usage.ApiRemaining)}' spendSoFar='{FormatApiMetric(usage.ApiSpendSoFar)}' totalAvailable='{FormatApiMetric(usage.ApiTotalAvailable)}' usageSource='{usage.Source}' snippet='{snippet}'");
     }
 
     private static string BuildSnippet(string text)
@@ -758,10 +771,191 @@ public sealed class NetDocumentsApiClient
         return values.FirstOrDefault();
     }
 
+    private static NdApiUsageSnapshot ExtractApiUsage(HttpResponseMessage response, string? body)
+    {
+        decimal? apiCost = null;
+        foreach (var headerName in ApiCostHeaderNames)
+        {
+            if (TryReadHeaderDecimal(response, headerName, out apiCost))
+            {
+                break;
+            }
+        }
+
+        decimal? apiRemaining = null;
+        foreach (var headerName in ApiRemainingHeaderNames)
+        {
+            if (TryReadHeaderDecimal(response, headerName, out apiRemaining))
+            {
+                break;
+            }
+        }
+
+        var sourceParts = new List<string>();
+        if (apiCost.HasValue || apiRemaining.HasValue)
+        {
+            sourceParts.Add("headers");
+        }
+
+        decimal? totalAvailable = null;
+        decimal? spendSoFar = null;
+        if (TryExtractApiUsageFromBody(body, out var bodyTotalAvailable, out var bodySpendSoFar))
+        {
+            totalAvailable = bodyTotalAvailable;
+            spendSoFar = bodySpendSoFar;
+            if (totalAvailable.HasValue || spendSoFar.HasValue)
+            {
+                sourceParts.Add("body");
+            }
+        }
+
+        return new NdApiUsageSnapshot(
+            apiCost,
+            apiRemaining,
+            spendSoFar,
+            totalAvailable,
+            string.Join("+", sourceParts));
+    }
+
+    private static bool TryReadHeaderDecimal(HttpResponseMessage response, string headerName, out decimal? value)
+    {
+        value = null;
+        var raw = TryReadFirstHeaderValue(response, headerName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        if (!decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryExtractApiUsageFromBody(string? body, out decimal? totalAvailable, out decimal? spendSoFar)
+    {
+        totalAvailable = null;
+        spendSoFar = null;
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        var trimmed = body.TrimStart();
+        if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return TryExtractApiUsageFromElement(document.RootElement, out totalAvailable, out spendSoFar);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryExtractApiUsageFromElement(JsonElement element, out decimal? totalAvailable, out decimal? spendSoFar)
+    {
+        totalAvailable = null;
+        spendSoFar = null;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var hasTotal = TryReadNamedDecimal(element, ApiTotalAvailablePropertyNames, out totalAvailable);
+            var hasSpend = TryReadNamedDecimal(element, ApiSpendSoFarPropertyNames, out spendSoFar);
+            if (hasTotal || hasSpend)
+            {
+                return true;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryExtractApiUsageFromElement(property.Value, out totalAvailable, out spendSoFar))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryExtractApiUsageFromElement(item, out totalAvailable, out spendSoFar))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadNamedDecimal(JsonElement element, IReadOnlyList<string> names, out decimal? value)
+    {
+        value = null;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!names.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (TryReadDecimal(property.Value, out var parsed))
+            {
+                value = parsed;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadDecimal(JsonElement element, out decimal value)
+    {
+        value = default;
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Number:
+                return element.TryGetDecimal(out value);
+            case JsonValueKind.String:
+                return decimal.TryParse(
+                    element.GetString(),
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out value);
+            default:
+                return false;
+        }
+    }
+
+    private static string FormatApiMetric(decimal? value)
+    {
+        return value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
     private void EmitApiCallTrace(NdApiCallTrace trace)
     {
         _callTraceObserver.Value?.Invoke(trace);
     }
+
+    private readonly record struct NdApiUsageSnapshot(
+        decimal? ApiCost,
+        decimal? ApiRemaining,
+        decimal? ApiSpendSoFar,
+        decimal? ApiTotalAvailable,
+        string Source);
 
     private sealed class DelegateDisposable : IDisposable
     {

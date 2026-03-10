@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using NetDocsImporter.Core;
 using NetDocsImporter.Data;
+using NetDocsImporter.NetDocs;
 
 namespace NetDocsImporter.App;
 
@@ -272,6 +273,8 @@ public sealed partial class MainViewModel
         }
 
         var runStartedUtc = DateTime.UtcNow;
+        var apiCalls = new List<NdApiCallTrace>();
+        var apiCallsLock = new object();
         try
         {
             UpdateOnUi(() =>
@@ -285,6 +288,14 @@ public sealed partial class MainViewModel
             await LoadQueueJobsAsync();
 
             var service = RequireDirectUploadService();
+            var syncService = RequireSyncService();
+            using var apiTraceObserver = syncService.PushApiCallTraceObserver(trace =>
+            {
+                lock (apiCallsLock)
+                {
+                    apiCalls.Add(trace);
+                }
+            });
             var plan = await service.BuildPlanAsync(snapshot.SourceJobId, snapshot.Target, snapshot.PlanContext, cancellationToken);
             if (!plan.CanUpload || plan.Files.Count == 0)
             {
@@ -309,7 +320,13 @@ public sealed partial class MainViewModel
 
             var result = await service.UploadAsync(plan, snapshot.PlanContext, progress, cancellationToken);
             var reportPath = await WriteDirectUploadReportAsync(plan, result, runStartedUtc);
-            var runLogPath = await WriteDirectUploadRunLogAsync(plan, result, reportPath, runStartedUtc);
+            NdApiRunSummary apiSummary;
+            lock (apiCallsLock)
+            {
+                apiSummary = NdApiTraceSummaryBuilder.Build(apiCalls);
+            }
+
+            var runLogPath = await WriteDirectUploadRunLogAsync(plan, result, reportPath, runStartedUtc, apiSummary);
 
             _lastDirectUploadReportPath = reportPath;
             _lastDirectUploadLogPath = runLogPath;

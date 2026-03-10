@@ -24,6 +24,16 @@ public sealed partial class NetDocumentsSyncService
         _jobStore = jobStore ?? throw new ArgumentNullException(nameof(jobStore));
     }
 
+    public IDisposable PushApiCallTraceObserver(Action<NdApiCallTrace> observer)
+    {
+        if (observer is null)
+        {
+            throw new ArgumentNullException(nameof(observer));
+        }
+
+        return _apiClient.PushApiCallTraceObserver(observer);
+    }
+
     /// <summary>
     /// Resolves the currently authenticated NetDocuments user.
     /// </summary>
