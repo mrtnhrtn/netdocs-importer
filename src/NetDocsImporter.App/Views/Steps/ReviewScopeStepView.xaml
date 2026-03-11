@@ -18,181 +18,352 @@
         </Grid.ColumnDefinitions>
 
         <Border Grid.Row="0" Grid.ColumnSpan="4" BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
-            <StackPanel>
-                <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Select Folder"
-                            Width="120"
-                            Margin="0,0,6,0"
-                            Click="OnSelectFolder"
-                            IsEnabled="{Binding CanSelectSourceFolder}"
-                            Style="{StaticResource SecondaryButton}" />
-                    <Button Content="Cancel Scan"
-                            Width="110"
-                            Click="OnCancelScan"
-                            IsEnabled="{Binding IsScanning}"
-                            Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            Style="{StaticResource SecondaryButton}" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0"
+                            MinWidth="420"
+                            MaxWidth="760"
+                            Visibility="{Binding ShowImportContext, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock Text="Source Folder" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="Select Folder"
+                                Width="120"
+                                Margin="0,0,6,0"
+                                Click="OnSelectFolder"
+                                IsEnabled="{Binding CanSelectSourceFolder}"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Content="Cancel Scan"
+                                Width="110"
+                                Click="OnCancelScan"
+                                IsEnabled="{Binding IsScanning}"
+                                Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Style="{StaticResource SecondaryButton}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="{DynamicResource MutedForegroundBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
                 </StackPanel>
-                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#555555" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding StatusText}" Foreground="#555555" Margin="0,4,0,0" TextWrapping="Wrap" />
-            </StackPanel>
+
+                <StackPanel Grid.Column="2"
+                            Margin="0,2,0,0"
+                            VerticalAlignment="Top"
+                            HorizontalAlignment="Left"
+                            MaxWidth="520"
+                            Visibility="{Binding ShowReviewTargetProfileContext, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource SectionTitle}">
+                                <Setter Property="Text" Value="NetDocuments Target &amp; Profiling" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Text" Value="NetDocuments Source Confirmation" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Cabinet:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ReviewTargetCabinetDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Target container:" FontWeight="SemiBold" Foreground="{DynamicResource BodyForegroundBrush}" Margin="0,4,0,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ReviewWorkspaceNameDisplay}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="Target path:"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource BodyForegroundBrush}"
+                                   Margin="0,4,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="2"
+                                   Text="{Binding ReviewTargetPath}"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <TextBlock Text="Profile Attributes (Inherited Defaults)"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource BodyForegroundBrush}"
+                               Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="4" Padding="6" MinWidth="320" MaxHeight="170">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExportMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Grid>
+                            <TextBlock Text="No inherited profile attributes available."
+                                       Foreground="{DynamicResource MutedForegroundBrush}"
+                                       TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasReviewEffectiveDefaults}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ScrollViewer.Style>
+                                    <Style TargetType="ScrollViewer">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasReviewEffectiveDefaults}" Value="False">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ScrollViewer.Style>
+                                <ItemsControl ItemsSource="{Binding ReviewEffectiveDefaults}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="160" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding AttributeName}"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource BodyForegroundBrush}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding DisplayValue}"
+                                                           Foreground="{DynamicResource MutedForegroundBrush}"
+                                                           TextWrapping="Wrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </Grid>
         </Border>
-
-        <StackPanel Grid.Row="1" Grid.Column="0" Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock Text="Folders" Style="{StaticResource SectionTitle}" />
-            <TextBox Text="{Binding TreeSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
-            <Border Background="#F8FAFC" BorderBrush="#D9E2EC" BorderThickness="1" CornerRadius="6" Padding="6">
-                <TreeView ItemsSource="{Binding FolderRoots}"
-                          SelectedItemChanged="OnFolderTreeSelectedItemChanged"
-                          VirtualizingStackPanel.IsVirtualizing="True"
-                          VirtualizingStackPanel.VirtualizationMode="Recycling"
-                          ScrollViewer.CanContentScroll="True"
-                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                          BorderThickness="0">
-                    <TreeView.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Include" Click="OnSetImportInclude" />
-                            <MenuItem Header="Exclude" Click="OnSetImportExclude" />
-                            <MenuItem Header="Clear override" Click="OnSetImportInherit" />
-                            <Separator />
-                            <MenuItem Header="Apply to children" Click="OnApplyImportToChildren" />
-                        </ContextMenu>
-                    </TreeView.ContextMenu>
-                    <TreeView.ItemContainerStyle>
-                        <Style TargetType="TreeViewItem">
-                            <Setter Property="Padding" Value="4,3" />
-                            <Setter Property="Margin" Value="0,1,0,1" />
-                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
-                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
-                            <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="BorderThickness" Value="1" />
-                            <Setter Property="BorderBrush" Value="Transparent" />
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            <EventSetter Event="PreviewMouseRightButtonDown" Handler="OnFolderTreeRightButtonDown" />
-                            <EventSetter Event="Expanded" Handler="OnFolderTreeExpanded" />
-                            <EventSetter Event="Collapsed" Handler="OnFolderTreeCollapsed" />
-                            <Style.Triggers>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="#CFE3FF" />
-                                    <Setter Property="BorderBrush" Value="#8BB4FF" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TreeView.ItemContainerStyle>
-                </TreeView>
-            </Border>
-        </StackPanel>
-
-        <GridSplitter Grid.Row="1" Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                      Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}"
-                      Background="#E4E7EB" ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
-
-        <StackPanel Grid.Row="1" Grid.Column="2" Margin="8,0,12,0" Visibility="{Binding ShowLegacyScopeExplorer, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock Text="Files" Style="{StaticResource SectionTitle}" />
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBox Width="220" Text="{Binding FileSearchText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0" />
-                <Button Content="All" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterAll" />
-                <Button Content="Included" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterIncluded" />
-                <Button Content="Excluded" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterExcluded" />
-                <Button Content="Overrides" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0" Click="OnFilterOverrides" />
-                <Button Content="Large" Style="{StaticResource SecondaryButton}" Click="OnFilterLarge" />
-            </StackPanel>
-            <TextBlock Text="No folders found. Run a scan to populate files."
-                       Foreground="#6B7280"
-                       Margin="0,0,0,8"
-                       Visibility="{Binding HasFolderRoots, Converter={StaticResource InverseBooleanConverter}}" />
-            <DataGrid x:Name="FolderFilesGrid" ItemsSource="{Binding FolderFiles}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
-                      SelectionMode="Extended" SelectionUnit="FullRow"
-                      IsReadOnly="True" GridLinesVisibility="Horizontal" BorderThickness="1" BorderBrush="#CCD0D5">
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="200" />
-                    <DataGridTextColumn Header="Relative Path" Binding="{Binding RelativePath}" Width="*" />
-                    <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="90" />
-                    <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedDisplay}" Width="140" />
-                    <DataGridTextColumn Header="Large" Binding="{Binding LargeWarning}" Width="70" />
-                    <DataGridTextColumn Header="Import" Binding="{Binding EffectiveImport}" Width="70" />
-                    <DataGridTextColumn Header="Override" Binding="{Binding OverrideMode}" Width="90" />
-                </DataGrid.Columns>
-            </DataGrid>
-        </StackPanel>
 
         <ScrollViewer Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                <Border BorderBrush="#E4E7EB"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8"
+                        Margin="0,0,0,8"
+                        Visibility="{Binding ShowImportContext, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel>
-                        <TextBlock Text="Pre-export Warnings" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="Direct Upload" Style="{StaticResource SectionTitle}" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                            <TextBlock Text="{Binding PreExportLargeFileWarningsDisplay, StringFormat=Large files (&gt;1.8GB): {0}}" Foreground="#B45309" Margin="0,0,12,0" />
-                            <TextBlock Text="{Binding PreExportEmptyFolderWarningsDisplay, StringFormat=Empty folders: {0}}" Foreground="#B45309" />
+                            <Button Content="Refresh Direct Upload Plan"
+                                    Width="190"
+                                    Margin="0,0,6,0"
+                                    Click="OnRefreshDirectUploadPlan"
+                                    Style="{StaticResource SecondaryButton}" />
+                            <Button Content="Run Direct Upload"
+                                    Width="130"
+                                    Margin="0,0,6,0"
+                                    Click="OnRunDirectUpload"
+                                    Style="{StaticResource PrimaryButton}"
+                                    IsEnabled="{Binding CanRunDirectUpload}" />
+                            <Button Content="Add to Queue"
+                                    Width="110"
+                                    Margin="0,0,6,0"
+                                    Click="OnAddDirectUploadToQueue"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanAddDirectUploadToQueue}" />
+                            <Button Content="Schedule..."
+                                    Width="95"
+                                    Margin="0,0,6,0"
+                                    Click="OnScheduleDirectUpload"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanScheduleDirectUpload}" />
+                            <Button Content="Cancel Upload"
+                                    Width="110"
+                                    Margin="0,0,6,0"
+                                    Click="OnCancelDirectUpload"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanCancelDirectUpload}" />
+                            <Button Content="Open Last CSV"
+                                    Width="110"
+                                    Click="OnOpenLastDirectUploadReport"
+                                    Style="{StaticResource SecondaryButton}"
+                                    IsEnabled="{Binding CanOpenLastDirectUploadReport}" />
                         </StackPanel>
-                        <TextBlock Text="Running checks..." Foreground="#555555" Margin="0,0,0,6">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsPreExportWarningsBusy}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <TextBlock Text="{Binding PreExportWarningsStatus}" Foreground="#555555" Margin="0,0,0,6" TextWrapping="Wrap" />
-                        <ListView ItemsSource="{Binding PreExportWarnings}" Height="140">
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="Type" Width="100" DisplayMemberBinding="{Binding Type}" />
-                                    <GridViewColumn Header="Path" Width="360" DisplayMemberBinding="{Binding Path}" />
-                                    <GridViewColumn Header="Detail" Width="240" DisplayMemberBinding="{Binding Detail}" />
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6" VerticalAlignment="Center">
+                            <ProgressBar Width="280"
+                                         Height="12"
+                                         Maximum="100"
+                                         Value="{Binding DirectUploadProgressPercent, Mode=OneWay}" />
+                            <TextBlock Text="{Binding DirectUploadProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding DirectUploadStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
+                        <DataGrid ItemsSource="{Binding DirectUploadPreflightIssues}"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  Margin="0,4,0,0"
+                                  MinHeight="160">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="90" />
+                                <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="140" />
+                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                                <DataGridTextColumn Header="Relative Path" Binding="{Binding RelativePath}" Width="220" />
+                            </DataGrid.Columns>
+                        </DataGrid>
                     </StackPanel>
                 </Border>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                <Border BorderBrush="#E4E7EB"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8"
+                        Margin="0,0,0,8"
+                        Visibility="{Binding ShowExportContext, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel>
-                        <TextBlock Text="NetDocuments Target &amp; Profiling" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{Binding ReviewTargetRepository, StringFormat=Repository: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewTargetCabinet, StringFormat=Cabinet: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewTargetContainerType, StringFormat=Target type: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewTargetContainerName, StringFormat=Container: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewTargetPath, StringFormat=Path: {0}}" Foreground="#555555" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding ReviewProfileLastSyncDisplay, StringFormat=Last sync: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewProfileAttributeCountDisplay, StringFormat=Attributes: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewProfileRequiredCountDisplay, StringFormat=Required: {0}}" Foreground="#555555" />
-                        <TextBlock Text="{Binding ReviewProfileLookupCountDisplay, StringFormat=Lookup values: {0}}" Foreground="#555555" Margin="0,0,0,6" />
-                        <TextBlock Text="Lookup cache unavailable" Foreground="#B45309" Margin="0,0,0,6">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ReviewProfileLookupCacheReady}" Value="False">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <Button Content="Resync Attributes"
-                                Width="140"
-                                Click="OnResyncAttributes"
-                                IsEnabled="{Binding CanSyncNetDocumentsAttributes}"
-                                Style="{StaticResource SecondaryButton}" />
+                        <TextBlock Text="Export" Style="{StaticResource SectionTitle}" />
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0"
+                                     Margin="0,0,6,0"
+                                     Text="{Binding ExportDestinationRootPath, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Grid.Column="1"
+                                    Content="Browse"
+                                    Click="OnBrowseExportDestination"
+                                    Style="{StaticResource SecondaryButton}" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <CheckBox Content="All versions"
+                                      IsChecked="{Binding ExportAllVersions}"
+                                      Margin="0,0,16,0" />
+                            <CheckBox Content="Download filters as folders"
+                                      IsChecked="{Binding ExportDownloadFiltersAsFolders}" />
+                            <CheckBox Content="Include custom attributes"
+                                      IsChecked="{Binding ExportIncludeCustomAttributes}"
+                                      Margin="16,0,0,0" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="Metadata format:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox Width="120"
+                                      ItemsSource="{Binding ExportMetadataFormatOptions}"
+                                      SelectedItem="{Binding ExportMetadataFormat}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Refresh Export Plan"
+                                    Width="170"
+                                    Margin="0,0,6,0"
+                                    Click="OnRefreshExportPreflight"
+                                    IsEnabled="{Binding CanRefreshExportPreflight}"
+                                    Style="{StaticResource SecondaryButton}" />
+                            <Button Content="Run Export"
+                                    Width="110"
+                                    Margin="0,0,6,0"
+                                    Click="OnRunExport"
+                                    IsEnabled="{Binding CanRunExport}"
+                                    Style="{StaticResource PrimaryButton}" />
+                            <Button Content="Cancel"
+                                    Width="90"
+                                    Margin="0,0,6,0"
+                                    Click="OnCancelExport"
+                                    IsEnabled="{Binding CanCancelExport}"
+                                    Style="{StaticResource SecondaryButton}" />
+                            <Button Content="Open Last Manifest"
+                                    Width="150"
+                                    Click="OnOpenLastExportManifest"
+                                    IsEnabled="{Binding CanOpenLastExportManifest}"
+                                    Style="{StaticResource SecondaryButton}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6" VerticalAlignment="Center">
+                            <ProgressBar Width="280"
+                                         Height="12"
+                                         Maximum="100"
+                                         Value="{Binding ExportProgressPercent, Mode=OneWay}" />
+                            <TextBlock Text="{Binding ExportProgressPercentDisplay}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding ExportStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,4" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ExportSummary}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
+                        <DataGrid ItemsSource="{Binding ExportPreflightIssues}"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  Margin="0,4,0,0"
+                                  MinHeight="160">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="90" />
+                                <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="180" />
+                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                                <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="200" />
+                            </DataGrid.Columns>
+                        </DataGrid>
                     </StackPanel>
                 </Border>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8" Visibility="Collapsed">
                     <StackPanel>
                         <TextBlock Text="Profiling Validation" Style="{StaticResource SectionTitle}" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBlock Text="{Binding ValidationErrorCountDisplay, StringFormat=Errors: {0}}" Foreground="#B42318" Margin="0,0,8,0" />
                             <TextBlock Text="{Binding ValidationWarningCountDisplay, StringFormat=Warnings: {0}}" Foreground="#B45309" Margin="0,0,8,0" />
-                            <TextBlock Text="{Binding ValidationInfoCountDisplay, StringFormat=Info: {0}}" Foreground="#555555" />
+                            <TextBlock Text="{Binding ValidationInfoCountDisplay, StringFormat=Info: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" />
                         </StackPanel>
-                        <TextBlock Text="Validating..." Foreground="#555555" Margin="0,0,0,6">
+                        <TextBlock Text="Validating..." Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -217,82 +388,48 @@
                     </StackPanel>
                 </Border>
 
-                <Border BorderBrush="#E4E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="Inherited Defaults (Read-only Baseline)" Style="{StaticResource SectionTitle}" />
-                        <ListView ItemsSource="{Binding ReviewEffectiveDefaults}" Height="120">
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="Attribute" Width="140" DisplayMemberBinding="{Binding AttributeName}" />
-                                    <GridViewColumn Header="Display" Width="110" DisplayMemberBinding="{Binding DisplayValue}" />
-                                    <GridViewColumn Header="Raw" Width="110" DisplayMemberBinding="{Binding RawValue}" />
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
+                <StackPanel Visibility="Collapsed">
+                    <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedFolderPath}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,8" TextWrapping="Wrap" />
+                    <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
+                               Foreground="#B45309"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,8"
+                               Visibility="{Binding SelectedFolderIsEffectivelyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
+                        <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
                     </StackPanel>
-                </Border>
 
-                <TextBlock Text="Details" Style="{StaticResource SectionTitle}" />
-                <TextBlock Text="{Binding SelectedFolderRelativePath}" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding SelectedFolderPath}" Foreground="#666666" Margin="0,0,0,8" TextWrapping="Wrap" />
-                <TextBlock Text="This folder will not be created in NetDocuments via ndImport."
-                           Foreground="#B45309"
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,8"
-                           Visibility="{Binding SelectedFolderIsEffectivelyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <TextBlock Text="Folder selection" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
+                                <TextBlock Text="Inherit" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
+                                <TextBlock Text="Include" />
+                            </StackPanel>
+                        </Button>
+                        <Button Width="110" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
+                                <TextBlock Text="Exclude" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
+                    <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,10" />
 
-                <StackPanel Orientation="Vertical" Margin="0,0,0,8">
-                    <TextBlock Text="{Binding SelectedFolderFilesDisplay, StringFormat=Total files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderBytesDisplay, StringFormat=Total bytes: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderLargeFilesDisplay, StringFormat=Large files: {0}}" />
-                    <TextBlock Text="{Binding SelectedFolderExcludedDisplay, StringFormat=Excluded folders: {0}}" />
-                </StackPanel>
-
-                <TextBlock Text="Folder selection" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInherit" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
-                            <TextBlock Text="Inherit" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetImportInclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                            <TextBlock Text="Include" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Click="OnSetImportExclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                            <TextBlock Text="Exclude" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-                <Button Content="Apply to children" Width="140" Margin="0,0,0,6" Click="OnApplyImportToChildren" Style="{StaticResource SecondaryButton}" />
-                <TextBlock Text="{Binding SelectedImportMode, StringFormat=Selected mode: {0}}" Foreground="#555555" />
-                <TextBlock Text="{Binding SelectedEffectiveImportMode, StringFormat=Effective mode: {0}}" Foreground="#555555" Margin="0,0,0,10" />
-
-                <TextBlock Text="File selection" Style="{StaticResource SectionTitle}" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetFileInclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Fill="#2E7D32" Data="M2,6 L5,9 L10,2" Stroke="#2E7D32" StrokeThickness="2" Margin="0,0,6,0" />
-                            <TextBlock Text="Include" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Margin="0,0,6,0" Click="OnSetFileExclude" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="12" Height="12" Stroke="#C62828" StrokeThickness="2" Data="M2,2 L10,10 M10,2 L2,10" Margin="0,0,6,0" />
-                            <TextBlock Text="Exclude" />
-                        </StackPanel>
-                    </Button>
-                    <Button Width="110" Click="OnClearFileOverride" Style="{StaticResource SecondaryButton}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" Foreground="#888888" Margin="0,0,6,0" />
-                            <TextBlock Text="Clear" />
-                        </StackPanel>
-                    </Button>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

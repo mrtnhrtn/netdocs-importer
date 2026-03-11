@@ -10,7 +10,9 @@ public class NetDocumentsTargetBrowserLogicTests
     [InlineData("folder", NdTargetType.Folder)]
     [InlineData("ndws", NdTargetType.Workspace)]
     [InlineData("ndflt", NdTargetType.WorkspaceFilter)]
+    [InlineData("ndsq", NdTargetType.WorkspaceFilter)]
     [InlineData("ndfld", NdTargetType.Folder)]
+    [InlineData("ndcs", NdTargetType.Folder)]
     public void NormalizeSupportedType_RecognizesAllowedTypes(string raw, NdTargetType expected)
     {
         var result = NdTargetBrowserLogic.NormalizeSupportedType(raw, hasWorkspaceIdHint: false);
@@ -20,7 +22,7 @@ public class NetDocumentsTargetBrowserLogicTests
     [Fact]
     public void NormalizeSupportedType_UnsupportedTypeReturnsNull()
     {
-        var result = NdTargetBrowserLogic.NormalizeSupportedType("ndsq", hasWorkspaceIdHint: false);
+        var result = NdTargetBrowserLogic.NormalizeSupportedType("nddoc", hasWorkspaceIdHint: false);
         Assert.Null(result);
     }
 
@@ -104,5 +106,116 @@ public class NetDocumentsTargetBrowserLogicTests
         Assert.Single(favoritesRoundTrip);
         Assert.Equal("wf1", recentsRoundTrip[0].Selection.Id);
         Assert.Equal("f9", favoritesRoundTrip[0].Selection.Id);
+    }
+
+    [Fact]
+    public void ResolveIconDescriptor_UsesExpectedFolderAndFilterIcons()
+    {
+        var folder = NdTargetBrowserLogic.ResolveIconDescriptor(NdTargetType.Folder);
+        var filter = NdTargetBrowserLogic.ResolveIconDescriptor(NdTargetType.WorkspaceFilter);
+
+        Assert.Equal("\uE8B7", folder.Glyph);
+        Assert.Equal("#D69E2E", folder.ColorHex);
+        Assert.Equal("\uE71C", filter.Glyph);
+        Assert.Equal("#2B6CB0", filter.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveIconDescriptor_SavedSearchExtension_UsesQueryIcon()
+    {
+        var icon = NdTargetBrowserLogic.ResolveIconDescriptor(
+            NdTargetType.WorkspaceFilter,
+            targetId: ":AU2:s:v:5:k:~190409112306006.nev",
+            extension: "ndsq");
+
+        Assert.Equal("\uE721", icon.Glyph);
+        Assert.Equal("#C53030", icon.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveIconDescriptor_FolderCollabspaceIdentifier_UsesPersonBlueIcon()
+    {
+        var collabspace = NdTargetBrowserLogic.ResolveIconDescriptor(
+            NdTargetType.Folder,
+            "(:AU2:p:8:a:b:^C260210231635968.nev|1");
+
+        Assert.Equal("\uE77B", collabspace.Glyph);
+        Assert.Equal("#2B6CB0", collabspace.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveIconDescriptor_CabinetRootIdentifier_UsesFolderIconNotUnknown()
+    {
+        var cabinetRoot = NdTargetBrowserLogic.ResolveIconDescriptor(
+            type: null,
+            targetId: "cabinet-root:NG-2Q4O0ACP");
+
+        Assert.Equal("\uE8B7", cabinetRoot.Glyph);
+        Assert.Equal("#B7791F", cabinetRoot.ColorHex);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_FolderCollabspaceIdentifier_ReturnsCollabspace()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.Folder,
+            "(:AU2:p:8:a:b:^C260210231635968.nev|1");
+
+        Assert.Equal("Collabspace", typeDisplay);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_FolderTildeNevIdentifier_ReturnsFolder()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.Folder,
+            ":AU2:u:3:e:p:~260209191130366.nev");
+
+        Assert.Equal("Folder", typeDisplay);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_WorkspaceFilterNdsq_ReturnsSavedSearch()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.WorkspaceFilter,
+            ":AU2:s:v:5:k:~190409112306006.nev",
+            extension: "ndsq");
+
+        Assert.Equal("Saved Search", typeDisplay);
+    }
+
+    [Fact]
+    public void ResolveTypeDisplay_WorkspaceFilterSavedSearchIdentifierWithoutExtension_ReturnsSavedSearch()
+    {
+        var typeDisplay = NdTargetBrowserLogic.ResolveTypeDisplay(
+            NdTargetType.WorkspaceFilter,
+            ":AU2:s:v:5:k:~190409112306006.nev");
+
+        Assert.Equal("Saved Search", typeDisplay);
+    }
+
+    [Fact]
+    public void CreateSelectionFromContainerNode_PreservesTypeAndIdentifiers()
+    {
+        var node = new NdContainerNode
+        {
+            Id = "ndflt!123",
+            Name = "Open Items",
+            TypeRaw = "ndflt",
+            Extension = "ndflt",
+            ParentWorkspaceId = "ndws!55",
+            SupportedType = NdTargetType.WorkspaceFilter,
+            IsSelectable = true
+        };
+
+        var selection = NdTargetBrowserLogic.CreateSelectionFromContainerNode(node, NdTargetSourceFlow.Browse);
+
+        Assert.Equal(NdTargetType.WorkspaceFilter, selection.Type);
+        Assert.Equal("ndflt!123", selection.Id);
+        Assert.Equal("Open Items", selection.Name);
+        Assert.Equal("ndws!55", selection.ParentWorkspaceId);
+        Assert.Equal("ndflt", selection.Extension);
+        Assert.Equal(NdTargetSourceFlow.Browse, selection.SourceFlow);
     }
 }

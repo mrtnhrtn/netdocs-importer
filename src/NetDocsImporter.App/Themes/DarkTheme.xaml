@@ -1,0 +1,54 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FF111827" />
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FF1F2937" />
+    <SolidColorBrush x:Key="SurfaceBackgroundBrush" Color="#FF273449" />
+    <SolidColorBrush x:Key="SurfaceBorderBrush" Color="#FF374151" />
+    <SolidColorBrush x:Key="AccentForegroundBrush" Color="#FF93C5FD" />
+    <SolidColorBrush x:Key="BodyForegroundBrush" Color="#FFE5E7EB" />
+    <SolidColorBrush x:Key="MutedForegroundBrush" Color="#FFCBD5E1" />
+
+    <SolidColorBrush x:Key="PrimaryButtonBackgroundBrush" Color="#FF3B82F6" />
+    <SolidColorBrush x:Key="PrimaryButtonForegroundBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="PrimaryButtonBorderBrush" Color="#FF60A5FA" />
+
+    <SolidColorBrush x:Key="SecondaryButtonBackgroundBrush" Color="#FF334155" />
+    <SolidColorBrush x:Key="SecondaryButtonForegroundBrush" Color="#FFE5E7EB" />
+    <SolidColorBrush x:Key="SecondaryButtonBorderBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush" Color="#FF415168" />
+    <SolidColorBrush x:Key="ButtonPressedBorderBrush" Color="#FF6B7A90" />
+    <SolidColorBrush x:Key="ControlHoverBorderBrush" Color="#FF64748B" />
+    <SolidColorBrush x:Key="FocusBorderBrush" Color="#FF93C5FD" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedBackgroundBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedForegroundBrush" Color="#FFF8FAFC" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedBorderBrush" Color="#FF94A3B8" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedHoverBackgroundBrush" Color="#FF526279" />
+    <SolidColorBrush x:Key="ToggleButtonCheckedHoverBorderBrush" Color="#FFA5B4C7" />
+    <SolidColorBrush x:Key="DisabledButtonBackgroundBrush" Color="#FF1F2A3A" />
+    <SolidColorBrush x:Key="DisabledButtonForegroundBrush" Color="#FFCBD5E1" />
+    <SolidColorBrush x:Key="DisabledButtonBorderBrush" Color="#FF334155" />
+
+    <SolidColorBrush x:Key="InputBackgroundBrush" Color="#FF0F172A" />
+    <SolidColorBrush x:Key="InputForegroundBrush" Color="#FFE5E7EB" />
+    <SolidColorBrush x:Key="InputBorderBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="DisabledInputBackgroundBrush" Color="#FF1F2937" />
+    <SolidColorBrush x:Key="DisabledInputForegroundBrush" Color="#FFCBD5E1" />
+    <SolidColorBrush x:Key="DisabledInputBorderBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="ControlBorderBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="ControlHoverBrush" Color="#FF3A475B" />
+    <SolidColorBrush x:Key="SelectionBrush" Color="#FF3B82F6" />
+    <SolidColorBrush x:Key="SelectionForegroundBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="TabSelectedBackgroundBrush" Color="#FF475569" />
+    <SolidColorBrush x:Key="TabSelectedForegroundBrush" Color="#FFF8FAFC" />
+    <SolidColorBrush x:Key="TabSelectedBorderBrush" Color="#FF94A3B8" />
+    <SolidColorBrush x:Key="ListBackgroundBrush" Color="#FF1F2937" />
+    <SolidColorBrush x:Key="MenuBackgroundBrush" Color="#FF1E293B" />
+
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FF1E293B" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FFE5E7EB" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FF0F172A" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFE5E7EB" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF3B82F6" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FFCBD5E1" />
+</ResourceDictionary>

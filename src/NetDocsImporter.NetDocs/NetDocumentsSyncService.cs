@@ -4,19 +4,42 @@ using NetDocsImporter.Data;
 
 namespace NetDocsImporter.NetDocs;
 
+/// <summary>
+/// Synchronizes user, cabinet, attribute, and lookup metadata between NetDocuments APIs and local persistence.
+/// </summary>
 public sealed partial class NetDocumentsSyncService
 {
     private readonly NetDocumentsApiClient _apiClient;
     private readonly JobStore _jobStore;
-    private bool _defaultsEndpointFamilyUnavailableForSession;
-    private bool _defaultsEndpointFamilySkipLogged;
 
+    /// <summary>
+    /// Initializes the synchronization service.
+    /// </summary>
+    /// <param name="apiClient">Authenticated API client used for NetDocuments calls.</param>
+    /// <param name="jobStore">Persistent store used to cache synchronized metadata.</param>
+    /// <exception cref="ArgumentNullException">Thrown when a dependency is null.</exception>
     public NetDocumentsSyncService(NetDocumentsApiClient apiClient, JobStore jobStore)
     {
         _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
         _jobStore = jobStore ?? throw new ArgumentNullException(nameof(jobStore));
     }
 
+    public IDisposable PushApiCallTraceObserver(Action<NdApiCallTrace> observer)
+    {
+        if (observer is null)
+        {
+            throw new ArgumentNullException(nameof(observer));
+        }
+
+        return _apiClient.PushApiCallTraceObserver(observer);
+    }
+
+    /// <summary>
+    /// Resolves the currently authenticated NetDocuments user.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel API calls.</param>
+    /// <returns>User identity details for the current session.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when user info cannot be resolved from known endpoints.</exception>
     public async Task<NetDocumentsUserInfo> GetCurrentUserAsync(CancellationToken cancellationToken = default)
     {
         var candidates = new[]
@@ -53,6 +76,12 @@ public sealed partial class NetDocumentsSyncService
             last);
     }
 
+    /// <summary>
+    /// Synchronizes cabinet metadata for a region and stores the results locally.
+    /// </summary>
+    /// <param name="region">Region key used to scope persisted cabinet rows.</param>
+    /// <param name="cancellationToken">Token used to cancel API/database work.</param>
+    /// <returns>Synchronized cabinet records.</returns>
     public async Task<IReadOnlyList<NetDocumentsCabinetRecord>> SyncCabinetsAsync(
         string region,
         CancellationToken cancellationToken = default)
@@ -162,6 +191,13 @@ public sealed partial class NetDocumentsSyncService
         return cabinets;
     }
 
+    /// <summary>
+    /// Synchronizes custom attributes (and lookup tables) for a cabinet and stores them locally.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier.</param>
+    /// <param name="repositoryId">Owning repository identifier.</param>
+    /// <param name="cancellationToken">Token used to cancel API/database work.</param>
+    /// <returns>Synchronized attribute records.</returns>
     public async Task<IReadOnlyList<NetDocumentsAttributeRecord>> SyncCabinetAttributesAsync(
         string cabinetId,
         string repositoryId,
@@ -230,6 +266,12 @@ public sealed partial class NetDocumentsSyncService
         return attributes;
     }
 
+    /// <summary>
+    /// Gets previously synchronized attributes for a cabinet from local storage.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier.</param>
+    /// <param name="cancellationToken">Token used to cancel database work.</param>
+    /// <returns>Cached attribute records.</returns>
     public Task<IReadOnlyList<NetDocumentsAttributeRecord>> GetSyncedAttributesAsync(
         string cabinetId,
         CancellationToken cancellationToken = default)
@@ -237,6 +279,14 @@ public sealed partial class NetDocumentsSyncService
         return _jobStore.GetNetDocumentsAttributesAsync(cabinetId, cancellationToken);
     }
 
+    /// <summary>
+    /// Gets previously synchronized lookup values for an attribute from local storage.
+    /// </summary>
+    /// <param name="cabinetId">Cabinet identifier.</param>
+    /// <param name="attributeNum">Attribute number.</param>
+    /// <param name="parentKey">Optional parent key for parent-child lookups.</param>
+    /// <param name="cancellationToken">Token used to cancel database work.</param>
+    /// <returns>Cached lookup value records.</returns>
     public Task<IReadOnlyList<NetDocumentsLookupValueRecord>> GetLookupValuesAsync(
         string cabinetId,
         int attributeNum,

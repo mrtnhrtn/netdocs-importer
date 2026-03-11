@@ -33,7 +33,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _currentJobSourceRoot = string.Empty;
     private string _currentJobState = "Ready";
     private JobSummaryView? _selectedRecentJob;
-    private int _maxConcurrency = 4;
+    private int _maxConcurrency = 8;
     private int _delayBetweenStarts = 250;
     private bool _isImportRunning;
     private bool _isImportPaused;
@@ -63,7 +63,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _selectedFileFilter = "All";
     private ProfileFieldView? _selectedProfileField;
     private bool _hasFolderRoots;
-    private bool _showLegacyScopeExplorer;
     private bool _isPreExportWarningsBusy;
     private int _preExportLargeFileWarnings;
     private int _preExportEmptyFolderWarnings;
@@ -85,6 +84,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _schemaCabinetMatches;
     private string _schemaCabinetName = string.Empty;
     private bool _hasSchemaLoaded;
+    private bool _isExportMode;
+    private bool _isDarkMode;
+    private string _exportDestinationRootPath = string.Empty;
+    private bool _exportAllVersions;
+    private bool _exportDownloadFiltersAsFolders = true;
+    private bool _exportIncludeCustomAttributes;
+    private ExportMetadataFormat _exportMetadataFormat = ExportMetadataFormat.Json;
     private NetDocumentsRegion _netDocumentsRegion = NetDocumentsRegion.AU;
     private readonly Dictionary<string, NetDocumentsOAuthClientConfig> _netDocumentsOAuthClientProfiles = new(StringComparer.OrdinalIgnoreCase);
     private NetDocumentsOAuthClientConfig? _selectedNetDocumentsOAuthClientConfig;
@@ -98,9 +104,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly object _settingsSaveLock = new();
     private bool _settingsSavePending;
     private StepItem? _currentStep;
+    private bool _isSettingsOpen;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _importCancellation;
     private readonly AppPaths _paths;
+    private readonly CompletedJobLogStore _completedJobLogStore;
     private readonly SecretStore _secretStore;
     private readonly INetDocumentsOAuthClientConfigProvider _netDocumentsOAuthClientConfigProvider;
     private readonly AppRuntimeOptions _runtimeOptions;
@@ -115,6 +123,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private FolderNodeViewModel? _selectedFolderNode;
     private readonly object _profileSaveLock = new();
     private bool _profileSavePending;
+    private int _recentJobsRefreshInFlight;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -133,10 +142,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public bool HasFolderRoots
     {
         get => _hasFolderRoots;
-        private set => SetField(ref _hasFolderRoots, value);
+        private set
+        {
+            if (SetField(ref _hasFolderRoots, value))
+            {
+                OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+            }
+        }
     }
 
-    public bool ShowLegacyScopeExplorer => _showLegacyScopeExplorer;
+    public bool ShowReviewTargetProfileContext => ShowExportContext || HasFolderRoots;
 
     public bool IsPreExportWarningsBusy
     {
@@ -171,12 +186,25 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _currentJobId;
         private set
         {
+            var previousJobId = _currentJobId;
             if (SetField(ref _currentJobId, value))
             {
                 OnPropertyChanged(nameof(CanStartImport));
                 OnPropertyChanged(nameof(CanPickNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanConfirmNetDocumentsTarget));
                 OnPropertyChanged(nameof(CanContinueToReviewScope));
+                OnPropertyChanged(nameof(CanRunDirectUpload));
+                RaiseDirectUploadQueueAvailabilityChanged();
+
+                if (!string.Equals(previousJobId, value, StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleDirectUploadContextChanged(
+                        "Source job changed. Refresh direct upload preflight.",
+                        refreshPreflight: false);
+                    HandleExportContextChanged(
+                        "Source job changed. Refresh export preflight.",
+                        refreshPreflight: false);
+                }
             }
         }
     }
@@ -372,6 +400,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         set => SetField(ref _currentStep, value);
     }
 
+    public bool IsSettingsOpen
+    {
+        get => _isSettingsOpen;
+        set => SetField(ref _isSettingsOpen, value);
+    }
+
+    public bool IsAuthenticationRequired => !IsNetDocumentsConnected;
+
+    public bool CanAccessMainFlow => IsNetDocumentsConnected;
+
     public string SchemaPath
     {
         get => _schemaPath;
@@ -409,6 +447,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _netDocumentsRegion, value))
             {
+                InvalidateTargetBrowserContext("region-changed");
                 _refreshedCabinetSchemaThisSession.Clear();
                 var settings = GetOrCreateNetDocumentsSettings();
                 NetDocumentsRegionDefaults.EnsureDefaults(settings);
@@ -613,6 +652,113 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         !string.IsNullOrWhiteSpace(_lastNdImportExportPath) &&
         File.Exists(_lastNdImportExportPath);
 
+    public bool IsExportMode
+    {
+        get => _isExportMode;
+        set
+        {
+            if (SetField(ref _isExportMode, value))
+            {
+                OnPropertyChanged(nameof(IsImportMode));
+                OnPropertyChanged(nameof(ShowImportContext));
+                OnPropertyChanged(nameof(ShowExportContext));
+                OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+                OnPropertyChanged(nameof(ExportModeToggleText));
+                OnPropertyChanged(nameof(CanRefreshExportPreflight));
+                OnPropertyChanged(nameof(CanRunExport));
+                OnPropertyChanged(nameof(CanCancelExport));
+                HandleExportContextChanged("Mode changed.", refreshPreflight: true);
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool IsImportMode => !IsExportMode;
+
+    public bool ShowImportContext => IsImportMode;
+
+    public bool ShowExportContext => IsExportMode;
+
+    public string ExportModeToggleText => IsExportMode ? "Import" : "Export mode";
+
+    public string ExportDestinationRootPath
+    {
+        get => _exportDestinationRootPath;
+        set
+        {
+            if (SetField(ref _exportDestinationRootPath, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool ExportAllVersions
+    {
+        get => _exportAllVersions;
+        set
+        {
+            if (SetField(ref _exportAllVersions, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool ExportDownloadFiltersAsFolders
+    {
+        get => _exportDownloadFiltersAsFolders;
+        set
+        {
+            if (SetField(ref _exportDownloadFiltersAsFolders, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool ExportIncludeCustomAttributes
+    {
+        get => _exportIncludeCustomAttributes;
+        set
+        {
+            if (SetField(ref _exportIncludeCustomAttributes, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public ExportMetadataFormat ExportMetadataFormat
+    {
+        get => _exportMetadataFormat;
+        set
+        {
+            if (SetField(ref _exportMetadataFormat, value))
+            {
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public bool IsDarkMode
+    {
+        get => _isDarkMode;
+        set
+        {
+            if (SetField(ref _isDarkMode, value))
+            {
+                ThemeManager.ApplyTheme(_isDarkMode);
+                QueueSettingsSave();
+            }
+        }
+    }
+
+    public void ToggleExportMode()
+    {
+        IsExportMode = !IsExportMode;
+    }
+
     public MainViewModel()
         : this(new AppRuntimeOptions())
     {
@@ -622,6 +768,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _runtimeOptions = runtimeOptions ?? new AppRuntimeOptions();
         _paths = new AppPaths();
+        _completedJobLogStore = new CompletedJobLogStore(_paths.CompletedJobsDirectory, TimeSpan.FromDays(30));
+        _completedJobLogStore.PruneExpired(DateTime.UtcNow);
         _secretStore = new SecretStore(_paths.SecretsDirectory);
         var userProfileProvider = new DpapiNetDocumentsOAuthClientConfigProvider(_secretStore, AppSettings.DefaultNetDocumentsOAuthClientProfilesRef);
         var machineProfilePath = Path.Combine(
@@ -638,14 +786,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ProfileFields.CollectionChanged += OnProfileFieldsChanged;
         FolderRoots.CollectionChanged += (_, _) => HasFolderRoots = FolderRoots.Count > 0;
         PreExportWarnings.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPreExportWarnings));
-        _showLegacyScopeExplorer = false;
 
-        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments Upload Target", "Login & choose your NetDocuments location to pre-fill profiling attributes", this));
-        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Review & scope", "Select folder and review for issues", this));
-        Steps.Add(new StepItem(3, StepKey.Profiling, "Profiling", "Set profile fields and overrides", this));
-        Steps.Add(new StepItem(4, StepKey.NdImportConfig, "ndImport config", "Host/cabinet/flags/export", this));
-        Steps.Add(new StepItem(5, StepKey.RunImport, "Run import", "Start/pause/resume/cancel + sessions", this));
-        Steps.Add(new StepItem(6, StepKey.RecentJobs, "Recent jobs", "Load and select prior jobs", this));
+        Steps.Add(new StepItem(1, StepKey.SelectFolder, "NetDocuments", "Choose your NetDocuments location", this));
+        Steps.Add(new StepItem(2, StepKey.ReviewScope, "Local Folder", "Select local folder and plan", this));
+        Steps.Add(new StepItem(3, StepKey.RecentJobs, "Recent jobs", "Review and select prior jobs", this));
 
         CurrentStep = Steps[0];
         InitializeNetDocumentsIntegration();
@@ -746,6 +890,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             }
             await RefreshReviewScopeNetDocumentsAsync();
             await RefreshPreExportWarningsAsync();
+            if (IsDirectApiMode)
+            {
+                _ = RefreshDirectUploadPreflightAsync();
+            }
         }
     }
 
@@ -764,13 +912,35 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public async Task LoadRecentJobsAsync()
     {
-        await _jobStore.InitializeAsync();
-        var jobs = await _jobStore.GetRecentJobsAsync(10);
-
-        RecentJobs.Clear();
-        foreach (var job in jobs)
+        if (Interlocked.Exchange(ref _recentJobsRefreshInFlight, 1) == 1)
         {
-            RecentJobs.Add(new JobSummaryView(job));
+            return;
+        }
+
+        try
+        {
+            await _jobStore.InitializeAsync();
+            _completedJobLogStore.PruneExpired(DateTime.UtcNow);
+            var jobs = await _jobStore.GetRecentJobsAsync(10);
+            var latestRunByJob = await _completedJobLogStore.GetLatestRunsByJobAsync(50);
+
+            RecentJobs.Clear();
+            foreach (var job in jobs)
+            {
+                var view = new JobSummaryView(job);
+                if (latestRunByJob.TryGetValue(job.JobId, out var latestRun))
+                {
+                    view.ApplyLatestRun(latestRun);
+                }
+
+                RecentJobs.Add(view);
+            }
+
+            await LoadQueueJobsAsync();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _recentJobsRefreshInFlight, 0);
         }
     }
 
@@ -1031,6 +1201,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             await LoadSchemaAsync(SchemaPath);
         }
+
+        if (!IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = true;
+            SetCurrentStep(StepKey.SelectFolder);
+            StatusText = CanConnectToNetDocuments
+                ? "Sign in to NetDocuments from Settings before continuing."
+                : "OAuth profile for this region is not installed. Contact administrator.";
+        }
     }
 
     public async Task ExportNdImportListAsync()
@@ -1187,12 +1366,51 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     public Task ConnectToNetDocumentsAsync()
     {
-        return ConnectAndSyncNetDocumentsAsync();
+        return ConnectToNetDocumentsCoreAsync();
+    }
+
+    public void OpenSettings()
+    {
+        IsSettingsOpen = true;
+    }
+
+    public void CloseSettings()
+    {
+        if (IsAuthenticationRequired)
+        {
+            return;
+        }
+
+        IsSettingsOpen = false;
+    }
+
+    public void ToggleSettings()
+    {
+        if (IsSettingsOpen)
+        {
+            CloseSettings();
+            return;
+        }
+
+        OpenSettings();
+    }
+
+    private async Task ConnectToNetDocumentsCoreAsync()
+    {
+        await ConnectAndSyncNetDocumentsAsync();
+        if (IsNetDocumentsConnected)
+        {
+            IsSettingsOpen = false;
+        }
     }
 
     private async Task LoadSettingsAsync()
     {
         _settings = await AppSettings.LoadAsync(_paths.SettingsPath);
+        _isDarkMode = IsDarkTheme(_settings.Theme);
+        ThemeManager.ApplyTheme(_isDarkMode);
+        OnPropertyChanged(nameof(IsDarkMode));
+
         if (!string.IsNullOrWhiteSpace(_settings.NdImportPath))
         {
             _ndImportPath = NormalizeNdImportPath(_settings.NdImportPath);
@@ -1220,6 +1438,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         _ndImportDateFormat = NormalizeNdImportDateFormat(_settings.NdImportDateFormat);
         OnPropertyChanged(nameof(NdImportDateFormat));
+        _selectedImportExecutionMode = ImportExecutionMode.DirectApi;
+        OnPropertyChanged(nameof(SelectedImportExecutionMode));
+        OnPropertyChanged(nameof(IsNdImportCsvMode));
+        OnPropertyChanged(nameof(IsDirectApiMode));
+        OnPropertyChanged(nameof(CanRunDirectUpload));
+        RaiseDirectUploadQueueAvailabilityChanged();
 
         _rememberNdImportPassword = _settings.RememberNdImportPassword;
         OnPropertyChanged(nameof(RememberNdImportPassword));
@@ -1260,9 +1484,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _selectedNetDocumentsCabinetId = netDocuments.SelectedCabinetId ?? string.Empty;
         _selectedNetDocumentsCabinetName = netDocuments.SelectedCabinetName ?? string.Empty;
         RestoreTargetSelectionFromSettings(netDocuments);
+        _isExportMode = netDocuments.IsExportMode;
+        _exportDestinationRootPath = netDocuments.ExportDestinationRootPath ?? string.Empty;
+        _exportAllVersions = netDocuments.ExportAllVersions;
+        _exportMetadataFormat = netDocuments.ExportMetadataFormat;
+        _exportDownloadFiltersAsFolders = netDocuments.ExportDownloadFiltersAsFolders;
+        _exportIncludeCustomAttributes = netDocuments.ExportIncludeCustomAttributes;
         OnPropertyChanged(nameof(SelectedNetDocumentsRepositoryId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetId));
         OnPropertyChanged(nameof(SelectedNetDocumentsCabinetName));
+        OnPropertyChanged(nameof(IsExportMode));
+        OnPropertyChanged(nameof(IsImportMode));
+        OnPropertyChanged(nameof(ShowImportContext));
+        OnPropertyChanged(nameof(ShowExportContext));
+        OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+        OnPropertyChanged(nameof(ExportModeToggleText));
+        OnPropertyChanged(nameof(ExportDestinationRootPath));
+        OnPropertyChanged(nameof(ExportAllVersions));
+        OnPropertyChanged(nameof(ExportMetadataFormat));
+        OnPropertyChanged(nameof(ExportDownloadFiltersAsFolders));
+        OnPropertyChanged(nameof(ExportIncludeCustomAttributes));
         SyncNdImportCabinetFromSelectedCabinetId();
         OnPropertyChanged(nameof(IsDeveloperMode));
         OnPropertyChanged(nameof(NetDocumentsBootstrapRedirectUri));
@@ -1306,9 +1547,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _settings.NdImportCabinet = NdImportCabinet;
         _settings.NdImportUsername = NdImportUsername;
         _settings.NdImportDateFormat = NdImportDateFormat;
+        _settings.ImportExecutionMode = SelectedImportExecutionMode.ToString();
         _settings.RememberNdImportPassword = RememberNdImportPassword;
         _settings.NdImportPasswordRef = RememberNdImportPassword ? AppSettings.DefaultNdImportPasswordRef : string.Empty;
         _settings.ProfileSchemaPath = SchemaPath;
+        _settings.Theme = IsDarkMode ? "Dark" : "Light";
         netDocuments.Region = SelectedNetDocumentsRegion;
         netDocuments.UseSecureOAuthClientConfig = true;
         netDocuments.OAuthClientConfigRef = string.IsNullOrWhiteSpace(netDocuments.OAuthClientConfigRef)
@@ -1320,6 +1563,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         netDocuments.SelectedRepositoryId = SelectedNetDocumentsRepositoryId;
         netDocuments.SelectedCabinetId = SelectedNetDocumentsCabinetId;
         netDocuments.SelectedCabinetName = SelectedNetDocumentsCabinetName;
+        netDocuments.IsExportMode = IsExportMode;
+        netDocuments.ExportDestinationRootPath = ExportDestinationRootPath;
+        netDocuments.ExportAllVersions = ExportAllVersions;
+        netDocuments.ExportMetadataFormat = ExportMetadataFormat;
+        netDocuments.ExportDownloadFiltersAsFolders = ExportDownloadFiltersAsFolders;
+        netDocuments.ExportIncludeCustomAttributes = ExportIncludeCustomAttributes;
         SaveTargetSelectionToSettings(netDocuments);
         NetDocumentsRegionDefaults.EnsureDefaults(netDocuments);
 
@@ -1349,6 +1598,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         _settings.NetDocumentsConnection ??= new NetDocumentsConnectionSettings();
         return _settings.NetDocumentsConnection;
+    }
+
+    private static bool IsDarkTheme(string? theme)
+    {
+        return string.Equals(theme, "Dark", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task LoadNetDocumentsOAuthClientProfilesAsync(CancellationToken cancellationToken = default)
@@ -2469,7 +2723,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     private void UpdateOnUi(Action action)
     {
-        if (_uiContext is null)
+        if (_uiContext is null || ReferenceEquals(SynchronizationContext.Current, _uiContext))
         {
             action();
             return;
@@ -2519,6 +2773,9 @@ public sealed class JobSummaryView
         FileCountDisplay = summary.FileCount.ToString("N0", CultureInfo.CurrentCulture);
         TotalBytesDisplay = FormatBytes(summary.TotalBytes);
         LargeWarningsDisplay = summary.LargeWarnings.ToString("N0", CultureInfo.CurrentCulture);
+        LastRunDisplay = "--";
+        LastRunStatus = "--";
+        LastRunSummary = "--";
     }
 
     public string JobId { get; }
@@ -2536,6 +2793,19 @@ public sealed class JobSummaryView
     public string TotalBytesDisplay { get; }
 
     public string LargeWarningsDisplay { get; }
+
+    public string LastRunDisplay { get; private set; }
+
+    public string LastRunStatus { get; private set; }
+
+    public string LastRunSummary { get; private set; }
+
+    public void ApplyLatestRun(CompletedJobRunSummary summary)
+    {
+        LastRunDisplay = summary.StartedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+        LastRunStatus = string.IsNullOrWhiteSpace(summary.Status) ? "--" : summary.Status;
+        LastRunSummary = string.IsNullOrWhiteSpace(summary.Summary) ? "--" : summary.Summary;
+    }
 
     private static string FormatBytes(long bytes)
     {

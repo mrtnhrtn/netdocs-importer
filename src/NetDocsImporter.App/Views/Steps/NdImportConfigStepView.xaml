@@ -6,49 +6,71 @@
              mc:Ignorable="d"
              d:DesignHeight="500" d:DesignWidth="700">
     <StackPanel>
-        <TextBlock Text="ndImport" Style="{StaticResource SectionTitle}" />
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-            <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
-            <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanLaunchNdImport}" />
+        <TextBlock Text="Direct Upload" Style="{StaticResource SectionTitle}" />
+
+        <StackPanel Margin="0,0,0,8" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <Button Content="Export for ndImport..." Width="160" Margin="0,0,6,0" Click="OnExportNdImport" Style="{StaticResource SecondaryButton}" />
+                <Button Content="Launch ndImport" Width="130" Click="OnLaunchNdImport" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanLaunchNdImport}" />
+            </StackPanel>
+            <TextBlock Text="Launch is enabled after a valid export CSV is generated." Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" />
+            <TextBlock Text="Path to ndimport.exe" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <Grid Margin="0,2,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0" Text="{Binding NdImportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,6,0" />
+                <Button Grid.Column="1" Content="Browse..." Width="90" Click="OnBrowseNdImportExecutable" Style="{StaticResource SecondaryButton}" />
+            </Grid>
+            <TextBlock Text="Host" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <ComboBox SelectedValue="{Binding NdImportHost}" SelectedValuePath="Content" Margin="0,2,0,6">
+                <ComboBoxItem Content="upload.au.netdocuments.com" />
+                <ComboBoxItem Content="upload.eu.netdocuments.com" />
+                <ComboBoxItem Content="upload.vault.netvoyage.com" />
+            </ComboBox>
+            <TextBlock Text="Cabinet" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+            <TextBlock Text="Username" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
+            <TextBlock Text="Password (optional)" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <PasswordBox Margin="0,2,0,4" PasswordChanged="OnNdImportPasswordChanged" Loaded="OnNdImportPasswordLoaded" />
+            <CheckBox Content="Remember password on this device (encrypted)" IsChecked="{Binding RememberNdImportPassword}" Margin="0,0,0,6" />
+            <CheckBox Content="Include password on CLI /pass (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
+            <TextBlock Text="Warning: /pass appears on command line. Required for current ndImport CLI unless certificate auth is configured." Foreground="#9F6000" TextWrapping="Wrap" Margin="0,0,0,6" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <CheckBox Content="/utf8=Y" IsChecked="{Binding NdImportUtf8}" Margin="0,0,10,0" />
+                <CheckBox Content="Skip ndImport validation (/validate=Y)" IsChecked="{Binding NdImportNoValidation}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <TextBlock Text="/dateformat" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox Width="90"
+                          ItemsSource="{Binding NdImportDateFormatOptions}"
+                          SelectedItem="{Binding NdImportDateFormat}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                <TextBlock Text="/maxerr" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBox Width="70" Text="{Binding NdImportMaxErrors, UpdateSourceTrigger=PropertyChanged}" />
+            </StackPanel>
         </StackPanel>
-        <TextBlock Text="Launch is enabled after a valid export CSV is generated." Foreground="#666666" Margin="0,0,0,6" />
-        <TextBlock Text="Path to ndimport.exe" Foreground="#555555" />
-        <Grid Margin="0,2,0,6">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0" Text="{Binding NdImportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,6,0" />
-            <Button Grid.Column="1" Content="Browse..." Width="90" Click="OnBrowseNdImportExecutable" Style="{StaticResource SecondaryButton}" />
-        </Grid>
-        <TextBlock Text="Host" Foreground="#555555" />
-        <ComboBox SelectedValue="{Binding NdImportHost}" SelectedValuePath="Content" Margin="0,2,0,6">
-            <ComboBoxItem Content="upload.au.netdocuments.com" />
-            <ComboBoxItem Content="upload.eu.netdocuments.com" />
-            <ComboBoxItem Content="upload.vault.netvoyage.com" />
-        </ComboBox>
-        <TextBlock Text="Cabinet" Foreground="#555555" />
-        <TextBox Text="{Binding NdImportCabinet, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-        <TextBlock Text="Username" Foreground="#555555" />
-        <TextBox Text="{Binding NdImportUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6" />
-        <TextBlock Text="Password (optional)" Foreground="#555555" />
-        <PasswordBox Margin="0,2,0,4" PasswordChanged="OnNdImportPasswordChanged" Loaded="OnNdImportPasswordLoaded" />
-        <CheckBox Content="Remember password on this device (encrypted)" IsChecked="{Binding RememberNdImportPassword}" Margin="0,0,0,6" />
-        <CheckBox Content="Include password on CLI /pass (sensitive)" IsChecked="{Binding NdImportIncludePassword}" Margin="0,0,0,6" />
-        <TextBlock Text="Warning: /pass appears on command line. Required for current ndImport CLI unless certificate auth is configured." Foreground="#9F6000" TextWrapping="Wrap" Margin="0,0,0,6" />
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-            <CheckBox Content="/utf8=Y" IsChecked="{Binding NdImportUtf8}" Margin="0,0,10,0" />
-            <CheckBox Content="Skip ndImport validation (/validate=Y)" IsChecked="{Binding NdImportNoValidation}" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-            <TextBlock Text="/dateformat" VerticalAlignment="Center" Margin="0,0,6,0" />
-            <ComboBox Width="90"
-                      ItemsSource="{Binding NdImportDateFormatOptions}"
-                      SelectedItem="{Binding NdImportDateFormat}" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-            <TextBlock Text="/maxerr" VerticalAlignment="Center" Margin="0,0,6,0" />
-            <TextBox Width="70" Text="{Binding NdImportMaxErrors, UpdateSourceTrigger=PropertyChanged}" />
+
+        <StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <Button Content="Refresh Direct Upload Plan" Width="190" Margin="0,0,6,0" Click="OnRefreshDirectUploadPlan" Style="{StaticResource SecondaryButton}" />
+                <Button Content="Run Direct Upload" Width="130" Margin="0,0,6,0" Click="OnRunDirectUpload" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanRunDirectUpload}" />
+                <Button Content="Cancel Upload" Width="110" Margin="0,0,6,0" Click="OnCancelDirectUpload" Style="{StaticResource SecondaryButton}" IsEnabled="{Binding CanCancelDirectUpload}" />
+                <Button Content="Open Last CSV" Width="110" Click="OnOpenLastDirectUploadReport" Style="{StaticResource SecondaryButton}" IsEnabled="{Binding CanOpenLastDirectUploadReport}" />
+            </StackPanel>
+            <TextBlock Text="{Binding DirectUploadStatus}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,0,0,6" TextWrapping="Wrap" />
+            <TextBlock Text="Preflight Issues" Foreground="{DynamicResource MutedForegroundBrush}" />
+            <DataGrid ItemsSource="{Binding DirectUploadPreflightIssues}" AutoGenerateColumns="False" CanUserAddRows="False" Margin="0,4,0,0" MinHeight="160">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="90" />
+                    <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="140" />
+                    <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                    <DataGridTextColumn Header="Relative Path" Binding="{Binding RelativePath}" Width="220" />
+                </DataGrid.Columns>
+            </DataGrid>
         </StackPanel>
     </StackPanel>
 </UserControl>

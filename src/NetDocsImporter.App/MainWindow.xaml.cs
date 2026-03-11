@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
+using System.Windows.Forms;
 using NetDocsImporter.Core;
 
 namespace NetDocsImporter.App;
@@ -8,6 +10,7 @@ namespace NetDocsImporter.App;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private readonly DispatcherTimer _recentJobsRefreshTimer = new() { Interval = TimeSpan.FromSeconds(15) };
 
     public MainWindow()
         : this(new AppRuntimeOptions())
@@ -20,12 +23,70 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _viewModel;
         Loaded += OnLoaded;
+        Closed += OnClosed;
+        _recentJobsRefreshTimer.Tick += OnRecentJobsRefreshTick;
     }
 
     public async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            await _viewModel.RecoverInterruptedDirectUploadsAsync();
+        }
+        catch
+        {
+            // Recovery is best-effort only.
+        }
+
         await _viewModel.LoadRecentJobsAsync();
+        await _viewModel.StartUploadQueueMonitorAsync();
         await _viewModel.LoadNdImportSettingsAsync();
+        _recentJobsRefreshTimer.Start();
+    }
+
+    public void OnClosed(object? sender, EventArgs e)
+    {
+        _recentJobsRefreshTimer.Stop();
+        _recentJobsRefreshTimer.Tick -= OnRecentJobsRefreshTick;
+        _viewModel.StopUploadQueueMonitor();
+    }
+
+    private async void OnRecentJobsRefreshTick(object? sender, EventArgs e)
+    {
+        if (_viewModel.CurrentStep?.Key != StepKey.RecentJobs)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.LoadRecentJobsAsync();
+            await _viewModel.LoadQueueJobsAsync();
+        }
+        catch
+        {
+            // Best-effort periodic refresh only.
+        }
+    }
+
+    public void OnToggleSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ToggleSettings();
+    }
+
+    public void OnToggleExportMode(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ToggleExportMode();
+    }
+
+    public void OnOpenSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenSettings();
+    }
+
+    public void OnCloseSettings(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CloseSettings();
     }
 
     public async void OnSelectFolder(object sender, RoutedEventArgs e)
@@ -41,6 +102,27 @@ public partial class MainWindow : Window
     public async void OnLoadRecentJobs(object sender, RoutedEventArgs e)
     {
         await _viewModel.LoadRecentJobsAsync();
+    }
+
+    public async void OnExportDirectUploadLog(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            FileName = $"directupload-runlog-{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ExportLastDirectUploadLogAsync(dialog.FileName);
+    }
+
+    public void OnOpenLastDirectUploadReport(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenLastDirectUploadReport();
     }
 
     public async void OnStartImport(object sender, RoutedEventArgs e)
@@ -211,6 +293,121 @@ public partial class MainWindow : Window
         await _viewModel.LaunchNdImportAsync();
     }
 
+    public async void OnRefreshDirectUploadPlan(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshDirectUploadPreflightAsync(forceRescan: true);
+    }
+
+    public async void OnRunDirectUpload(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RunDirectUploadAsync();
+    }
+
+    public async void OnAddDirectUploadToQueue(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.AddCurrentDirectUploadToQueueAsync();
+    }
+
+    public async void OnScheduleDirectUpload(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.Form
+        {
+            Text = "Schedule Direct Upload",
+            Width = 320,
+            Height = 150,
+            StartPosition = System.Windows.Forms.FormStartPosition.CenterParent,
+            FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+
+        var picker = new System.Windows.Forms.DateTimePicker
+        {
+            Format = System.Windows.Forms.DateTimePickerFormat.Custom,
+            CustomFormat = "yyyy-MM-dd HH:mm",
+            Value = DateTime.Now.AddMinutes(15),
+            Width = 260,
+            Left = 20,
+            Top = 10
+        };
+
+        var ok = new System.Windows.Forms.Button
+        {
+            Text = "Schedule",
+            DialogResult = System.Windows.Forms.DialogResult.OK,
+            Left = 120,
+            Top = 45,
+            Width = 80
+        };
+        var cancel = new System.Windows.Forms.Button
+        {
+            Text = "Cancel",
+            DialogResult = System.Windows.Forms.DialogResult.Cancel,
+            Left = 205,
+            Top = 45,
+            Width = 80
+        };
+
+        dialog.Controls.Add(picker);
+        dialog.Controls.Add(ok);
+        dialog.Controls.Add(cancel);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        await _viewModel.ScheduleCurrentDirectUploadAsync(picker.Value);
+    }
+
+    public void OnOpenJobsQuickView(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenJobsStep();
+    }
+
+    public void OnCancelDirectUpload(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CancelDirectUpload();
+    }
+
+    public async void OnRefreshExportPreflight(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RefreshExportPreflightAsync();
+    }
+
+    public async void OnRunExport(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RunExportAsync();
+    }
+
+    public void OnCancelExport(object sender, RoutedEventArgs e)
+    {
+        _viewModel.CancelExport();
+    }
+
+    public void OnOpenLastExportManifest(object sender, RoutedEventArgs e)
+    {
+        _viewModel.OpenLastExportManifest();
+    }
+
+    public void OnBrowseExportDestination(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Select an export destination folder",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true
+        };
+
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK &&
+            !string.IsNullOrWhiteSpace(dialog.SelectedPath))
+        {
+            _viewModel.ExportDestinationRootPath = dialog.SelectedPath;
+        }
+    }
+
     public void OnBrowseNdImportExecutable(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
@@ -229,6 +426,11 @@ public partial class MainWindow : Window
     public async void OnConnectToNetDocuments(object sender, RoutedEventArgs e)
     {
         await _viewModel.ConnectToNetDocumentsAsync();
+    }
+
+    public async void OnDisconnectFromNetDocuments(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.DisconnectFromNetDocumentsAsync();
     }
 
     public void OnNetDocumentsBootstrapClientSecretPasswordChanged(object sender, RoutedEventArgs e)
@@ -320,6 +522,27 @@ public partial class MainWindow : Window
         }
 
         await _viewModel.UseSelectedWorkspaceSearchTargetAsync();
+    }
+
+    public async void OnBrowseNodeExpanded(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not TreeViewItem { DataContext: NetDocumentsBrowseNodeView node })
+        {
+            return;
+        }
+
+        await _viewModel.ExpandBrowseNodeAsync(node);
+    }
+
+    public async void OnBrowseSelectionChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is not NetDocumentsBrowseNodeView node || node.IsPlaceholder)
+        {
+            return;
+        }
+
+        _viewModel.SelectedBrowseNode = node;
+        await _viewModel.SelectTargetFromBrowseNodeAsync();
     }
 
     public async void OnSelectTargetFromRecent(object sender, RoutedEventArgs e)

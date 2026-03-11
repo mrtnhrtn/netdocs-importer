@@ -23,6 +23,18 @@ public sealed class NetDocumentsConnectionSettings
 {
     public NetDocumentsRegion Region { get; set; } = NetDocumentsRegion.AU;
 
+    public bool IsExportMode { get; set; }
+
+    public string ExportDestinationRootPath { get; set; } = string.Empty;
+
+    public bool ExportAllVersions { get; set; }
+
+    public ExportMetadataFormat ExportMetadataFormat { get; set; } = ExportMetadataFormat.Json;
+
+    public bool ExportDownloadFiltersAsFolders { get; set; } = true;
+
+    public bool ExportIncludeCustomAttributes { get; set; }
+
     // Legacy fields retained for migration from older settings versions.
     public string ClientId { get; set; } = string.Empty;
 
@@ -62,5 +74,17 @@ public sealed class NetDocumentsConnectionSettings
 
     public string LastWorkspaceQuery { get; set; } = string.Empty;
 
+    public bool IsBrowseFilterPanelVisible { get; set; }
+
+    public bool BrowseFilterShowCabFolders { get; set; } = true;
+
+    public bool BrowseFilterShowFolders { get; set; } = true;
+
+    public bool BrowseFilterShowFilters { get; set; } = true;
+
+    public bool BrowseFilterShowCollabspaces { get; set; } = true;
+
     public Dictionary<string, NetDocumentsRegionSetting> Regions { get; set; } = NetDocumentsRegionDefaults.CreateDefaultRegionMap();
+
+    public int? DirectUploadV1DocumentIndexPriority { get; set; } = 250;
 }

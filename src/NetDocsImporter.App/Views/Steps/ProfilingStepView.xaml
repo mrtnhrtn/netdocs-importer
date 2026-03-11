@@ -12,7 +12,7 @@
                 <TextBlock Text="Profiling setup moved earlier in the workflow." FontWeight="SemiBold" Margin="0,0,0,6" />
                 <TextBlock Text="Use Select Folder to connect to NetDocuments, choose source content, select the upload target, and sync inherited profile defaults."
                            TextWrapping="Wrap"
-                           Foreground="#555555" />
+                           Foreground="{DynamicResource MutedForegroundBrush}" />
                 <TextBlock Text="Legacy schema-loading and override controls are deprecated in this version."
                            Margin="0,6,0,0"
                            Foreground="#B45309" />
