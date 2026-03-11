@@ -124,6 +124,9 @@ public sealed partial class MainViewModel
 
     private async Task RefreshReviewScopeNetDocumentsAsync()
     {
+        UpdateJobContextFromCurrentState();
+        NotifyReviewContextChanged();
+
         if (string.IsNullOrWhiteSpace(CurrentJobId))
         {
             UpdateReviewValidationIssues(Array.Empty<ReviewValidationIssueView>());
@@ -133,7 +136,6 @@ public sealed partial class MainViewModel
         IsReviewScopeValidationBusy = true;
         try
         {
-            UpdateJobContextFromCurrentState();
             _jobContext.NetDocumentsProfileContext = await BuildProfileContextSnapshotAsync();
             NotifyReviewContextChanged();
 

@@ -197,9 +197,11 @@
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem">
                                     <EventSetter Event="Expanded" Handler="OnBrowseNodeExpanded" />
+                                    <Setter Property="Background" Value="Transparent" />
                                     <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
                                     <Style.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
                                         </Trigger>
                                     </Style.Triggers>

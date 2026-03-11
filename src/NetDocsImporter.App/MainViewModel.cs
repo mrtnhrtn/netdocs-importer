@@ -663,6 +663,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(ShowImportContext));
                 OnPropertyChanged(nameof(ShowExportContext));
                 OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+                OnPropertyChanged(nameof(JobOverviewTitle));
                 OnPropertyChanged(nameof(ExportModeToggleText));
                 OnPropertyChanged(nameof(CanRefreshExportPreflight));
                 OnPropertyChanged(nameof(CanRunExport));
@@ -678,6 +679,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public bool ShowImportContext => IsImportMode;
 
     public bool ShowExportContext => IsExportMode;
+
+    public string JobOverviewTitle => IsExportMode ? "Export Job Overview" : "Import Job Overview";
 
     public string ExportModeToggleText => IsExportMode ? "Import" : "Export mode";
 
@@ -1498,6 +1501,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ShowImportContext));
         OnPropertyChanged(nameof(ShowExportContext));
         OnPropertyChanged(nameof(ShowReviewTargetProfileContext));
+        OnPropertyChanged(nameof(JobOverviewTitle));
         OnPropertyChanged(nameof(ExportModeToggleText));
         OnPropertyChanged(nameof(ExportDestinationRootPath));
         OnPropertyChanged(nameof(ExportAllVersions));

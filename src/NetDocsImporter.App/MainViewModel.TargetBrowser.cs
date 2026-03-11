@@ -2106,9 +2106,19 @@ public sealed partial class MainViewModel
         WorkspaceLookupContext? contextOverride = null)
     {
         await SetSelectedTargetAsync(selection, pathDisplay);
-        await SyncSelectedTargetProfileSnapshotAsync();
-        await RefreshReviewScopeNetDocumentsAsync();
-        TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
+        try
+        {
+            await SyncSelectedTargetProfileSnapshotAsync();
+            await RefreshReviewScopeNetDocumentsAsync();
+            TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refreshed.";
+        }
+        catch (Exception ex)
+        {
+            TargetBrowserMessage = $"Selected target: {SelectedNetDocumentsTargetName}. Profile metadata refresh failed: {ex.Message}";
+            StatusText = TargetBrowserMessage;
+            Trace.WriteLine($"NetDocuments target browser: metadata refresh failed after selection id={selection.Id} type={selection.Type}. {ex}");
+            return;
+        }
 
         var context = contextOverride ?? _workspaceLookupContext;
         if (selection.Type != NdTargetType.Workspace ||

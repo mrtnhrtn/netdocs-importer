@@ -7,7 +7,7 @@
         xmlns:core="clr-namespace:NetDocsImporter.Core;assembly=NetDocsImporter.Core"
         xmlns:steps="clr-namespace:NetDocsImporter.App.Views.Steps"
         mc:Ignorable="d"
-        Title="NetDocs Importer"
+        Title="Wand"
         Height="720"
         Width="1180"
         MinHeight="620"
@@ -170,10 +170,9 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="Job Overview" Style="{StaticResource HeaderText}" />
+                    <TextBlock Text="{Binding JobOverviewTitle}" Style="{StaticResource HeaderText}" />
                     <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                         <TextBlock Text="Job:" FontWeight="SemiBold" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding CurrentJobId}" />
@@ -196,15 +195,6 @@
                     <TextBlock Text="{Binding ExcludedFilesCountDisplay}" FontWeight="SemiBold" />
                 </StackPanel>
                 <Button Grid.Column="2"
-                        Margin="12,0,0,0"
-                        VerticalAlignment="Center"
-                        Click="OnToggleExportMode"
-                        Style="{StaticResource SecondaryButton}">
-                    <TextBlock Text="{Binding ExportModeToggleText}"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center" />
-                </Button>
-                <Button Grid.Column="3"
                         Width="38"
                         Height="32"
                         Margin="12,0,0,0"
@@ -236,46 +226,72 @@
                     CornerRadius="6"
                     Padding="8"
                     IsEnabled="{Binding CanAccessMainFlow}">
-                <ListBox ItemsSource="{Binding Steps}"
-                         SelectedItem="{Binding CurrentStep, Mode=TwoWay}"
-                         BorderThickness="0"
-                         Background="Transparent"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         HorizontalContentAlignment="Stretch">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="4" />
-                            <Setter Property="Margin" Value="0,2" />
-                            <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
-                            <Style.Triggers>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate DataType="{x:Type local:StepItem}">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <Border Width="22" Height="22" Background="#E1E7EF" CornerRadius="11" Margin="0,0,8,0" VerticalAlignment="Top">
-                                        <TextBlock Text="{Binding Number}" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold" />
-                                    </Border>
-                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0"
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            CornerRadius="6"
+                            Background="{DynamicResource PanelBackgroundBrush}"
+                            BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                            BorderThickness="1">
+                        <Button HorizontalAlignment="Stretch"
+                                MinWidth="96"
+                                HorizontalContentAlignment="Center"
+                                Click="OnToggleExportMode"
+                                Style="{StaticResource SecondaryButton}">
+                            <TextBlock Text="{Binding ExportModeToggleText}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                    </Border>
+
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Steps}"
+                             SelectedItem="{Binding CurrentStep, Mode=TwoWay}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             HorizontalContentAlignment="Stretch">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="4" />
+                                <Setter Property="Margin" Value="0,2" />
+                                <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{DynamicResource BodyForegroundBrush}" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="{x:Type local:StepItem}">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Border Width="22" Height="22" Background="#E1E7EF" CornerRadius="11" Margin="0,0,8,0" VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Number}" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                        </Border>
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Subtitle}"
+                                               Foreground="{DynamicResource MutedForegroundBrush}"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center"
+                                               Margin="0,2,0,0" />
                                 </StackPanel>
-                                <TextBlock Text="{Binding Subtitle}"
-                                           Foreground="{DynamicResource MutedForegroundBrush}"
-                                           TextWrapping="Wrap"
-                                           TextAlignment="Center"
-                                           Margin="0,2,0,0" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
             </Border>
 
             <Border Grid.Column="1"
