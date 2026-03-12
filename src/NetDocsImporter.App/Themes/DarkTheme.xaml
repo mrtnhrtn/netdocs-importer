@@ -36,6 +36,12 @@
     <SolidColorBrush x:Key="DisabledInputBorderBrush" Color="#FF475569" />
     <SolidColorBrush x:Key="ControlBorderBrush" Color="#FF475569" />
     <SolidColorBrush x:Key="ControlHoverBrush" Color="#FF3A475B" />
+    <SolidColorBrush x:Key="HeaderBackgroundBrush" Color="#FF223046" />
+    <SolidColorBrush x:Key="HeaderForegroundBrush" Color="#FFF8FAFC" />
+    <SolidColorBrush x:Key="HeaderHoverBackgroundBrush" Color="#FF31435E" />
+    <SolidColorBrush x:Key="HeaderHoverBorderBrush" Color="#FF9FB3CC" />
+    <SolidColorBrush x:Key="ListItemHoverBrush" Color="#FF45556D" />
+    <SolidColorBrush x:Key="ListItemHoverBorderBrush" Color="#FF7B8CA4" />
     <SolidColorBrush x:Key="SelectionBrush" Color="#FF3B82F6" />
     <SolidColorBrush x:Key="SelectionForegroundBrush" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="TabSelectedBackgroundBrush" Color="#FF475569" />
@@ -50,5 +56,7 @@
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFE5E7EB" />
     <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF3B82F6" />
     <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#FF45556D" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#FFE5E7EB" />
     <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FFCBD5E1" />
 </ResourceDictionary>
